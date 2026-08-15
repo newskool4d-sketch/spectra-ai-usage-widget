@@ -2,7 +2,9 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProper
 import { Icon, type IconName } from "./components/Icon";
 import { Sparkline } from "./components/Sparkline";
 import { metricLabels, planQuotas, providers, rangeLabels, usageBars, type AuthMethod, type Metric, type PlanQuota, type Provider, type ProviderId, type QuotaWindow, type UsageRange } from "./data/providers";
+import { getOAuthAdapter, type OAuthStartResult } from "./integrations/oauth-adapter";
 import { providerCapabilities } from "./integrations/provider-capabilities";
+import { listenNativeOAuth } from "./integrations/tauri-native-bridge";
 
 const mobileBreakpoint = "(max-width: 820px)";
 
@@ -21,6 +23,8 @@ function useIsMobile() {
 }
 
 const providerStyle = (color: string) => ({ "--provider": color } as CSSProperties);
+
+const isProviderId = (value: string): value is ProviderId => providers.some(provider => provider.id === value);
 
 function connectionLabel(quota: PlanQuota) {
   if (quota.connectionState === "unsupported") return "OAuth 지원 확인 필요";
@@ -140,10 +144,11 @@ const OAuthConnectCard = memo(function OAuthConnectCard({ provider, quota, compa
   </article>;
 });
 
-const OAuthDialog = memo(function OAuthDialog({ open, provider, quota, onClose, onConnect, onDisconnect }: Readonly<{
+const OAuthDialog = memo(function OAuthDialog({ open, provider, quota, startResult, onClose, onConnect, onDisconnect }: Readonly<{
   open: boolean;
   provider: Provider;
   quota: PlanQuota;
+  startResult: OAuthStartResult | null;
   onClose: () => void;
   onConnect: (id: ProviderId) => void;
   onDisconnect: (id: ProviderId) => void;
@@ -152,13 +157,15 @@ const OAuthDialog = memo(function OAuthDialog({ open, provider, quota, onClose, 
   const unsupported = quota.connectionState === "unsupported";
   const connected = quota.connectionState === "connected";
   const capability = providerCapabilities[provider.id];
+  const nativeReady = startResult?.status === "native-ready";
+  const nativeFailed = startResult?.status === "not-available";
   return <div className="oauth-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}><div className="oauth-dialog" role="dialog" aria-modal="true" aria-labelledby="oauth-dialog-title">
     <div className="oauth-dialog-header"><div><span className="eyebrow">안전한 계정 연결</span><h2 id="oauth-dialog-title">{provider.name} 요금제 확인</h2></div><button type="button" className="icon-button oauth-close" onClick={onClose} aria-label="연결 창 닫기"><Icon name="x" size={17} /></button></div>
     <div className="oauth-provider"><ProviderLogo provider={provider} size="lg" /><div><strong>{quota.planName}</strong><span>{authMethodLabel(quota.authMethod)}</span></div></div>
     <div className="oauth-capability-note"><span>공식 인증 경로</span><strong>{capability.oauthLabel}</strong><span>요금제 잔여량</span><strong>{capability.quotaLabel}</strong></div>
     <ol className="oauth-steps"><li><span>01</span><div><strong>브라우저에서 로그인</strong><small>공급자 로그인 화면에서 계정을 직접 확인합니다.</small></div></li><li><span>02</span><div><strong>잔여량 권한 확인</strong><small>계정·요금제 정보만 읽는 범위를 먼저 보여줍니다.</small></div></li><li><span>03</span><div><strong>기기에 안전하게 보관</strong><small>토큰은 UI·브라우저 저장소에 노출하지 않는 구조로 연결합니다.</small></div></li></ol>
-    <div className="oauth-demo-note"><Icon name="shield" size={14} /><span>현재는 실제 공급자 호출 전 데모 흐름입니다. 완료 후에도 예시 snapshot으로 표시됩니다.</span></div>
-    <div className="oauth-dialog-actions"><button type="button" className="secondary-action" onClick={onClose}>취소</button>{connected ? <button type="button" className="danger-action" onClick={() => { onDisconnect(provider.id); onClose(); }}>연결 해제</button> : <button type="button" className="primary-action" disabled={unsupported} onClick={() => { onConnect(provider.id); onClose(); }}>{unsupported ? "공식 경로 확인 필요" : "데모 연결 완료"}</button>}</div>
+    <div className="oauth-demo-note"><Icon name="shield" size={14} /><span>{startResult?.message ?? "현재는 실제 공급자 호출 전 데모 흐름입니다. 완료 후에도 예시 snapshot으로 표시됩니다."}</span></div>
+    <div className="oauth-dialog-actions"><button type="button" className="secondary-action" onClick={onClose}>취소</button>{connected ? <button type="button" className="danger-action" onClick={() => { onDisconnect(provider.id); onClose(); }}>연결 해제</button> : <button type="button" className="primary-action" disabled={unsupported || nativeReady || nativeFailed} onClick={() => { onConnect(provider.id); onClose(); }}>{unsupported ? "공식 경로 확인 필요" : nativeReady ? "공급자 설정 대기" : nativeFailed ? "네이티브 준비 실패" : "데모 연결 완료"}</button>}</div>
   </div></div>;
 });
 
@@ -244,6 +251,7 @@ export function App() {
   const [connectedProviderIds, setConnectedProviderIds] = useState<readonly ProviderId[]>([]);
   const [oauthProviderId, setOauthProviderId] = useState<ProviderId>("openai");
   const [oauthOpen, setOauthOpen] = useState(false);
+  const [oauthStartResult, setOauthStartResult] = useState<OAuthStartResult | null>(null);
   const refreshTimer = useRef<number | null>(null);
   const activeProvider = useMemo(() => providers.find(provider => provider.id === activeProviderId) ?? providers[0], [activeProviderId]);
   const activeQuota = useMemo(() => {
@@ -272,12 +280,41 @@ export function App() {
     if (refreshTimer.current !== null) window.clearTimeout(refreshTimer.current);
   }, []);
 
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void | Promise<void>) | null = null;
+    void listenNativeOAuth(event => {
+      if (disposed || !isProviderId(event.providerId)) return;
+      setOauthProviderId(event.providerId);
+      setOauthOpen(true);
+      setOauthStartResult({
+        status: "native-ready",
+        message: "네이티브 callback이 state 검증을 통과했습니다. 토큰 교환과 OS 보관은 공급자 adapter 설정 후 진행됩니다."
+      });
+    }).then(listener => {
+      if (disposed) {
+        void listener?.();
+      } else {
+        unlisten = listener;
+      }
+    });
+    return () => {
+      disposed = true;
+      void unlisten?.();
+    };
+  }, []);
+
   const openOAuth = useCallback((id: ProviderId) => {
     setOauthProviderId(id);
+    setOauthStartResult(null);
     setOauthOpen(true);
+    void getOAuthAdapter(id).start().then(setOauthStartResult);
   }, []);
   const connectOAuth = useCallback((id: ProviderId) => setConnectedProviderIds(current => current.includes(id) ? current : [...current, id]), []);
-  const disconnectOAuth = useCallback((id: ProviderId) => setConnectedProviderIds(current => current.filter(providerId => providerId !== id)), []);
+  const disconnectOAuth = useCallback((id: ProviderId) => {
+    setConnectedProviderIds(current => current.filter(providerId => providerId !== id));
+    void getOAuthAdapter(id).disconnect().catch(() => undefined);
+  }, []);
 
   const sharedProps: SharedViewProps = {
     activeProvider,
@@ -296,5 +333,5 @@ export function App() {
     onSolid: () => setSolid(value => !value)
   };
 
-  return <><div className={solid ? "solid-mode" : ""}>{isMobile ? <VariantCMobile {...sharedProps} /> : <VariantADesktop {...sharedProps} />}</div><OAuthDialog open={oauthOpen} provider={oauthProvider} quota={oauthQuota} onClose={() => setOauthOpen(false)} onConnect={connectOAuth} onDisconnect={disconnectOAuth} /></>;
+  return <><div className={solid ? "solid-mode" : ""}>{isMobile ? <VariantCMobile {...sharedProps} /> : <VariantADesktop {...sharedProps} />}</div><OAuthDialog open={oauthOpen} provider={oauthProvider} quota={oauthQuota} startResult={oauthStartResult} onClose={() => { setOauthOpen(false); setOauthStartResult(null); }} onConnect={connectOAuth} onDisconnect={disconnectOAuth} /></>;
 }

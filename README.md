@@ -56,6 +56,8 @@ npm run verify:tokens
 
 공급자별 인증과 쿼터 범위는 [`docs/integrations/provider-capability-matrix.md`](./docs/integrations/provider-capability-matrix.md)에 기록합니다. `src/integrations/oauth-adapter.ts`와 `src/integrations/credential-vault.ts`는 Tauri·Swift 네이티브 구현을 위한 계약이며, 브라우저 제품 화면에서는 네트워크 호출과 토큰 교환을 하지 않습니다.
 
+네이티브 경계 스캐폴드는 [`docs/integrations/native-oauth.md`](./docs/integrations/native-oauth.md)에 있습니다. 데스크톱은 `src-tauri/`의 `spectra://oauth/callback`과 OS Credential Manager/Keychain 경계를 사용하고, iOS/macOS 공유 Swift 코드는 `native/apple/SpectraAuth/`에 둡니다. 현재는 callback 검증과 보관 경계만 준비했으며 공급자별 authorize URL, client ID, token 교환, 요금제 잔여량 API 연결은 다음 승인 단계입니다.
+
 ## 디자인 방향
 
 - 제품명: **SPECTRA**

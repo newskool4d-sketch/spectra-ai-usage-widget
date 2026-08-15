@@ -1,0 +1,1 @@
+{"default":{"identifier":"default","description":"SPECTRA desktop OAuth callback and vault bridge","local":true,"windows":["main"],"permissions":["core:default","deep-link:default"]}}

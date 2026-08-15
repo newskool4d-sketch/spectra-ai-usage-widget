@@ -7,7 +7,8 @@
 - [x] 3단계: A+C 제품 화면을 React/TypeScript 구조로 재작성
 - [x] 3단계 확장: `PlanQuota` 잔여량 모델과 데스크톱·모바일 OAuth 연결 데모 UX 반영
 - [x] 3단계 확장 2: 공급자 capability matrix, OAuth adapter 계약, OS 자격 증명 저장 경계 추가
-- [ ] 4단계: Tauri 데스크톱 껍데기와 iOS WidgetKit 연결
+- [x] 4단계 기반: Tauri OAuth callback·OS Credential Vault 경계와 Apple Swift 인증 모듈 스캐폴드
+- [ ] 4단계: 공급자별 authorize/token 교환과 iOS WidgetKit 연결
 
 ## 제품이 바로 답해야 할 것
 
@@ -54,6 +55,7 @@
 - `source`와 `confidence`를 이용해 OAuth 확인값, 예시 snapshot, 공식 경로 미확인 상태를 구분합니다.
 - 서비스가 추정치만 제공하거나 공식 잔여량 경로가 없으면 정확한 수치처럼 보이지 않게 합니다.
 - 실제 OAuth adapter는 Tauri/Swift의 redirect callback과 OS 자격 증명 저장소를 통해서만 연결하고, web prototype에는 `demo-only` adapter만 둡니다.
+- 네이티브 callback 계약과 보관 경계는 [`docs/integrations/native-oauth.md`](./docs/integrations/native-oauth.md)에 기록합니다. 공급자별 토큰 교환 전에는 native 준비 상태를 실제 연결 완료로 표시하지 않습니다.
 
 ## 품질 기준
 
