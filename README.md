@@ -20,6 +20,12 @@ npm run dev
 npm run verify:baseline
 ```
 
+공용 디자인 토큰은 `styles/tokens.css`에 있으며, 토큰 구조는 다음 명령으로 확인합니다.
+
+```powershell
+npm run verify:tokens
+```
+
 브라우저에서 `http://127.0.0.1:4173/?variant=A`를 엽니다.
 
 화면 아래 시안 전환 막대나 키보드 좌우 방향키를 사용합니다.

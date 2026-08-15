@@ -6,6 +6,8 @@
   "status": "approved",
   "sourceOfTruth": "code-and-screenshots",
   "figmaRequired": false,
+  "tokenSource": "styles/tokens.css",
+  "tokenRevision": 1,
   "decision": {
     "desktop": "A",
     "mobile": "C",

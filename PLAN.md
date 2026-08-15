@@ -1,5 +1,12 @@
 # SPECTRA 제품 계획
 
+## 구현 진행
+
+- [x] 1단계: A+C 기준선, 기준 스크린샷, Figma 비의존성 검사
+- [x] 2단계: 공용 디자인 토큰 분리 (`styles/tokens.css`)
+- [ ] 3단계: A+C 제품 화면을 React/TypeScript 구조로 재작성
+- [ ] 4단계: Tauri 데스크톱 껍데기와 iOS WidgetKit 연결
+
 ## 제품이 바로 답해야 할 것
 
 화면을 열면 다음 세 가지가 바로 보여야 합니다.

@@ -5,6 +5,7 @@
   "description": "Throwaway UI prototype for a cross-platform AI usage widget.",
   "scripts": {
     "dev": "node server.mjs",
-    "verify:baseline": "node scripts/verify-design-baseline.mjs"
+    "verify:baseline": "node scripts/verify-design-baseline.mjs",
+    "verify:tokens": "node scripts/verify-design-tokens.mjs"
   }
 }

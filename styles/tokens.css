@@ -1,0 +1,112 @@
+:root {
+  color-scheme: dark;
+
+  /* Palette — service colors are intentionally muted so status never feels neon. */
+  --color-ink: #f1eee8;
+  --color-muted: #aaa69f;
+  --color-subtle: #77736e;
+  --color-canvas: #11120f;
+  --color-canvas-raised: #171713;
+  --color-surface-app: rgba(24, 25, 22, .88);
+  --color-surface-nav: rgba(31, 32, 29, .84);
+  --color-surface-card: rgba(39, 40, 36, .68);
+  --color-surface-solid: #20211e;
+  --color-surface-core: rgba(39, 40, 36, .92);
+  --color-surface-node: rgba(34, 35, 32, .9);
+  --color-surface-inner: #272824;
+  --color-surface-control: rgba(255, 255, 255, .045);
+  --color-surface-control-soft: rgba(255, 255, 255, .035);
+  --color-surface-control-active: rgba(255, 255, 255, .09);
+  --color-control-hover: rgba(255, 255, 255, .09);
+  --color-line: rgba(245, 239, 229, .1);
+  --color-line-strong: rgba(245, 239, 229, .17);
+  --color-line-faint: rgba(255, 255, 255, .12);
+  --color-track: rgba(255, 255, 255, .07);
+  --color-white: #fff;
+  --color-heading-em: #d9d0c4;
+  --color-label: #8f8a82;
+  --color-nav-icon: #73798b;
+  --color-ink-button: #262720;
+  --color-button: #eee9df;
+  --color-avatar: #d6cfc3;
+  --color-ambient-gradient: linear-gradient(145deg, #10110f, #171713 54%, #0f100e);
+
+  --color-violet: #8879c6;
+  --color-cyan: #56b7b0;
+  --color-blue: #6f8fc9;
+  --color-pink: #c77799;
+  --color-lime: #8cb66b;
+  --color-amber: #c7a852;
+  --color-coral: #d88463;
+
+  /* Compatibility aliases — existing prototype selectors consume these names. */
+  --ink: var(--color-ink);
+  --muted: var(--color-muted);
+  --subtle: var(--color-subtle);
+  --base: var(--color-canvas);
+  --panel: var(--color-surface-nav);
+  --panel-strong: var(--color-surface-core);
+  --line: var(--color-line);
+  --line-strong: var(--color-line-strong);
+  --violet: var(--color-violet);
+  --cyan: var(--color-cyan);
+  --blue: var(--color-blue);
+  --pink: var(--color-pink);
+  --lime: var(--color-lime);
+  --amber: var(--color-amber);
+  --coral: var(--color-coral);
+
+  /* Typography */
+  --font-ui: "Pretendard Variable", Pretendard, "Noto Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", "Segoe UI", sans-serif;
+  --font-feature-default: "tnum" 1, "ss01" 1;
+  --tracking-tight: -.04em;
+  --tracking-label: -.01em;
+  --leading-ui: 1.08;
+  --leading-copy: 1.6;
+
+  /* Spacing — a compact 4px rhythm, with 6px/7px values reserved for controls. */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 28px;
+  --space-8: 32px;
+  --space-9: 36px;
+  --space-10: 40px;
+  --space-11: 44px;
+  --space-12: 48px;
+  --space-control-y: 7px;
+  --space-control-x: 12px;
+
+  /* Shape */
+  --radius-sm: 8px;
+  --radius-control: 12px;
+  --radius-md: 16px;
+  --radius-lg: 22px;
+  --radius-xl: 30px;
+  --radius-pill: 999px;
+
+  /* Depth */
+  --shadow-inset: inset 0 1px 0 rgba(255, 255, 255, .06);
+  --shadow-app: 0 20px 54px rgba(0, 0, 0, .28), inset 0 1px 0 rgba(255, 255, 255, .055);
+  --shadow-card: inset 0 1px 0 rgba(255, 255, 255, .045), 0 14px 34px rgba(0, 0, 0, .16);
+  --shadow-control: 0 14px 32px rgba(0, 0, 0, .26), inset 0 1px 0 rgba(255, 255, 255, .06);
+  --shadow-widget: 0 20px 54px rgba(0, 0, 0, .28), inset 0 1px 0 rgba(255, 255, 255, .055);
+  --shadow: var(--shadow-app);
+
+  /* Glass — each surface opts in instead of making the whole page translucent. */
+  --glass-app-bg: var(--color-surface-app);
+  --glass-app-blur: 18px;
+  --glass-nav-bg: var(--color-surface-nav);
+  --glass-nav-blur: 18px;
+  --glass-card-bg: var(--color-surface-card);
+  --glass-card-blur: 14px;
+  --glass-widget-bg: rgba(39, 40, 36, .78);
+  --glass-widget-blur: 16px;
+
+  /* Motion */
+  --motion-fast: .2s ease;
+  --motion-rise: .45s cubic-bezier(.2, .8, .2, 1);
+}
