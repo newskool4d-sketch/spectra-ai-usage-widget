@@ -1,0 +1,10 @@
+{
+  "name": "spectra-ai-usage-widget-prototype",
+  "version": "0.0.0-prototype",
+  "private": true,
+  "description": "Throwaway UI prototype for a cross-platform AI usage widget.",
+  "scripts": {
+    "dev": "node server.mjs",
+    "verify:baseline": "node scripts/verify-design-baseline.mjs"
+  }
+}

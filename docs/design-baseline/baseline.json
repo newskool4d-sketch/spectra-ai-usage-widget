@@ -1,0 +1,65 @@
+{
+  "schemaVersion": 1,
+  "decisionId": "SPECTRA-ADR-001",
+  "baselineRevision": 1,
+  "approvedAt": "2026-08-15",
+  "status": "approved",
+  "sourceOfTruth": "code-and-screenshots",
+  "figmaRequired": false,
+  "decision": {
+    "desktop": "A",
+    "mobile": "C",
+    "combination": "A+C",
+    "excludedFromProduct": ["B", "prototype-switcher"]
+  },
+  "visualLanguage": {
+    "locale": "ko",
+    "fontStack": [
+      "Pretendard Variable",
+      "Pretendard",
+      "Noto Sans KR",
+      "Apple SD Gothic Neo",
+      "Malgun Gothic",
+      "Segoe UI",
+      "sans-serif"
+    ],
+    "palette": {
+      "openai": "#56B7B0",
+      "claude": "#D88463",
+      "gemini": "#8879C6",
+      "cursor": "#8CB66B",
+      "copilot": "#C77799",
+      "perplexity": "#C7A852",
+      "secondaryBlue": "#6F8FC9"
+    },
+    "material": "restrained-glass-on-navigation-and-widget-surfaces",
+    "copyStyle": "short-natural-korean"
+  },
+  "assets": [
+    {
+      "path": "docs/design-baseline/desktop-a.png",
+      "role": "desktop-primary",
+      "viewport": "1440x1000",
+      "sha256": "81E30D705AF9437D355AEE10F85DED6D902F2F5CAC7C7ED3EE744CED58896472"
+    },
+    {
+      "path": "docs/design-baseline/desktop-c-context.png",
+      "role": "cross-device-context",
+      "viewport": "1440x1000",
+      "sha256": "00A10D136238EAD62CD0BE4CC16020D1B100B64BE7F9521EEDE0C2FF15A46178"
+    },
+    {
+      "path": "docs/design-baseline/mobile-c.png",
+      "role": "mobile-primary",
+      "viewport": "390x844",
+      "sha256": "DB86BC55BB0517950CA0702775B373A546D2874B6FEEC3C25BE5794E6E01B7E6"
+    }
+  ],
+  "acceptance": [
+    "Desktop product structure follows variant A.",
+    "Mobile and iOS widget structure follows variant C.",
+    "Provider names and numeric usage data remain readable without relying on color alone.",
+    "Figma packages, URLs, plugins, and runtime APIs are not required to run or verify the project.",
+    "Variant B and the prototype switcher are reference-only and do not ship in the product UI."
+  ]
+}
