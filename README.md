@@ -54,6 +54,8 @@ npm run verify:tokens
 
 데스크톱 A에는 잔여량 요약·서비스별 잔여량·연결 카드가, 모바일 C에는 잔여량 히어로·OAuth 연결 카드·한도 알림이 들어갑니다. 공급자별 공식 잔여량 경로가 확인되기 전까지는 계정 토큰이나 비공개 세션을 읽지 않습니다.
 
+공급자별 인증과 쿼터 범위는 [`docs/integrations/provider-capability-matrix.md`](./docs/integrations/provider-capability-matrix.md)에 기록합니다. `src/integrations/oauth-adapter.ts`와 `src/integrations/credential-vault.ts`는 Tauri·Swift 네이티브 구현을 위한 계약이며, 브라우저 제품 화면에서는 네트워크 호출과 토큰 교환을 하지 않습니다.
+
 ## 디자인 방향
 
 - 제품명: **SPECTRA**

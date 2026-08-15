@@ -6,6 +6,7 @@
 - [x] 2단계: 공용 디자인 토큰 분리 (`styles/tokens.css`)
 - [x] 3단계: A+C 제품 화면을 React/TypeScript 구조로 재작성
 - [x] 3단계 확장: `PlanQuota` 잔여량 모델과 데스크톱·모바일 OAuth 연결 데모 UX 반영
+- [x] 3단계 확장 2: 공급자 capability matrix, OAuth adapter 계약, OS 자격 증명 저장 경계 추가
 - [ ] 4단계: Tauri 데스크톱 껍데기와 iOS WidgetKit 연결
 
 ## 제품이 바로 답해야 할 것
@@ -24,6 +25,7 @@
 - 메모리 예산과 정적 구조 검증은 [`docs/performance/memory-budget.md`](./docs/performance/memory-budget.md)에 기록합니다.
 - 잔여량 요약은 `planName`, `windows`, `remainingPercent`, `resetLabel`, `connectionState`, `source`, `confidence`로 표현합니다.
 - OAuth 카드는 로그인·권한·보관 3단계를 설명하고, 현재는 토큰을 발급하거나 실제 공급자 데이터를 호출하지 않는 데모 상태를 명시합니다.
+- 공급자별 인증 방식·쿼터 범위·개인 요금제 잔여량 검증 여부는 [`docs/integrations/provider-capability-matrix.md`](./docs/integrations/provider-capability-matrix.md)와 `src/integrations/provider-capabilities.ts`에서 분리 관리합니다.
 
 ## 프로토타입 단계
 
@@ -51,6 +53,7 @@
 - 서비스별 요금제를 `PlanQuota`로 맞추고, `windows` 배열 안에 한도 종류·사용률·잔여률·초기화 시각을 둡니다.
 - `source`와 `confidence`를 이용해 OAuth 확인값, 예시 snapshot, 공식 경로 미확인 상태를 구분합니다.
 - 서비스가 추정치만 제공하거나 공식 잔여량 경로가 없으면 정확한 수치처럼 보이지 않게 합니다.
+- 실제 OAuth adapter는 Tauri/Swift의 redirect callback과 OS 자격 증명 저장소를 통해서만 연결하고, web prototype에는 `demo-only` adapter만 둡니다.
 
 ## 품질 기준
 

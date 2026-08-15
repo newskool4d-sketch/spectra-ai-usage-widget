@@ -1,7 +1,8 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Icon, type IconName } from "./components/Icon";
 import { Sparkline } from "./components/Sparkline";
-import { metricLabels, planQuotas, providers, rangeLabels, usageBars, type Metric, type PlanQuota, type Provider, type ProviderId, type QuotaWindow, type UsageRange } from "./data/providers";
+import { metricLabels, planQuotas, providers, rangeLabels, usageBars, type AuthMethod, type Metric, type PlanQuota, type Provider, type ProviderId, type QuotaWindow, type UsageRange } from "./data/providers";
+import { providerCapabilities } from "./integrations/provider-capabilities";
 
 const mobileBreakpoint = "(max-width: 820px)";
 
@@ -32,6 +33,12 @@ function sourceLabel(quota: PlanQuota) {
   if (quota.source === "oauth") return "OAuth 흐름 완료 · 예시 snapshot";
   if (quota.source === "unavailable") return "공식 잔여량 경로 확인 중";
   return "예시 snapshot · 실제 연결 후 갱신";
+}
+
+function authMethodLabel(method: AuthMethod) {
+  if (method === "oauth-pkce") return "OAuth · PKCE 흐름";
+  if (method === "provider-delegated") return "공급자 delegated auth";
+  return "공식 OAuth 경로 미확인";
 }
 
 const Brand = memo(function Brand() {
@@ -124,9 +131,10 @@ const QuotaSummaryCard = memo(function QuotaSummaryCard({ provider, quota }: Rea
 const OAuthConnectCard = memo(function OAuthConnectCard({ provider, quota, compact = false, onOpen }: Readonly<{ provider: Provider; quota: PlanQuota; compact?: boolean; onOpen: (id: ProviderId) => void }>) {
   const unsupported = quota.connectionState === "unsupported";
   const connected = quota.connectionState === "connected";
+  const capability = providerCapabilities[provider.id];
   return <article className={`glass-card oauth-card ${compact ? "compact" : ""}`} style={providerStyle(provider.color)}>
     <div className="oauth-icon"><Icon name={unsupported ? "shield" : connected ? "check" : "link"} size={18} /></div>
-    <div className="oauth-copy"><span className="eyebrow">계정 연결</span><h3>{provider.name} 요금제 연결</h3><p>OAuth로 연결하면 요금제 잔여량과 초기화 시각을 제품 화면에서 확인합니다.</p><div className={`oauth-status ${unsupported ? "unsupported" : connected ? "connected" : ""}`}><i />{connectionLabel(quota)}</div></div>
+    <div className="oauth-copy"><span className="eyebrow">계정 연결</span><h3>{provider.name} 요금제 연결</h3><p>OAuth로 연결하면 요금제 잔여량과 초기화 시각을 제품 화면에서 확인합니다.</p><div className={`oauth-status ${unsupported ? "unsupported" : connected ? "connected" : ""}`}><i />{connectionLabel(quota)}</div><div className="oauth-capability"><span>공식 인증</span><strong>{capability.oauthLabel}</strong><span>잔여량 범위</span><strong>{capability.quotaLabel}</strong></div></div>
     <button type="button" className="oauth-button" disabled={unsupported} onClick={() => onOpen(provider.id)}>{unsupported ? "지원 확인 필요" : connected ? "연결 흐름 다시 보기" : "OAuth로 연결"}</button>
     <div className="oauth-security"><Icon name="shield" size={13} /><span>실제 토큰은 화면이나 브라우저 저장소에 표시하지 않습니다.</span></div>
   </article>;
@@ -143,9 +151,11 @@ const OAuthDialog = memo(function OAuthDialog({ open, provider, quota, onClose, 
   if (!open) return null;
   const unsupported = quota.connectionState === "unsupported";
   const connected = quota.connectionState === "connected";
+  const capability = providerCapabilities[provider.id];
   return <div className="oauth-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}><div className="oauth-dialog" role="dialog" aria-modal="true" aria-labelledby="oauth-dialog-title">
     <div className="oauth-dialog-header"><div><span className="eyebrow">안전한 계정 연결</span><h2 id="oauth-dialog-title">{provider.name} 요금제 확인</h2></div><button type="button" className="icon-button oauth-close" onClick={onClose} aria-label="연결 창 닫기"><Icon name="x" size={17} /></button></div>
-    <div className="oauth-provider"><ProviderLogo provider={provider} size="lg" /><div><strong>{quota.planName}</strong><span>{quota.authMethod === "oauth-pkce" ? "OAuth · PKCE 흐름" : "공급자 인증 흐름"}</span></div></div>
+    <div className="oauth-provider"><ProviderLogo provider={provider} size="lg" /><div><strong>{quota.planName}</strong><span>{authMethodLabel(quota.authMethod)}</span></div></div>
+    <div className="oauth-capability-note"><span>공식 인증 경로</span><strong>{capability.oauthLabel}</strong><span>요금제 잔여량</span><strong>{capability.quotaLabel}</strong></div>
     <ol className="oauth-steps"><li><span>01</span><div><strong>브라우저에서 로그인</strong><small>공급자 로그인 화면에서 계정을 직접 확인합니다.</small></div></li><li><span>02</span><div><strong>잔여량 권한 확인</strong><small>계정·요금제 정보만 읽는 범위를 먼저 보여줍니다.</small></div></li><li><span>03</span><div><strong>기기에 안전하게 보관</strong><small>토큰은 UI·브라우저 저장소에 노출하지 않는 구조로 연결합니다.</small></div></li></ol>
     <div className="oauth-demo-note"><Icon name="shield" size={14} /><span>현재는 실제 공급자 호출 전 데모 흐름입니다. 완료 후에도 예시 snapshot으로 표시됩니다.</span></div>
     <div className="oauth-dialog-actions"><button type="button" className="secondary-action" onClick={onClose}>취소</button>{connected ? <button type="button" className="danger-action" onClick={() => { onDisconnect(provider.id); onClose(); }}>연결 해제</button> : <button type="button" className="primary-action" disabled={unsupported} onClick={() => { onConnect(provider.id); onClose(); }}>{unsupported ? "공식 경로 확인 필요" : "데모 연결 완료"}</button>}</div>
@@ -187,7 +197,7 @@ const VariantADesktop = memo(function VariantADesktop({ activeProvider, activePr
         <article className="glass-card live-card span-2"><div className="card-heading"><div><span className="eyebrow">한도 소진 추이</span><h3>{primary.usedPercent}% <small>현재 사용</small></h3></div><span className="live-pill"><i />집계 중</span></div><ChartBars /><div className="chart-axis"><span>09:00</span><span>12:00</span><span>15:00</span><span>지금</span></div></article>
         <article className="glass-card providers-card span-2"><div className="card-heading"><div><span className="eyebrow">서비스</span><h3>서비스별 잔여량</h3></div><button type="button" className="text-button">모두 보기 <Icon name="chevron" size={14} /></button></div><div className="provider-list">{providers.map(provider => <ProviderRow key={provider.id} provider={provider} active={provider.id === activeProviderId} onSelect={onProvider} />)}</div></article>
         <article className="glass-card focus-card"><div className="card-heading"><div><ProviderLogo provider={activeProvider} size="lg" /><span className="eyebrow">집중 확인</span></div><span className="trend-badge">{primary.remainingPercent}% 남음</span></div><h3>{activeProvider.name}</h3><p>{primary.label}이 {primary.resetLabel} 뒤 초기화됩니다. <strong>{activeQuota.planName}</strong> 기준 예시 snapshot입니다.</p><Sparkline values={activeProvider.trend} color={activeProvider.color} width={220} height={62} /></article>
-        <article className="glass-card budget-card plan-card"><span className="eyebrow">연결된 요금제</span><h3>{activeQuota.planName}</h3><p><span>{activeQuota.accountLabel}</span><span className={activeQuota.connectionState === "connected" ? "positive" : ""}>{activeQuota.lastSyncedAt ? `마지막 확인 · ${activeQuota.lastSyncedAt}` : "연결 전 · 예시 snapshot"}</span></p><div className="micro-stat"><span>인증 방식</span><strong>OAuth · PKCE</strong></div></article>
+        <article className="glass-card budget-card plan-card"><span className="eyebrow">연결된 요금제</span><h3>{activeQuota.planName}</h3><p><span>{activeQuota.accountLabel}</span><span className={activeQuota.connectionState === "connected" ? "positive" : ""}>{activeQuota.lastSyncedAt ? `마지막 확인 · ${activeQuota.lastSyncedAt}` : "연결 전 · 예시 snapshot"}</span></p><div className="micro-stat"><span>인증 방식</span><strong>{authMethodLabel(activeQuota.authMethod)}</strong></div></article>
         <OAuthConnectCard provider={activeProvider} quota={activeQuota} onOpen={onOpenOAuth} />
       </div>
       <footer className="privacy-strip"><Icon name="shield" size={15} /><span>잔여량은 OAuth 연결 후 공급자 정책에 맞춰 갱신됩니다.</span><i /><span>{sourceLabel(activeQuota)}</span></footer>

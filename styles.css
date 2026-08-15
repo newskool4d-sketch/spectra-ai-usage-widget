@@ -139,6 +139,8 @@ h1 em { color: var(--color-heading-em); font-style: normal; }
 .oauth-copy p { max-width: 520px; margin-top: 4px; color: var(--muted); font-size: 10px; line-height: 1.6; }
 .oauth-status { display: inline-flex; margin-top: 7px; align-items: center; gap: 6px; color: var(--amber); font-size: 9px; font-weight: 800; }
 .oauth-status.unsupported { color: var(--subtle); }
+.oauth-capability { display: grid; margin-top: 8px; grid-template-columns: auto minmax(0, 1fr); gap: 2px 8px; color: var(--subtle); font-size: 8px; line-height: 1.35; }
+.oauth-capability strong { overflow: hidden; color: var(--muted); font-size: 8px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
 .oauth-button, .secondary-action, .danger-action { padding: 9px var(--space-control-x); border: 1px solid var(--line-strong); border-radius: var(--radius-sm); color: var(--color-ink-button); background: var(--color-button); font-size: 10px; font-weight: 800; cursor: pointer; white-space: nowrap; }
 .oauth-button:disabled, .primary-action:disabled { opacity: .45; cursor: not-allowed; }
 .oauth-security { display: flex; grid-column: 2 / -1; align-items: center; gap: 6px; color: var(--subtle); font-size: 8px; }
@@ -154,6 +156,8 @@ h1 em { color: var(--color-heading-em); font-style: normal; }
 .oauth-provider strong, .oauth-provider span { display: block; }
 .oauth-provider strong { font-size: 13px; }
 .oauth-provider span { margin-top: 4px; color: var(--subtle); font-size: 9px; }
+.oauth-capability-note { display: grid; margin-top: 13px; padding: 10px; grid-template-columns: auto 1fr; gap: 4px 10px; border: 1px solid var(--line); border-radius: 11px; color: var(--subtle); background: rgba(255,255,255,.025); font-size: 8px; line-height: 1.35; }
+.oauth-capability-note strong { color: var(--muted); font-size: 9px; font-weight: 650; }
 .oauth-steps { display: grid; margin: 22px 0 0; padding: 0; gap: 13px; list-style: none; }
 .oauth-steps li { display: grid; grid-template-columns: 28px 1fr; gap: 10px; align-items: start; }
 .oauth-steps li > span { display: grid; width: 28px; height: 28px; place-items: center; border: 1px solid var(--line-strong); border-radius: 9px; color: var(--cyan); font-size: 8px; font-weight: 800; }
@@ -295,7 +299,7 @@ h1 em { color: var(--color-heading-em); font-style: normal; }
   .command-center { padding: 22px 15px 100px; }.app-header{display:block}.app-header .top-actions{margin-top:18px;justify-content:flex-end}.sync-state{margin-right:auto}
   .bento-grid { grid-template-columns: 1fr; }.span-2{grid-column:auto}.runway-content{grid-template-columns:110px 1fr}.runway-ring{width:100px;height:100px}.runway-ring::before{width:81px;height:81px}
   .quota-status { max-width: 142px; font-size: 8px; }.quota-source { font-size: 9px; }.quota-window-list { gap: 5px; }.quota-window-copy span,.quota-window-copy strong { font-size: 9px; }.quota-window-meta { font-size: 7px; }
-  .oauth-card { grid-template-columns: auto minmax(0, 1fr); gap: 10px; }.oauth-copy h3 { font-size: 13px; }.oauth-copy p { font-size: 9px; }.oauth-button { grid-column: 2; justify-self: start; }.oauth-security { grid-column: 1 / -1; }.oauth-card.compact { margin-top: 14px; padding: 14px; }.oauth-card.compact .oauth-icon { width: 34px; height: 34px; }.oauth-card.compact .oauth-button { padding: 8px 10px; }.oauth-card.compact .oauth-security { font-size: 8px; }
+  .oauth-card { grid-template-columns: auto minmax(0, 1fr); gap: 10px; }.oauth-copy h3 { font-size: 13px; }.oauth-copy p { font-size: 9px; }.oauth-capability { font-size: 7px; }.oauth-capability strong { font-size: 7px; }.oauth-button { grid-column: 2; justify-self: start; }.oauth-security { grid-column: 1 / -1; }.oauth-card.compact { margin-top: 14px; padding: 14px; }.oauth-card.compact .oauth-icon { width: 34px; height: 34px; }.oauth-card.compact .oauth-button { padding: 8px 10px; }.oauth-card.compact .oauth-security { font-size: 8px; }
   .oauth-backdrop { padding: 12px; }.oauth-dialog { padding: 19px; border-radius: 20px; }.oauth-dialog-header h2 { font-size: 21px; }.oauth-provider { margin-top: 17px; }.oauth-steps { margin-top: 18px; }.oauth-demo-note { margin-top: 16px; }
   .dashboard-toolbar { align-items:flex-start;gap:10px }.segmented button,.range-tabs button{padding:7px 8px}
   .orbit-header { grid-template-columns:1fr auto;padding:16px }.orbit-nav{display:none}.orbit-header .sync-state{display:none}

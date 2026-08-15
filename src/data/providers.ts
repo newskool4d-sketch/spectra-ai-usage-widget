@@ -5,6 +5,7 @@ export type QuotaWindowId = "rolling" | "weekly";
 export type QuotaConnectionState = "not_connected" | "connected" | "unsupported" | "error";
 export type QuotaSource = "example" | "oauth" | "unavailable";
 export type QuotaConfidence = "example" | "verified" | "unavailable";
+export type AuthMethod = "oauth-pkce" | "provider-delegated" | "not-published";
 
 export type QuotaWindow = Readonly<{
   id: QuotaWindowId;
@@ -19,7 +20,7 @@ export type PlanQuota = Readonly<{
   providerId: ProviderId;
   planName: string;
   accountLabel: string;
-  authMethod: "oauth-pkce";
+  authMethod: AuthMethod;
   connectionState: QuotaConnectionState;
   source: QuotaSource;
   confidence: QuotaConfidence;
@@ -53,7 +54,7 @@ export const planQuotas: Readonly<Record<ProviderId, PlanQuota>> = Object.freeze
     providerId: "openai",
     planName: "ChatGPT Pro",
     accountLabel: "예시 계정 · OAuth 연결 전",
-    authMethod: "oauth-pkce",
+    authMethod: "not-published",
     connectionState: "not_connected",
     source: "example",
     confidence: "example",
@@ -67,7 +68,7 @@ export const planQuotas: Readonly<Record<ProviderId, PlanQuota>> = Object.freeze
     providerId: "claude",
     planName: "Claude Max",
     accountLabel: "예시 계정 · OAuth 연결 전",
-    authMethod: "oauth-pkce",
+    authMethod: "not-published",
     connectionState: "not_connected",
     source: "example",
     confidence: "example",
@@ -95,7 +96,7 @@ export const planQuotas: Readonly<Record<ProviderId, PlanQuota>> = Object.freeze
     providerId: "cursor",
     planName: "Cursor Pro",
     accountLabel: "예시 계정 · OAuth 연결 전",
-    authMethod: "oauth-pkce",
+    authMethod: "not-published",
     connectionState: "unsupported",
     source: "unavailable",
     confidence: "unavailable",
@@ -109,7 +110,7 @@ export const planQuotas: Readonly<Record<ProviderId, PlanQuota>> = Object.freeze
     providerId: "copilot",
     planName: "Microsoft Copilot Pro",
     accountLabel: "예시 계정 · OAuth 연결 전",
-    authMethod: "oauth-pkce",
+    authMethod: "provider-delegated",
     connectionState: "not_connected",
     source: "example",
     confidence: "example",
@@ -123,7 +124,7 @@ export const planQuotas: Readonly<Record<ProviderId, PlanQuota>> = Object.freeze
     providerId: "perplexity",
     planName: "Perplexity Pro",
     accountLabel: "예시 계정 · OAuth 연결 전",
-    authMethod: "oauth-pkce",
+    authMethod: "not-published",
     connectionState: "not_connected",
     source: "example",
     confidence: "example",
