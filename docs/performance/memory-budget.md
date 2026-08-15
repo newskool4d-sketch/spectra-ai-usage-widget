@@ -19,3 +19,15 @@ npm run verify:memory
 ```
 
 이 검사는 번들 크기와 메모리 경로의 구조적 예산을 확인합니다. 실제 RAM 사용량은 연결할 API, Tauri/WebView 런타임, 네이티브 iOS 위젯에 따라 달라지므로, 실제 데이터 연결 이후에는 Windows 작업 관리자·macOS Activity Monitor에서 30분 이상 idle/refresh 시나리오를 별도로 측정해야 합니다.
+
+## Windows Tauri 실측 기준선
+
+2026-08-16 Windows 릴리스 스모크 테스트에서 SPECTRA와 자식 WebView2 프로세스 7개의 합계는 다음과 같았습니다. 이 값은 한 기기의 짧은 기준선이며 일반적인 보장값이 아닙니다.
+
+- 최적화된 미니 창 표시 직후: 작업 집합 441.1MB, private 217.8MB
+- 닫기 후 트레이 숨김 3초: 작업 집합 437.5MB, private 203.6MB
+- 네이티브 호스트 자체: 작업 집합 32.4MB, private 6.3MB
+
+대부분은 WebView2의 브라우저·렌더러·GPU 다중 프로세스가 차지합니다. 현재는 빠른 재표시를 위해 닫기 시 창을 숨기므로 WebView2가 유지됩니다. 릴리스 프로필에는 `opt-level="s"`, thin LTO, 단일 codegen unit, 심볼 제거, abort panic을 적용해 네이티브 바이너리와 매핑 비용을 줄입니다.
+
+추가 절감이 필요하면 다음 단계에서 선택형 **저메모리 대기 모드**를 구현합니다. 이 모드는 닫을 때 WebView 창을 파기하고 트레이 클릭 시 새로 생성하므로 재표시 지연과 화면 상태 초기화를 감수해야 합니다. WebView2의 보안·프로세스 격리를 약화하는 비공식 single-process 플래그는 사용하지 않습니다.

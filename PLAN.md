@@ -8,7 +8,8 @@
 - [x] 3단계 확장: `PlanQuota` 잔여량 모델과 데스크톱·모바일 OAuth 연결 데모 UX 반영
 - [x] 3단계 확장 2: 공급자 capability matrix, OAuth adapter 계약, OS 자격 증명 저장 경계 추가
 - [x] 4단계 기반: Tauri OAuth callback·OS Credential Vault 경계와 Apple Swift 인증 모듈 스캐폴드
-- [ ] 4단계: 공급자별 authorize/token 교환과 iOS WidgetKit 연결
+- [x] Windows 제품 셸: Tauri WebView2 실구동, 트레이 상주, 미니/대시보드 전환, 단일 실행 복원, NSIS 패키징
+- [ ] 4단계: Claude/Codex 공식 잔여량 endpoint 공개 시 authorize/token 교환과 iOS WidgetKit 연결
 
 ## 제품이 바로 답해야 할 것
 
@@ -25,7 +26,7 @@
 - 기존 `app.js`와 B 시안은 비교·회귀 기준선으로 보존하고 제품 런타임에서는 로드하지 않습니다.
 - 메모리 예산과 정적 구조 검증은 [`docs/performance/memory-budget.md`](./docs/performance/memory-budget.md)에 기록합니다.
 - 잔여량 요약은 `planName`, `windows`, `remainingPercent`, `resetLabel`, `connectionState`, `source`, `confidence`로 표현합니다.
-- OAuth 카드는 로그인·권한·보관 3단계를 설명하고, 현재는 토큰을 발급하거나 실제 공급자 데이터를 호출하지 않는 데모 상태를 명시합니다.
+- 공식 범위 카드는 로그인·권한·보관 경계를 설명하고, 현재 Claude/Codex 개인 잔여량 endpoint 미공개 상태와 예시 snapshot을 명시합니다.
 - 공급자별 인증 방식·쿼터 범위·개인 요금제 잔여량 검증 여부는 [`docs/integrations/provider-capability-matrix.md`](./docs/integrations/provider-capability-matrix.md)와 `src/integrations/provider-capabilities.ts`에서 분리 관리합니다.
 
 ## 프로토타입 단계
@@ -41,6 +42,7 @@
 
 - React/TypeScript 화면을 Tauri 앱 안에서 공유합니다.
 - macOS는 메뉴 막대 팝오버, Windows는 트레이와 작은 고정 창을 지원합니다.
+- Windows는 430×720 미니 창으로 시작하고, 트레이 메뉴에서 1280×860 대시보드로 전환합니다. 닫기 버튼은 프로세스를 종료하지 않고 트레이로 숨깁니다.
 - 서비스 연결은 가능한 한 기기 안에서 처리하고, 비밀값은 운영체제 자격 증명 저장소에 둡니다.
 
 ### iOS

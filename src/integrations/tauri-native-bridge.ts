@@ -19,13 +19,26 @@ declare global {
 export type NativeOAuthPrepareResult = Readonly<{
   providerId: ProviderId;
   redirectUri: string;
-  state: string;
-  status: "native-boundary-ready";
+  state: string | null;
+  status: "authorize-ready" | "client-id-required" | "api-key-only" | "not-published";
+  callbackMode: "loopback" | "custom-scheme" | "none";
+  authorizeUrl: string | null;
+  tokenUrl: string | null;
+  clientIdEnv: string | null;
+  clientIdConfigured: boolean;
+  tokenExchangeStatus: "pkce-native" | "not-published";
+  scope: string;
+  quotaEndpoint: string | null;
+  quotaEndpointStatus: "remaining-published" | "limit-metadata-only" | "organization-usage-only" | "api-key-only" | "not-published";
 }>;
 
 export type NativeOAuthEvent = Readonly<{
   providerId: string;
-  status: "callback-accepted";
+  status: "callback-accepted" | "credential-stored";
+}>;
+
+export type NativeOAuthRejected = Readonly<{
+  reason: string;
 }>;
 
 export type NativeCredentialStatus = Readonly<{
@@ -66,4 +79,12 @@ export async function listenNativeOAuth(
   const listener = nativeGlobal()?.event?.listen;
   if (!listener) return null;
   return listener<NativeOAuthEvent>("oauth-callback", event => onEvent(event.payload));
+}
+
+export async function listenNativeOAuthRejected(
+  onEvent: (event: NativeOAuthRejected) => void,
+): Promise<TauriUnlisten | null> {
+  const listener = nativeGlobal()?.event?.listen;
+  if (!listener) return null;
+  return listener<NativeOAuthRejected>("oauth-callback-rejected", event => onEvent(event.payload));
 }

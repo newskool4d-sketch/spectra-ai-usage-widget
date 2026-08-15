@@ -5,6 +5,7 @@
   "identifier": "com.spectra.ai-usage-widget",
   "build": {
     "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build",
     "devUrl": "http://127.0.0.1:5173",
     "frontendDist": "../dist"
   },
@@ -14,16 +15,19 @@
       {
         "label": "main",
         "title": "SPECTRA AI 사용 현황",
-        "width": 1280,
-        "height": 860,
-        "minWidth": 980,
-        "minHeight": 640,
+        "width": 430,
+        "height": 720,
+        "minWidth": 380,
+        "minHeight": 600,
+        "center": true,
         "resizable": true
       }
     ]
   },
   "bundle": {
-    "active": false
+    "active": true,
+    "targets": ["nsis"],
+    "icon": ["icons/icon.png", "icons/icon.ico"]
   },
   "plugins": {
     "deep-link": {

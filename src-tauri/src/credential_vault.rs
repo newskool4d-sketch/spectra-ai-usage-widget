@@ -23,10 +23,7 @@ pub enum VaultError {
 }
 
 fn valid_provider(provider_id: &str) -> bool {
-    matches!(
-        provider_id,
-        "openai" | "claude" | "gemini" | "cursor" | "copilot" | "perplexity"
-    )
+    matches!(provider_id, "codex" | "claude")
 }
 
 fn account_name(provider_id: &str) -> Result<String, VaultError> {

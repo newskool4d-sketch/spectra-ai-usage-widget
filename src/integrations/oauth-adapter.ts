@@ -3,16 +3,23 @@ import { providerCapabilities, type ProviderCapability } from "./provider-capabi
 import { isTauriRuntime, prepareNativeOAuth, removeNativeCredential } from "./tauri-native-bridge";
 
 export type OAuthStartResult = Readonly<{
-  status: "demo-only" | "native-ready" | "not-available";
+  status: "demo-only" | "authorize-ready" | "configuration-required" | "not-supported" | "not-available";
   message: string;
   redirectUri?: string;
   state?: string;
+  authorizeUrl?: string;
+  tokenUrl?: string;
+  clientIdEnv?: string;
+  quotaEndpoint?: string;
+  quotaEndpointStatus?: string;
 }>;
 
 /**
- * Native shells implement this boundary with an OS callback and a
- * CredentialVault. The web prototype intentionally has no network or token
- * exchange implementation.
+ * The browser build remains demo-only. Native shells build the official
+ * provider URL, open it in the system browser, exchange the callback code in
+ * Rust/Swift, and write the resulting credential to the OS vault. Claude and
+ * Codex currently stay on the official API-key/usage-page boundary because
+ * personal subscription OAuth and remaining-quota endpoints are not public.
  */
 export type OAuthAdapter = Readonly<{
   providerId: ProviderId;
@@ -32,11 +39,24 @@ const createStart = (providerId: ProviderId) => async (): Promise<OAuthStartResu
   try {
     const result = await prepareNativeOAuth(providerId);
     if (!result) return demoStart();
+
+    if (result.status === "client-id-required") {
+      return {
+        status: "configuration-required",
+        message: `${result.clientIdEnv ?? "공급자 client ID"} 환경 변수를 네이티브 앱에 설정해야 공식 로그인 창을 열 수 있습니다.`,
+        redirectUri: result.redirectUri,
+        clientIdEnv: result.clientIdEnv ?? undefined,
+        quotaEndpoint: result.quotaEndpoint ?? undefined,
+        quotaEndpointStatus: result.quotaEndpointStatus
+      };
+    }
+
     return {
-      status: "native-ready",
-      message: "네이티브 callback과 OS 보관 경계가 준비되었습니다. 공급자별 authorize/token 교환 설정이 남아 있습니다.",
+      status: "not-supported",
+      message: "Claude와 Codex는 개인 요금제용 공식 OAuth/잔여량 API가 공개되지 않아 비공개 세션 연결을 하지 않습니다. 공식 사용량 페이지 또는 조직 Admin API 범위만 사용합니다.",
       redirectUri: result.redirectUri,
-      state: result.state
+      quotaEndpoint: result.quotaEndpoint ?? undefined,
+      quotaEndpointStatus: result.quotaEndpointStatus
     };
   } catch {
     return {
@@ -58,12 +78,8 @@ const createDemoAdapter = (providerId: ProviderId): OAuthAdapter => Object.freez
 });
 
 export const oauthAdapters: Readonly<Record<ProviderId, OAuthAdapter>> = Object.freeze({
-  openai: createDemoAdapter("openai"),
-  claude: createDemoAdapter("claude"),
-  gemini: createDemoAdapter("gemini"),
-  cursor: createDemoAdapter("cursor"),
-  copilot: createDemoAdapter("copilot"),
-  perplexity: createDemoAdapter("perplexity")
+  codex: createDemoAdapter("codex"),
+  claude: createDemoAdapter("claude")
 });
 
 export const getOAuthAdapter = (providerId: ProviderId) => oauthAdapters[providerId];

@@ -1,61 +1,62 @@
-# 네이티브 OAuth callback과 OS Credential Vault
+# 네이티브 인증 callback과 OS Credential Vault
 
 검토 기준일: 2026-08-16
 
-이번 단계는 실제 공급자 계정에 로그인하거나 토큰을 발급하는 단계가 아닙니다. Tauri/Swift가 맡아야 할 **callback 검증·비밀값 보관 경계**를 먼저 고정하고, 공급자별 authorize URL·client ID·token 교환은 다음 adapter 작업으로 남겼습니다.
+현재 활성 공급자는 Claude와 Codex입니다. 두 공급자 모두 개인 구독의 잔여량을 반환하는 공개 OAuth/API endpoint가 확인되지 않았으므로, SPECTRA는 비공개 웹 세션·쿠키·내부 endpoint를 연결하지 않습니다. 아래 네이티브 경계는 향후 공식 endpoint가 공개될 때만 활성화할 수 있도록 안전하게 보존합니다.
 
-## 경계
+## 현재 제품 경계
 
 ```text
-공급자 로그인 브라우저
-        │  spectra://oauth/callback?code=...&state=...
-        ▼
-Tauri deep-link / ASWebAuthenticationSession
-        │  scheme·host·path·state·만료 검증
-        ▼
-네이티브 provider adapter (다음 단계)
-        │  code 교환·refresh
-        ▼
-Windows Credential Manager / macOS Keychain / iOS Keychain
-        │  상태·마지막 확인 시각만
+Claude / Codex 공식 사용량 페이지 또는 조직 Admin API
+        │  개인 잔여량과 조직 API 사용량을 별도 분류
         ▼
 React 화면
+        │  공식 endpoint가 검증되지 않으면 예시 snapshot 유지
+        ▼
+OS Credential Manager / macOS Keychain / iOS Keychain
+        │  credential 상태만 반환
+        ▼
+SPECTRA 위젯
 ```
 
 authorization code, access token, refresh token은 React 상태·`localStorage`·`sessionStorage`·Tauri 이벤트 payload에 넣지 않습니다.
 
 ## Tauri 데스크톱
 
-- `src-tauri/tauri.conf.json`에 `spectra` custom scheme을 등록했습니다.
-- `tauri-plugin-deep-link`가 앱 시작 시의 CLI URL과 실행 중의 open-url 이벤트를 받습니다.
-- Windows/Linux에서 두 번째 프로세스가 생기지 않도록 `tauri-plugin-single-instance`의 `deep-link` feature를 사용합니다.
-- `src-tauri/src/oauth_callback.rs`는 `spectra://oauth/callback` 외의 scheme/host/path를 거부하고, fragment·중복 `code/state`·`error` 응답·빈 값·state 불일치를 거부합니다. pending transaction은 10분 뒤 폐기됩니다.
-- `src-tauri/src/credential_vault.rs`는 `keyring`의 네이티브 backend를 사용합니다. Windows에서는 Windows Credential Manager, macOS에서는 Keychain으로 연결되며, account key는 공급자 allowlist로 제한됩니다.
-- 현재 Tauri command는 `oauth_prepare`, `credential_status`, `credential_remove`만 노출합니다. 토큰을 읽거나 쓰는 함수는 Rust 내부 경계에만 있고 command로 공개하지 않았습니다.
+- `src-tauri/src/oauth_callback.rs`는 state·만료·scheme·host·path·fragment·중복 query를 검증하는 callback 경계를 유지합니다.
+- `oauth_prepare`는 현재 Codex/Claude에 대해 `api-key-only`와 `callbackMode=none`을 반환하며 pending OAuth transaction을 만들지 않습니다.
+- `credential_status`, `credential_remove`만 웹뷰에 상태를 반환합니다. token·authorization code·refresh token은 이벤트 payload에 넣지 않습니다.
+- 공개 OAuth endpoint가 추가되기 전에는 시스템 브라우저를 열거나 client ID를 요구하지 않습니다.
 
 ## iOS/macOS Swift
 
-`native/apple/SpectraAuth`의 세 파일을 앱 target 또는 Swift package에 포함합니다.
+`native/apple/SpectraAuth`의 callback parser, `ASWebAuthenticationSession` 경계, Keychain vault는 향후 공식 OAuth를 위한 공통 코드입니다.
 
-- `OAuthSessionCoordinator`는 `ASWebAuthenticationSession`을 사용합니다. authorize URL은 HTTPS만 허용하고 presentation anchor를 명시적으로 요구합니다.
-- `OAuthCallback` parser는 Tauri와 같은 callback 규칙과 state 검사를 적용합니다.
-- `SpectraKeychainCredentialVault`는 `kSecClassGenericPassword`와 `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`를 사용합니다.
-- URL Types에 `spectra` scheme을 등록해야 합니다. universal link/App Link는 별도 도메인 검증과 signing 설정이 필요한 다음 단계입니다.
+- `OAuthProviderConfiguration`은 Codex/Claude의 현재 조직 사용량 endpoint와 `organization-usage-only` 상태를 선언합니다.
+- 두 provider의 개인 구독용 `authorizeURL`·`tokenURL`은 의도적으로 `nil`입니다.
+- `OAuthTokenExchange`는 token endpoint가 없으면 교환하지 않고 종료합니다.
+- `SpectraKeychainCredentialVault`는 `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`를 사용합니다.
 
-## React bridge
+## 조직 API 사용량 모드
 
-`src/integrations/tauri-native-bridge.ts`는 `window.__TAURI__`가 있을 때만 native command/event를 호출합니다. 일반 브라우저에서는 기존 `demo-only` adapter를 유지합니다. Tauri 런타임에서 OAuth 카드를 열면 pending state를 native에 준비하고, 브라우저로 돌아온 callback은 `callback-accepted` 상태만 UI에 전달합니다. 아직 token exchange가 없으므로 UI를 실제 연결 완료로 표시하지 않습니다.
+조직 사용량을 별도 기능으로 추가할 경우 다음 원칙을 지킵니다.
 
-## 다음 구현 승인 지점
+1. OpenAI Usage API 또는 Anthropic Admin Usage Report의 Admin API 키를 OS vault/보안 런타임에만 주입합니다.
+2. 조직 API 사용량을 ChatGPT/Codex 또는 Claude Pro/Max 개인 잔여량으로 표시하지 않습니다.
+3. `source=official-usage`, `scope=organization`처럼 데이터 범위를 모델에 명시합니다.
+4. API 키·응답 원문·토큰을 React 이벤트나 로그에 남기지 않습니다.
 
-1. 공급자별 공식 OAuth authorize/token endpoint와 client ID를 확인합니다.
-2. PKCE code verifier를 native adapter 안에서 사용해 code 교환과 refresh를 구현합니다.
-3. 공급자별 **요금제 잔여량** endpoint가 실제로 같은 계정 범위를 제공하는지 검증합니다. API project/org 사용량과 개인 구독 잔여량을 섞지 않습니다.
-4. 실기기에서 Windows Credential Manager, macOS Keychain, iOS Keychain의 저장·삭제·만료 갱신을 각각 확인한 뒤에만 `connected` snapshot으로 승격합니다.
+## 다음 활성화 조건
+
+1. 공급자가 개인 구독용 공식 OAuth authorize/token endpoint를 공개합니다.
+2. 같은 계정 범위의 잔여량·reset 시각 endpoint가 문서화됩니다.
+3. client ID·redirect URI 정책과 native 앱 배포 조건을 검증합니다.
+4. 실제 계정으로 Windows Credential Manager, macOS Keychain, iOS Keychain 저장·삭제·만료 갱신을 검증합니다.
 
 ## 검증 상태
 
-- React/Vite build: 기존 회귀 명령으로 확인 대상
-- Tauri Rust: `cargo fmt --check`, `cargo test`, `cargo check` 대상
-- Swift: 현재 작업 환경(Windows)에 Swift/Xcode가 없어 이 회차에서는 `NOT_RUN`으로 기록
-- 실제 공급자 로그인·토큰 교환·요금제 잔여량 API: 의도적으로 `NOT_RUN`
+- React/Vite build: 변경 후 실행
+- Tauri Rust: `cargo fmt --check`, `cargo test`, `cargo check` 실행
+- Swift: 현재 작업 환경(Windows)에 Swift/Xcode가 없어 `NOT_RUN`
+- 실제 공급자 로그인·토큰 교환: 공개 개인 구독 endpoint가 없어 `NOT_RUN`
+- 개인 요금제 잔여량 endpoint: Codex·Claude 모두 `NOT_PUBLISHED`

@@ -8,6 +8,8 @@
     "dev": "vite --host 127.0.0.1",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host 127.0.0.1",
+    "desktop:dev": "tauri dev",
+    "desktop:build": "tauri build --bundles nsis",
     "verify:baseline": "node scripts/verify-design-baseline.mjs",
     "verify:tokens": "node scripts/verify-design-tokens.mjs",
     "verify:memory": "node scripts/verify-memory-budget.mjs"
@@ -17,6 +19,7 @@
     "react-dom": "^19.2.8"
   },
   "devDependencies": {
+    "@tauri-apps/cli": "2.11.4",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
     "@vitejs/plugin-react": "^6.0.5",
