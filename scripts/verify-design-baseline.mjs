@@ -36,7 +36,7 @@ const dependencySections = ["dependencies", "devDependencies", "optionalDependen
 const dependencyNames = dependencySections.flatMap(section => Object.keys(packageJson[section] ?? {}));
 requireCondition(!dependencyNames.some(name => /figma/i.test(name)), "Figma 관련 패키지가 등록되어 있습니다.");
 
-const sourceFiles = ["app.js", "index.html", "styles.css", "server.mjs"];
+const sourceFiles = ["app.js", "index.html", "styles.css", "server.mjs", "src/main.tsx", "src/App.tsx", "src/data/providers.ts"];
 const forbiddenRuntimeReference = /plugin:\/\/figma|figma\.com|@figma\//i;
 
 for (const sourceFile of sourceFiles) {

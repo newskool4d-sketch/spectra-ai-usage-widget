@@ -4,7 +4,7 @@
 
 - [x] 1단계: A+C 기준선, 기준 스크린샷, Figma 비의존성 검사
 - [x] 2단계: 공용 디자인 토큰 분리 (`styles/tokens.css`)
-- [ ] 3단계: A+C 제품 화면을 React/TypeScript 구조로 재작성
+- [x] 3단계: A+C 제품 화면을 React/TypeScript 구조로 재작성
 - [ ] 4단계: Tauri 데스크톱 껍데기와 iOS WidgetKit 연결
 
 ## 제품이 바로 답해야 할 것
@@ -14,6 +14,13 @@
 1. 오늘 사용할 수 있는 양이 얼마나 남았는가?
 2. 어느 서비스가 한도나 초기화 시점에 가장 가까운가?
 3. 다음 작업은 어느 서비스에서 하는 편이 좋은가?
+
+## 3단계 제품 화면
+
+- Vite가 `src/main.tsx`에서 React 앱을 시작합니다.
+- 데스크톱에서는 A 대시보드, 820px 이하에서는 C 모바일 스트림만 마운트합니다.
+- 기존 `app.js`와 B 시안은 비교·회귀 기준선으로 보존하고 제품 런타임에서는 로드하지 않습니다.
+- 메모리 예산과 정적 구조 검증은 [`docs/performance/memory-budget.md`](./docs/performance/memory-budget.md)에 기록합니다.
 
 ## 프로토타입 단계
 

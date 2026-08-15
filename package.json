@@ -1,11 +1,26 @@
 {
-  "name": "spectra-ai-usage-widget-prototype",
-  "version": "0.0.0-prototype",
+  "name": "spectra-ai-usage-widget",
+  "version": "0.1.0",
   "private": true,
-  "description": "Throwaway UI prototype for a cross-platform AI usage widget.",
+  "type": "module",
+  "description": "Code-first React/TypeScript product screen for a cross-platform AI usage widget.",
   "scripts": {
-    "dev": "node server.mjs",
+    "dev": "vite --host 127.0.0.1",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --host 127.0.0.1",
     "verify:baseline": "node scripts/verify-design-baseline.mjs",
-    "verify:tokens": "node scripts/verify-design-tokens.mjs"
+    "verify:tokens": "node scripts/verify-design-tokens.mjs",
+    "verify:memory": "node scripts/verify-memory-budget.mjs"
+  },
+  "dependencies": {
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "@vitejs/plugin-react": "^6.0.5",
+    "typescript": "^7.0.2",
+    "vite": "^8.2.1"
   }
 }
