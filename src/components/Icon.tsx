@@ -1,6 +1,6 @@
 import { memo, type ReactNode } from "react";
 
-export type IconName = "grid" | "pulse" | "spark" | "bell" | "settings" | "refresh" | "shield" | "phone" | "monitor" | "eye" | "chevron";
+export type IconName = "grid" | "pulse" | "spark" | "bell" | "settings" | "refresh" | "shield" | "phone" | "monitor" | "eye" | "chevron" | "check" | "link" | "x";
 
 const iconShapes: Readonly<Record<IconName, ReactNode>> = {
   grid: <><rect x="3" y="3" width="7" height="7" rx="2" /><rect x="14" y="3" width="7" height="7" rx="2" /><rect x="3" y="14" width="7" height="7" rx="2" /><rect x="14" y="14" width="7" height="7" rx="2" /></>,
@@ -13,7 +13,10 @@ const iconShapes: Readonly<Record<IconName, ReactNode>> = {
   phone: <><rect x="7" y="2" width="10" height="20" rx="3" /><path d="M11 18h2" /></>,
   monitor: <><rect x="3" y="4" width="18" height="13" rx="3" /><path d="M8 21h8M12 17v4" /></>,
   eye: <><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z" /><circle cx="12" cy="12" r="2.5" /></>,
-  chevron: <path d="m9 18 6-6-6-6" />
+  chevron: <path d="m9 18 6-6-6-6" />,
+  check: <path d="m5 12 4 4L19 6" />,
+  link: <><path d="M10 13a5 5 0 0 0 7.07.07l1.42-1.42a5 5 0 0 0-7.07-7.07l-.82.82" /><path d="M14 11a5 5 0 0 0-7.07-.07L5.51 12.35a5 5 0 0 0 7.07 7.07l.82-.82" /></>,
+  x: <><path d="m6 6 12 12" /><path d="m18 6-12 12" /></>
 };
 
 type IconProps = Readonly<{ name: IconName; size?: number }>;

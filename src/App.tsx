@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Icon, type IconName } from "./components/Icon";
 import { Sparkline } from "./components/Sparkline";
-import { metricLabels, providers, rangeLabels, usageBars, type Metric, type Provider, type ProviderId, type UsageRange } from "./data/providers";
+import { metricLabels, planQuotas, providers, rangeLabels, usageBars, type Metric, type PlanQuota, type Provider, type ProviderId, type QuotaWindow, type UsageRange } from "./data/providers";
 
 const mobileBreakpoint = "(max-width: 820px)";
 
@@ -20,6 +20,19 @@ function useIsMobile() {
 }
 
 const providerStyle = (color: string) => ({ "--provider": color } as CSSProperties);
+
+function connectionLabel(quota: PlanQuota) {
+  if (quota.connectionState === "unsupported") return "OAuth 지원 확인 필요";
+  if (quota.connectionState === "error") return "연결 상태 확인 필요";
+  if (quota.connectionState === "connected") return "OAuth 흐름 완료 · 예시 snapshot";
+  return "OAuth 연결 필요";
+}
+
+function sourceLabel(quota: PlanQuota) {
+  if (quota.source === "oauth") return "OAuth 흐름 완료 · 예시 snapshot";
+  if (quota.source === "unavailable") return "공식 잔여량 경로 확인 중";
+  return "예시 snapshot · 실제 연결 후 갱신";
+}
 
 const Brand = memo(function Brand() {
   return <div className="brand-lockup"><span className="brand-mark" aria-hidden="true"><i /><i /><i /></span><div><strong>SPECTRA</strong><small>AI 사용 현황</small></div></div>;
@@ -71,22 +84,72 @@ const RangeTabs = memo(function RangeTabs({ range, onRange }: Readonly<{ range: 
 });
 
 const ChartBars = memo(function ChartBars() {
-  return <div className="bar-chart" aria-label="시간별 토큰 사용량">{usageBars.map((height, index) => <i key={`bar-${index}`} className={index === 12 ? "peak" : ""} style={{ "--h": `${height}%`, "--delay": `${index * 35}ms` } as CSSProperties} />)}</div>;
+  return <div className="bar-chart" aria-label="시간별 한도 소진 추이">{usageBars.map((height, index) => <i key={`bar-${index}`} className={index === 12 ? "peak" : ""} style={{ "--h": `${height}%`, "--delay": `${index * 35}ms` } as CSSProperties} />)}</div>;
+});
+
+const QuotaWindowRow = memo(function QuotaWindowRow({ window, compact = false }: Readonly<{ window: QuotaWindow; compact?: boolean }>) {
+  return <div className={`quota-window ${compact ? "compact" : ""}`}>
+    <div className="quota-window-copy"><span>{window.label}</span><strong>{window.remainingPercent}% 남음</strong></div>
+    <div className="quota-window-meta"><span>{window.kindLabel}</span><span>{window.resetLabel}</span></div>
+    <div className="quota-window-meter" aria-label={`${window.label} ${window.usedPercent}% 사용`}><i style={{ width: `${window.usedPercent}%` }} /></div>
+  </div>;
 });
 
 const ProviderRow = memo(function ProviderRow({ provider, active, onSelect }: Readonly<{ provider: Provider; active: boolean; onSelect: (id: ProviderId) => void }>) {
+  const quota = planQuotas[provider.id];
+  const primary = quota.windows[0];
   return <button type="button" className={`provider-row ${active ? "active" : ""}`} style={providerStyle(provider.color)} onClick={() => onSelect(provider.id)}>
     <ProviderLogo provider={provider} size="sm" />
-    <span className="provider-copy"><strong>{provider.name}</strong><small>{provider.tokens} 토큰</small></span>
-    <span className="provider-meter"><i style={{ width: `${provider.used}%` }} /></span>
-    <span className="provider-value">{provider.used}%</span>
+    <span className="provider-copy"><strong>{provider.name}</strong><small>{quota.planName}</small></span>
+    <span className="provider-meter"><i style={{ width: `${primary.remainingPercent}%` }} /></span>
+    <span className="provider-value">{primary.remainingPercent}%</span>
   </button>;
 });
 
 const ProviderChip = memo(function ProviderChip({ provider, active, onSelect }: Readonly<{ provider: Provider; active: boolean; onSelect: (id: ProviderId) => void }>) {
+  const primary = planQuotas[provider.id].windows[0];
   return <button type="button" className={`provider-chip ${active ? "active" : ""}`} style={providerStyle(provider.color)} onClick={() => onSelect(provider.id)}>
-    <ProviderLogo provider={provider} size="sm" /><span><strong>{provider.name}</strong><small>{provider.used}% 사용</small></span>
+    <ProviderLogo provider={provider} size="sm" /><span><strong>{provider.name}</strong><small>{primary.remainingPercent}% 남음</small></span>
   </button>;
+});
+
+const QuotaSummaryCard = memo(function QuotaSummaryCard({ provider, quota }: Readonly<{ provider: Provider; quota: PlanQuota }>) {
+  const [primary, secondary] = quota.windows;
+  return <article className="glass-card runway-card quota-card span-2" style={providerStyle(provider.color)}>
+    <div className="card-heading"><div><span className="eyebrow">요금제 잔여량</span><h2>{primary.remainingPercent}<span>%</span></h2></div><span className={`quota-status ${quota.connectionState}`}><i />{connectionLabel(quota)}</span></div>
+    <div className="runway-content"><div className="runway-ring quota-ring" style={{ "--value": primary.remainingPercent, "--provider": provider.color } as CSSProperties}><div><strong>{primary.remainingPercent}%</strong><span>잔여</span></div></div><div className="runway-copy"><p><strong>{quota.planName}</strong> · {primary.label}의 {primary.remainingPercent}%가 남아 있습니다. <span className="quota-source">{sourceLabel(quota)}</span></p><div className="rainbow-track"><i style={{ width: `${primary.remainingPercent}%` }} /></div><div className="track-labels"><span>{primary.kindLabel}</span><span>초기화 · {primary.resetLabel}</span></div>{secondary ? <div className="quota-window-list"><QuotaWindowRow window={secondary} compact /></div> : null}</div></div>
+  </article>;
+});
+
+const OAuthConnectCard = memo(function OAuthConnectCard({ provider, quota, compact = false, onOpen }: Readonly<{ provider: Provider; quota: PlanQuota; compact?: boolean; onOpen: (id: ProviderId) => void }>) {
+  const unsupported = quota.connectionState === "unsupported";
+  const connected = quota.connectionState === "connected";
+  return <article className={`glass-card oauth-card ${compact ? "compact" : ""}`} style={providerStyle(provider.color)}>
+    <div className="oauth-icon"><Icon name={unsupported ? "shield" : connected ? "check" : "link"} size={18} /></div>
+    <div className="oauth-copy"><span className="eyebrow">계정 연결</span><h3>{provider.name} 요금제 연결</h3><p>OAuth로 연결하면 요금제 잔여량과 초기화 시각을 제품 화면에서 확인합니다.</p><div className={`oauth-status ${unsupported ? "unsupported" : connected ? "connected" : ""}`}><i />{connectionLabel(quota)}</div></div>
+    <button type="button" className="oauth-button" disabled={unsupported} onClick={() => onOpen(provider.id)}>{unsupported ? "지원 확인 필요" : connected ? "연결 흐름 다시 보기" : "OAuth로 연결"}</button>
+    <div className="oauth-security"><Icon name="shield" size={13} /><span>실제 토큰은 화면이나 브라우저 저장소에 표시하지 않습니다.</span></div>
+  </article>;
+});
+
+const OAuthDialog = memo(function OAuthDialog({ open, provider, quota, onClose, onConnect, onDisconnect }: Readonly<{
+  open: boolean;
+  provider: Provider;
+  quota: PlanQuota;
+  onClose: () => void;
+  onConnect: (id: ProviderId) => void;
+  onDisconnect: (id: ProviderId) => void;
+}>) {
+  if (!open) return null;
+  const unsupported = quota.connectionState === "unsupported";
+  const connected = quota.connectionState === "connected";
+  return <div className="oauth-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}><div className="oauth-dialog" role="dialog" aria-modal="true" aria-labelledby="oauth-dialog-title">
+    <div className="oauth-dialog-header"><div><span className="eyebrow">안전한 계정 연결</span><h2 id="oauth-dialog-title">{provider.name} 요금제 확인</h2></div><button type="button" className="icon-button oauth-close" onClick={onClose} aria-label="연결 창 닫기"><Icon name="x" size={17} /></button></div>
+    <div className="oauth-provider"><ProviderLogo provider={provider} size="lg" /><div><strong>{quota.planName}</strong><span>{quota.authMethod === "oauth-pkce" ? "OAuth · PKCE 흐름" : "공급자 인증 흐름"}</span></div></div>
+    <ol className="oauth-steps"><li><span>01</span><div><strong>브라우저에서 로그인</strong><small>공급자 로그인 화면에서 계정을 직접 확인합니다.</small></div></li><li><span>02</span><div><strong>잔여량 권한 확인</strong><small>계정·요금제 정보만 읽는 범위를 먼저 보여줍니다.</small></div></li><li><span>03</span><div><strong>기기에 안전하게 보관</strong><small>토큰은 UI·브라우저 저장소에 노출하지 않는 구조로 연결합니다.</small></div></li></ol>
+    <div className="oauth-demo-note"><Icon name="shield" size={14} /><span>현재는 실제 공급자 호출 전 데모 흐름입니다. 완료 후에도 예시 snapshot으로 표시됩니다.</span></div>
+    <div className="oauth-dialog-actions"><button type="button" className="secondary-action" onClick={onClose}>취소</button>{connected ? <button type="button" className="danger-action" onClick={() => { onDisconnect(provider.id); onClose(); }}>연결 해제</button> : <button type="button" className="primary-action" disabled={unsupported} onClick={() => { onConnect(provider.id); onClose(); }}>{unsupported ? "공식 경로 확인 필요" : "데모 연결 완료"}</button>}</div>
+  </div></div>;
 });
 
 type LayoutActions = Readonly<{
@@ -100,14 +163,17 @@ type LayoutActions = Readonly<{
 type SharedViewProps = LayoutActions & Readonly<{
   activeProvider: Provider;
   activeProviderId: ProviderId;
+  activeQuota: PlanQuota;
   metric: Metric;
   range: UsageRange;
   onProvider: (id: ProviderId) => void;
   onMetric: (metric: Metric) => void;
   onRange: (range: UsageRange) => void;
+  onOpenOAuth: (id: ProviderId) => void;
 }>;
 
-const VariantADesktop = memo(function VariantADesktop({ activeProvider, activeProviderId, metric, range, onProvider, onMetric, onRange, ...actions }: SharedViewProps) {
+const VariantADesktop = memo(function VariantADesktop({ activeProvider, activeProviderId, activeQuota, metric, range, onProvider, onMetric, onRange, onOpenOAuth, ...actions }: SharedViewProps) {
+  const primary = activeQuota.windows[0];
   return <div className="product-shell variant-a">
     <NavRail />
     <section className="app-surface command-center">
@@ -117,17 +183,14 @@ const VariantADesktop = memo(function VariantADesktop({ activeProvider, activePr
       </header>
       <div className="dashboard-toolbar"><MetricTabs metric={metric} onMetric={onMetric} /><RangeTabs range={range} onRange={onRange} /></div>
       <div className="bento-grid">
-        <article className="glass-card runway-card span-2">
-          <div className="card-heading"><div><span className="eyebrow">전체 사용 여유</span><h2>82<span>%</span></h2></div><span className="trend-badge positive">지난주보다 6.4% 여유</span></div>
-          <div className="runway-content"><div className="runway-ring" style={{ "--value": 82 } as CSSProperties}><div><strong>18시간</strong><span>예상</span></div></div><div className="runway-copy"><p>지금 속도라면 오늘 작업을 마친 뒤에도 약 <strong>18시간</strong>분이 남습니다.</p><div className="rainbow-track"><i /></div><div className="track-labels"><span>서비스 6개</span><span>다음 초기화 · {activeProvider.reset}</span></div></div></div>
-        </article>
-        <article className="glass-card live-card span-2"><div className="card-heading"><div><span className="eyebrow">실시간 사용</span><h3>8.42M <small>{metricLabels[metric]}</small></h3></div><span className="live-pill"><i />집계 중</span></div><ChartBars /><div className="chart-axis"><span>09:00</span><span>12:00</span><span>15:00</span><span>지금</span></div></article>
-        <article className="glass-card providers-card span-2"><div className="card-heading"><div><span className="eyebrow">서비스</span><h3>서비스별 현황</h3></div><button type="button" className="text-button">모두 보기 <Icon name="chevron" size={14} /></button></div><div className="provider-list">{providers.map(provider => <ProviderRow key={provider.id} provider={provider} active={provider.id === activeProviderId} onSelect={onProvider} />)}</div></article>
-        <article className="glass-card focus-card"><div className="card-heading"><div><ProviderLogo provider={activeProvider} size="lg" /><span className="eyebrow">집중 확인</span></div><span className="trend-badge">초기화까지 {activeProvider.reset}</span></div><h3>{activeProvider.name}</h3><p>7일 평균보다 <strong>12% 빠른</strong> 속도로 사용 중입니다.</p><Sparkline values={activeProvider.trend} color={activeProvider.color} width={220} height={62} /></article>
-        <article className="glass-card budget-card"><span className="eyebrow">이번 달 예상</span><h3>$48.10 <small>/ $75</small></h3><div className="budget-gauge"><i style={{ width: "64%" }} /></div><p><span>64% 사용</span><span className="positive">$9.80 절약</span></p><div className="micro-stat"><span>예상 결제액</span><strong>$69.20</strong></div></article>
-        <article className="glass-card alert-card span-2"><div className="alert-icon"><Icon name="bell" size={18} /></div><div><span className="eyebrow">확인이 필요한 항목</span><h3>Claude 5시간 한도의 76%를 사용했습니다.</h3><p>다음 35분은 OpenAI로 돌리면 초기화 전 병목을 줄일 수 있습니다.</p></div><button type="button" onClick={() => onProvider("openai")}>OpenAI로 전환</button></article>
+        <QuotaSummaryCard provider={activeProvider} quota={activeQuota} />
+        <article className="glass-card live-card span-2"><div className="card-heading"><div><span className="eyebrow">한도 소진 추이</span><h3>{primary.usedPercent}% <small>현재 사용</small></h3></div><span className="live-pill"><i />집계 중</span></div><ChartBars /><div className="chart-axis"><span>09:00</span><span>12:00</span><span>15:00</span><span>지금</span></div></article>
+        <article className="glass-card providers-card span-2"><div className="card-heading"><div><span className="eyebrow">서비스</span><h3>서비스별 잔여량</h3></div><button type="button" className="text-button">모두 보기 <Icon name="chevron" size={14} /></button></div><div className="provider-list">{providers.map(provider => <ProviderRow key={provider.id} provider={provider} active={provider.id === activeProviderId} onSelect={onProvider} />)}</div></article>
+        <article className="glass-card focus-card"><div className="card-heading"><div><ProviderLogo provider={activeProvider} size="lg" /><span className="eyebrow">집중 확인</span></div><span className="trend-badge">{primary.remainingPercent}% 남음</span></div><h3>{activeProvider.name}</h3><p>{primary.label}이 {primary.resetLabel} 뒤 초기화됩니다. <strong>{activeQuota.planName}</strong> 기준 예시 snapshot입니다.</p><Sparkline values={activeProvider.trend} color={activeProvider.color} width={220} height={62} /></article>
+        <article className="glass-card budget-card plan-card"><span className="eyebrow">연결된 요금제</span><h3>{activeQuota.planName}</h3><p><span>{activeQuota.accountLabel}</span><span className={activeQuota.connectionState === "connected" ? "positive" : ""}>{activeQuota.lastSyncedAt ? `마지막 확인 · ${activeQuota.lastSyncedAt}` : "연결 전 · 예시 snapshot"}</span></p><div className="micro-stat"><span>인증 방식</span><strong>OAuth · PKCE</strong></div></article>
+        <OAuthConnectCard provider={activeProvider} quota={activeQuota} onOpen={onOpenOAuth} />
       </div>
-      <footer className="privacy-strip"><Icon name="shield" size={15} /><span>사용량 정보는 이 기기에만 저장됩니다.</span><i /><span>예시 데이터</span></footer>
+      <footer className="privacy-strip"><Icon name="shield" size={15} /><span>잔여량은 OAuth 연결 후 공급자 정책에 맞춰 갱신됩니다.</span><i /><span>{sourceLabel(activeQuota)}</span></footer>
     </section>
   </div>;
 });
@@ -137,19 +200,24 @@ const MobileNav = memo(function MobileNav() {
   return <nav className="mobile-nav">{items.map((item, index) => <button type="button" className={index === 0 ? "active" : ""} key={item.name}><Icon name={item.name} size={19} /><span>{item.label}</span></button>)}</nav>;
 });
 
-const VariantCMobile = memo(function VariantCMobile({ activeProvider, activeProviderId, onProvider, ...actions }: SharedViewProps) {
+const VariantCMobile = memo(function VariantCMobile({ activeProvider, activeProviderId, activeQuota, onProvider, onOpenOAuth }: SharedViewProps) {
   const claude = providers.find(provider => provider.id === "claude") ?? providers[1];
   const cursor = providers.find(provider => provider.id === "cursor") ?? providers[3];
   const gemini = providers.find(provider => provider.id === "gemini") ?? providers[2];
+  const claudeQuota = planQuotas.claude;
+  const cursorQuota = planQuotas.cursor;
+  const geminiQuota = planQuotas.gemini;
+  const primary = activeQuota.windows[0];
   return <div className="product-shell variant-c"><section className="stream-app"><div className="stream-layout"><section className="mobile-stream">
     <div className="mobile-top"><span>9:41</span><div><i /><i /><i /></div></div>
     <div className="mobile-title"><div><span className="eyebrow">8월 15일</span><h1>사용 현황</h1></div><button type="button" className="icon-button" aria-label="알림"><Icon name="bell" size={18} /><span className="notification-dot" /></button></div>
-    <article className="hero-signal" style={providerStyle(activeProvider.color)}><div className="hero-signal-top"><span className="signal-orb"><ProviderLogo provider={activeProvider} size="md" /></span><span className="trend-badge positive">여유 있음</span></div><span className="eyebrow">전체 사용 여유</span><h2>82<span>%</span></h2><p>오늘 작업을 마치고도 여유가 있습니다.</p><div className="spectrum-line"><i /></div><div className="signal-foot"><span>8.42M 토큰</span><span>약 18시간</span></div></article>
+    <article className="hero-signal" style={providerStyle(activeProvider.color)}><div className="hero-signal-top"><span className="signal-orb"><ProviderLogo provider={activeProvider} size="md" /></span><span className={`trend-badge ${activeQuota.connectionState === "connected" ? "positive" : ""}`}>{activeQuota.connectionState === "connected" ? "연결됨" : "예시 snapshot"}</span></div><span className="eyebrow">{activeQuota.planName} · {primary.label}</span><h2>{primary.remainingPercent}<span>%</span></h2><p>초기화 전까지 남은 요금제 여유입니다.</p><div className="spectrum-line"><i style={{ width: `${primary.remainingPercent}%` }} /></div><div className="signal-foot"><span>남은 한도 {primary.remainingPercent}%</span><span>초기화 {primary.resetLabel}</span></div></article>
     <div className="chip-scroll" role="list">{providers.map(provider => <ProviderChip key={provider.id} provider={provider} active={provider.id === activeProviderId} onSelect={onProvider} />)}</div>
+    <OAuthConnectCard provider={activeProvider} quota={activeQuota} compact onOpen={onOpenOAuth} />
     <section className="stream-feed"><div className="section-title"><div><span className="eyebrow">알림</span><h3>지금 확인할 항목</h3></div><button type="button">전체</button></div>
-      <article className="feed-item priority"><span className="feed-line" style={providerStyle(claude.color)} /><ProviderLogo provider={claude} size="sm" /><div><span className="feed-time">지금 · CLAUDE</span><h4>5시간 한도에 가까워졌습니다.</h4><p>24% 남았습니다. 다음 큰 작업은 OpenAI로 옮겨 주세요.</p></div><strong>76%</strong></article>
-      <article className="feed-item"><span className="feed-line" style={providerStyle(cursor.color)} /><ProviderLogo provider={cursor} size="sm" /><div><span className="feed-time">14분 전 · CURSOR</span><h4>사용 효율이 좋아졌습니다.</h4><p>캐시된 대화 맥락 덕분에 토큰 사용이 18% 줄었습니다.</p></div><strong className="positive">+18%</strong></article>
-      <article className="feed-item"><span className="feed-line" style={providerStyle(gemini.color)} /><ProviderLogo provider={gemini} size="sm" /><div><span className="feed-time">42분 전 · GEMINI</span><h4>일일 한도가 초기화됐습니다.</h4><p>전체 컨텍스트 창을 다시 사용할 수 있습니다.</p></div><strong>100%</strong></article>
+      <article className="feed-item priority"><span className="feed-line" style={providerStyle(claude.color)} /><ProviderLogo provider={claude} size="sm" /><div><span className="feed-time">지금 · CLAUDE</span><h4>5시간 한도에 가까워졌습니다.</h4><p>{claudeQuota.windows[0].remainingPercent}% 남았습니다. 다음 큰 작업은 다른 연결 서비스로 옮겨 주세요.</p></div><strong>{claudeQuota.windows[0].usedPercent}%</strong></article>
+      <article className="feed-item"><span className="feed-line" style={providerStyle(cursor.color)} /><ProviderLogo provider={cursor} size="sm" /><div><span className="feed-time">14분 전 · CURSOR</span><h4>공식 잔여량 연결 경로를 확인 중입니다.</h4><p>{cursorQuota.windows[0].remainingPercent}% 남음 · OAuth 지원 여부를 먼저 확인해야 합니다.</p></div><strong>{cursorQuota.windows[0].remainingPercent}%</strong></article>
+      <article className="feed-item"><span className="feed-line" style={providerStyle(gemini.color)} /><ProviderLogo provider={gemini} size="sm" /><div><span className="feed-time">42분 전 · GEMINI</span><h4>일일 한도 초기화 시각을 확인했습니다.</h4><p>다음 초기화까지 {geminiQuota.windows[0].resetLabel} · 예시 snapshot</p></div><strong className="positive">{geminiQuota.windows[0].remainingPercent}%</strong></article>
     </section>
     <MobileNav />
   </section></div></section></div>;
@@ -158,13 +226,27 @@ const VariantCMobile = memo(function VariantCMobile({ activeProvider, activeProv
 export function App() {
   const isMobile = useIsMobile();
   const [activeProviderId, setActiveProviderId] = useState<ProviderId>("openai");
-  const [metric, setMetric] = useState<Metric>("tokens");
+  const [metric, setMetric] = useState<Metric>("remaining");
   const [range, setRange] = useState<UsageRange>("7D");
   const [solid, setSolid] = useState(false);
   const [refreshedAt, setRefreshedAt] = useState("방금 전");
   const [refreshing, setRefreshing] = useState(false);
+  const [connectedProviderIds, setConnectedProviderIds] = useState<readonly ProviderId[]>([]);
+  const [oauthProviderId, setOauthProviderId] = useState<ProviderId>("openai");
+  const [oauthOpen, setOauthOpen] = useState(false);
   const refreshTimer = useRef<number | null>(null);
   const activeProvider = useMemo(() => providers.find(provider => provider.id === activeProviderId) ?? providers[0], [activeProviderId]);
+  const activeQuota = useMemo(() => {
+    const baseQuota = planQuotas[activeProviderId];
+    if (baseQuota.connectionState === "unsupported" || !connectedProviderIds.includes(activeProviderId)) return baseQuota;
+    return { ...baseQuota, accountLabel: "예시 계정 · OAuth 흐름 완료", connectionState: "connected" as const, source: "oauth" as const, confidence: "example" as const, lastSyncedAt: "방금 전" };
+  }, [activeProviderId, connectedProviderIds]);
+  const oauthProvider = useMemo(() => providers.find(provider => provider.id === oauthProviderId) ?? providers[0], [oauthProviderId]);
+  const oauthQuota = useMemo(() => {
+    const baseQuota = planQuotas[oauthProviderId];
+    if (baseQuota.connectionState === "unsupported" || !connectedProviderIds.includes(oauthProviderId)) return baseQuota;
+    return { ...baseQuota, accountLabel: "예시 계정 · OAuth 흐름 완료", connectionState: "connected" as const, source: "oauth" as const, confidence: "example" as const, lastSyncedAt: "방금 전" };
+  }, [oauthProviderId, connectedProviderIds]);
 
   const refresh = useCallback(() => {
     if (refreshTimer.current !== null) window.clearTimeout(refreshTimer.current);
@@ -180,14 +262,23 @@ export function App() {
     if (refreshTimer.current !== null) window.clearTimeout(refreshTimer.current);
   }, []);
 
+  const openOAuth = useCallback((id: ProviderId) => {
+    setOauthProviderId(id);
+    setOauthOpen(true);
+  }, []);
+  const connectOAuth = useCallback((id: ProviderId) => setConnectedProviderIds(current => current.includes(id) ? current : [...current, id]), []);
+  const disconnectOAuth = useCallback((id: ProviderId) => setConnectedProviderIds(current => current.filter(providerId => providerId !== id)), []);
+
   const sharedProps: SharedViewProps = {
     activeProvider,
     activeProviderId,
+    activeQuota,
     metric,
     range,
     onProvider: setActiveProviderId,
     onMetric: setMetric,
     onRange: setRange,
+    onOpenOAuth: openOAuth,
     refreshedAt,
     refreshing,
     solid,
@@ -195,6 +286,5 @@ export function App() {
     onSolid: () => setSolid(value => !value)
   };
 
-  return <div className={solid ? "solid-mode" : ""}>{isMobile ? <VariantCMobile {...sharedProps} /> : <VariantADesktop {...sharedProps} />}</div>;
+  return <><div className={solid ? "solid-mode" : ""}>{isMobile ? <VariantCMobile {...sharedProps} /> : <VariantADesktop {...sharedProps} />}</div><OAuthDialog open={oauthOpen} provider={oauthProvider} quota={oauthQuota} onClose={() => setOauthOpen(false)} onConnect={connectOAuth} onDisconnect={disconnectOAuth} /></>;
 }
-

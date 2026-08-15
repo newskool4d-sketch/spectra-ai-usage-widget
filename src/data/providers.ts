@@ -1,6 +1,31 @@
 export type ProviderId = "openai" | "claude" | "gemini" | "cursor" | "copilot" | "perplexity";
-export type Metric = "tokens" | "cost" | "requests";
+export type Metric = "remaining" | "cost" | "requests";
 export type UsageRange = "24H" | "7D" | "30D";
+export type QuotaWindowId = "rolling" | "weekly";
+export type QuotaConnectionState = "not_connected" | "connected" | "unsupported" | "error";
+export type QuotaSource = "example" | "oauth" | "unavailable";
+export type QuotaConfidence = "example" | "verified" | "unavailable";
+
+export type QuotaWindow = Readonly<{
+  id: QuotaWindowId;
+  label: string;
+  usedPercent: number;
+  remainingPercent: number;
+  resetLabel: string;
+  kindLabel: string;
+}>;
+
+export type PlanQuota = Readonly<{
+  providerId: ProviderId;
+  planName: string;
+  accountLabel: string;
+  authMethod: "oauth-pkce";
+  connectionState: QuotaConnectionState;
+  source: QuotaSource;
+  confidence: QuotaConfidence;
+  lastSyncedAt: string | null;
+  windows: readonly QuotaWindow[];
+}>;
 
 export type Provider = Readonly<{
   id: ProviderId;
@@ -23,10 +48,97 @@ export const providers: readonly Provider[] = Object.freeze([
   { id: "perplexity", name: "Perplexity", short: "PX", color: "#C7A852", used: 18, tokens: "318K", cost: "$1.70", reset: "18일", trend: [9, 12, 15, 11, 16, 14, 18] }
 ]);
 
+export const planQuotas: Readonly<Record<ProviderId, PlanQuota>> = Object.freeze({
+  openai: {
+    providerId: "openai",
+    planName: "ChatGPT Pro",
+    accountLabel: "예시 계정 · OAuth 연결 전",
+    authMethod: "oauth-pkce",
+    connectionState: "not_connected",
+    source: "example",
+    confidence: "example",
+    lastSyncedAt: null,
+    windows: Object.freeze([
+      { id: "rolling", label: "5시간 한도", usedPercent: 76, remainingPercent: 24, resetLabel: "1시간 18분 후", kindLabel: "롤링 한도" },
+      { id: "weekly", label: "주간 한도", usedPercent: 42, remainingPercent: 58, resetLabel: "3일 4시간 후", kindLabel: "주간 한도" }
+    ] as const)
+  },
+  claude: {
+    providerId: "claude",
+    planName: "Claude Max",
+    accountLabel: "예시 계정 · OAuth 연결 전",
+    authMethod: "oauth-pkce",
+    connectionState: "not_connected",
+    source: "example",
+    confidence: "example",
+    lastSyncedAt: null,
+    windows: Object.freeze([
+      { id: "rolling", label: "5시간 한도", usedPercent: 68, remainingPercent: 32, resetLabel: "3시간 42분 후", kindLabel: "롤링 한도" },
+      { id: "weekly", label: "주간 한도", usedPercent: 51, remainingPercent: 49, resetLabel: "4일 2시간 후", kindLabel: "주간 한도" }
+    ] as const)
+  },
+  gemini: {
+    providerId: "gemini",
+    planName: "Google AI Pro",
+    accountLabel: "예시 계정 · OAuth 연결 전",
+    authMethod: "oauth-pkce",
+    connectionState: "not_connected",
+    source: "example",
+    confidence: "example",
+    lastSyncedAt: null,
+    windows: Object.freeze([
+      { id: "rolling", label: "일일 한도", usedPercent: 41, remainingPercent: 59, resetLabel: "8시간 후", kindLabel: "일일 한도" },
+      { id: "weekly", label: "주간 한도", usedPercent: 27, remainingPercent: 73, resetLabel: "5일 후", kindLabel: "주간 한도" }
+    ] as const)
+  },
+  cursor: {
+    providerId: "cursor",
+    planName: "Cursor Pro",
+    accountLabel: "예시 계정 · OAuth 연결 전",
+    authMethod: "oauth-pkce",
+    connectionState: "unsupported",
+    source: "unavailable",
+    confidence: "unavailable",
+    lastSyncedAt: null,
+    windows: Object.freeze([
+      { id: "rolling", label: "사용량 한도", usedPercent: 54, remainingPercent: 46, resetLabel: "12일 후", kindLabel: "월간 한도" },
+      { id: "weekly", label: "보너스 요청", usedPercent: 29, remainingPercent: 71, resetLabel: "12일 후", kindLabel: "월간 한도" }
+    ] as const)
+  },
+  copilot: {
+    providerId: "copilot",
+    planName: "Microsoft Copilot Pro",
+    accountLabel: "예시 계정 · OAuth 연결 전",
+    authMethod: "oauth-pkce",
+    connectionState: "not_connected",
+    source: "example",
+    confidence: "example",
+    lastSyncedAt: null,
+    windows: Object.freeze([
+      { id: "rolling", label: "월간 한도", usedPercent: 29, remainingPercent: 71, resetLabel: "18일 후", kindLabel: "월간 한도" },
+      { id: "weekly", label: "우선 요청", usedPercent: 18, remainingPercent: 82, resetLabel: "18일 후", kindLabel: "월간 한도" }
+    ] as const)
+  },
+  perplexity: {
+    providerId: "perplexity",
+    planName: "Perplexity Pro",
+    accountLabel: "예시 계정 · OAuth 연결 전",
+    authMethod: "oauth-pkce",
+    connectionState: "not_connected",
+    source: "example",
+    confidence: "example",
+    lastSyncedAt: null,
+    windows: Object.freeze([
+      { id: "rolling", label: "월간 한도", usedPercent: 18, remainingPercent: 82, resetLabel: "18일 후", kindLabel: "월간 한도" },
+      { id: "weekly", label: "고급 요청", usedPercent: 11, remainingPercent: 89, resetLabel: "18일 후", kindLabel: "월간 한도" }
+    ] as const)
+  }
+});
+
 export const usageBars = Object.freeze([43, 58, 49, 70, 64, 83, 74, 91, 66, 79, 88, 72, 96, 82]);
 
 export const metricLabels: Readonly<Record<Metric, string>> = Object.freeze({
-  tokens: "토큰",
+  remaining: "잔여량",
   cost: "비용",
   requests: "요청"
 });

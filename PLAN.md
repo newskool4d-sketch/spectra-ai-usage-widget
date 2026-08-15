@@ -5,6 +5,7 @@
 - [x] 1단계: A+C 기준선, 기준 스크린샷, Figma 비의존성 검사
 - [x] 2단계: 공용 디자인 토큰 분리 (`styles/tokens.css`)
 - [x] 3단계: A+C 제품 화면을 React/TypeScript 구조로 재작성
+- [x] 3단계 확장: `PlanQuota` 잔여량 모델과 데스크톱·모바일 OAuth 연결 데모 UX 반영
 - [ ] 4단계: Tauri 데스크톱 껍데기와 iOS WidgetKit 연결
 
 ## 제품이 바로 답해야 할 것
@@ -21,6 +22,8 @@
 - 데스크톱에서는 A 대시보드, 820px 이하에서는 C 모바일 스트림만 마운트합니다.
 - 기존 `app.js`와 B 시안은 비교·회귀 기준선으로 보존하고 제품 런타임에서는 로드하지 않습니다.
 - 메모리 예산과 정적 구조 검증은 [`docs/performance/memory-budget.md`](./docs/performance/memory-budget.md)에 기록합니다.
+- 잔여량 요약은 `planName`, `windows`, `remainingPercent`, `resetLabel`, `connectionState`, `source`, `confidence`로 표현합니다.
+- OAuth 카드는 로그인·권한·보관 3단계를 설명하고, 현재는 토큰을 발급하거나 실제 공급자 데이터를 호출하지 않는 데모 상태를 명시합니다.
 
 ## 프로토타입 단계
 
@@ -45,9 +48,9 @@
 
 ### 데이터 구조
 
-- 서비스별 값을 `remaining`, `resetAt`, `window`, `cost`, `tokens`, `freshness`, `confidence`로 맞춥니다.
-- 공식 API, 로컬 관찰, 브라우저 확인, 수동 입력값을 구분해 표시합니다.
-- 서비스가 추정치만 제공한다면 정확한 수치처럼 보이지 않게 합니다.
+- 서비스별 요금제를 `PlanQuota`로 맞추고, `windows` 배열 안에 한도 종류·사용률·잔여률·초기화 시각을 둡니다.
+- `source`와 `confidence`를 이용해 OAuth 확인값, 예시 snapshot, 공식 경로 미확인 상태를 구분합니다.
+- 서비스가 추정치만 제공하거나 공식 잔여량 경로가 없으면 정확한 수치처럼 보이지 않게 합니다.
 
 ## 품질 기준
 
