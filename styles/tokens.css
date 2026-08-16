@@ -110,3 +110,41 @@
   --motion-fast: .2s ease;
   --motion-rise: .45s cubic-bezier(.2, .8, .2, 1);
 }
+
+/* 일반 모드 — 대비는 낮추고, 잔여량 색상은 다크 모드와 동일하게 유지합니다. */
+[data-theme="light"] {
+  color-scheme: light;
+  --color-ink: #20231f;
+  --color-muted: #626861;
+  --color-subtle: #858d83;
+  --color-canvas: #eef1ec;
+  --color-canvas-raised: #f7f9f6;
+  --color-surface-app: rgba(255, 255, 255, .82);
+  --color-surface-nav: rgba(248, 250, 247, .88);
+  --color-surface-card: rgba(255, 255, 255, .68);
+  --color-surface-solid: #f7f9f6;
+  --color-surface-core: rgba(255, 255, 255, .94);
+  --color-surface-node: rgba(247, 249, 246, .92);
+  --color-surface-inner: #e8ede7;
+  --color-surface-control: rgba(32, 35, 31, .045);
+  --color-surface-control-soft: rgba(32, 35, 31, .035);
+  --color-surface-control-active: rgba(32, 35, 31, .1);
+  --color-control-hover: rgba(32, 35, 31, .1);
+  --color-line: rgba(32, 35, 31, .12);
+  --color-line-strong: rgba(32, 35, 31, .2);
+  --color-line-faint: rgba(32, 35, 31, .14);
+  --color-track: rgba(32, 35, 31, .09);
+  --color-heading-em: #4f6651;
+  --color-label: #697269;
+  --color-nav-icon: #768078;
+  --color-ink-button: #f7f9f6;
+  --color-button: #273128;
+  --color-avatar: #d7e1d5;
+  --color-ambient-gradient: linear-gradient(145deg, #edf2ed, #f8faf7 54%, #e8efea);
+  --shadow-inset: inset 0 1px 0 rgba(255, 255, 255, .85);
+  --shadow-app: 0 20px 54px rgba(43, 61, 48, .12), inset 0 1px 0 rgba(255, 255, 255, .8);
+  --shadow-card: inset 0 1px 0 rgba(255, 255, 255, .8), 0 14px 34px rgba(43, 61, 48, .08);
+  --shadow-control: 0 14px 32px rgba(43, 61, 48, .12), inset 0 1px 0 rgba(255, 255, 255, .8);
+  --shadow-widget: 0 20px 54px rgba(43, 61, 48, .12), inset 0 1px 0 rgba(255, 255, 255, .8);
+  --glass-widget-bg: rgba(255, 255, 255, .82);
+}

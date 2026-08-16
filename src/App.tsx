@@ -32,6 +32,7 @@ type ProviderActionFeedback = Readonly<{
 
 type QuotaRecord = Readonly<Record<ProviderId, PlanQuota>>;
 type ProductView = "overview" | "services" | "trend" | "alerts" | "settings";
+type ThemeMode = "dark" | "light";
 
 const hasDisplayValue = (quota: PlanQuota) => quota.confidence !== "unavailable";
 const displayPercent = (quota: PlanQuota, window = quota.windows[0]) => hasDisplayValue(quota) ? `${Math.round(window.remainingPercent)}%` : "—";
@@ -184,17 +185,20 @@ const ProviderLogo = memo(function ProviderLogo({ provider, size = "md" }: Reado
   return <span className={`provider-logo ${size}`} style={providerStyle(provider.color)} aria-hidden="true">{provider.short}</span>;
 });
 
-const TopActions = memo(function TopActions({ refreshedAt, refreshing, solid, onRefresh, onSolid }: Readonly<{
+const TopActions = memo(function TopActions({ refreshedAt, refreshing, solid, theme, onRefresh, onSolid, onTheme }: Readonly<{
   refreshedAt: string;
   refreshing: boolean;
   solid: boolean;
+  theme: ThemeMode;
   onRefresh: () => void;
   onSolid: () => void;
+  onTheme: () => void;
 }>) {
   return <div className="top-actions">
     <span className="sync-state"><i /> 동기화 · {refreshedAt}</span>
     <button type="button" className={`icon-button ${refreshing ? "spinning" : ""}`} onClick={onRefresh} aria-label="데이터 새로고침"><Icon name="refresh" size={17} /></button>
     <button type="button" className="icon-button" onClick={onSolid} aria-label="투명도 전환" title={solid ? "유리 모드" : "가독성용 불투명 모드"}><Icon name="eye" size={17} /></button>
+    <button type="button" className="icon-button" onClick={onTheme} aria-label="테마 전환" title={theme === "dark" ? "일반 모드" : "다크 모드"}><Icon name="spark" size={17} /></button>
     <button type="button" className="avatar" aria-label="프로필">HJ</button>
   </div>;
 });
@@ -356,8 +360,10 @@ type LayoutActions = Readonly<{
   refreshedAt: string;
   refreshing: boolean;
   solid: boolean;
+  theme: ThemeMode;
   onRefresh: () => void;
   onSolid: () => void;
+  onTheme: () => void;
 }>;
 
 type SharedViewProps = LayoutActions & Readonly<{
@@ -385,7 +391,7 @@ function viewCopy(view: ProductView) {
 
 type ViewPanelProps = Omit<SharedViewProps, "onView">;
 
-const DesktopViewPanel = memo(function DesktopViewPanel({ view, activeProvider, activeProviderId, activeQuota, quotas, metric, range, onProvider, onMetric, onRange, onOpenOAuth, refreshedAt, refreshing, solid, onRefresh, onSolid }: ViewPanelProps) {
+const DesktopViewPanel = memo(function DesktopViewPanel({ view, activeProvider, activeProviderId, activeQuota, quotas, metric, range, onProvider, onMetric, onRange, onOpenOAuth, refreshedAt, refreshing, solid, theme, onRefresh, onSolid, onTheme }: ViewPanelProps) {
   if (view === "services") {
     return <div className="view-stack"><article className="glass-card providers-card"><div className="card-heading"><div><span className="eyebrow">서비스</span><h3>서비스별 잔여량</h3></div><span className="live-pill"><i />공식 조회</span></div><div className="provider-list">{providers.map(provider => <ProviderRow key={provider.id} provider={provider} quota={quotas[provider.id]} active={provider.id === activeProviderId} onSelect={onProvider} />)}</div></article><OAuthConnectCard provider={activeProvider} quota={activeQuota} onOpen={onOpenOAuth} /></div>;
   }
@@ -395,7 +401,7 @@ const DesktopViewPanel = memo(function DesktopViewPanel({ view, activeProvider, 
   if (view === "alerts") {
     return <div className="view-stack"><article className="glass-card alert-panel"><div className="card-heading"><div><span className="eyebrow">알림</span><h3>지금 확인할 항목</h3></div><span className="live-pill"><i />현재 상태</span></div>{providers.map(provider => <div className="alert-row" key={provider.id} style={providerStyle(provider.color)}><ProviderLogo provider={provider} size="sm" /><div><strong>{connectionLabel(quotas[provider.id])}</strong><span>{quotas[provider.id].statusMessage}</span></div><b>{displayPercent(quotas[provider.id])}</b></div>)}</article></div>;
   }
-  return <div className="view-stack"><article className="glass-card settings-panel"><div className="card-heading"><div><span className="eyebrow">설정</span><h3>사용 환경</h3></div><span className="live-pill"><i />기기 안에서만 처리</span></div><div className="settings-row"><div><strong>가독성용 불투명 모드</strong><span>{solid ? "현재 불투명 표면을 사용합니다." : "현재 유리 효과를 사용합니다."}</span></div><button type="button" className="secondary-action" onClick={onSolid}>{solid ? "유리 모드" : "불투명 모드"}</button></div><div className="settings-row"><div><strong>공식 사용량 새로고침</strong><span>Codex App Server와 Claude status line 캐시를 다시 확인합니다.</span></div><button type="button" className="primary-action" onClick={onRefresh} disabled={refreshing}>{refreshing ? "확인 중" : "지금 확인"}</button></div><div className="settings-note"><Icon name="shield" size={15} /><span>토큰·이메일·세션 원문은 SPECTRA에 복제하지 않습니다. 마지막 확인 · {refreshedAt}</span></div></article></div>;
+  return <div className="view-stack"><article className="glass-card settings-panel"><div className="card-heading"><div><span className="eyebrow">설정</span><h3>사용 환경</h3></div><span className="live-pill"><i />기기 안에서만 처리</span></div><div className="settings-row"><div><strong>화면 테마</strong><span>{theme === "dark" ? "짙은 배경과 선명한 대비를 사용합니다." : "밝은 배경과 부드러운 대비를 사용합니다."}</span></div><button type="button" className="secondary-action" onClick={onTheme}>{theme === "dark" ? "일반 모드" : "다크 모드"}</button></div><div className="settings-row"><div><strong>가독성용 불투명 모드</strong><span>{solid ? "현재 불투명 표면을 사용합니다." : "현재 유리 효과를 사용합니다."}</span></div><button type="button" className="secondary-action" onClick={onSolid}>{solid ? "유리 모드" : "불투명 모드"}</button></div><div className="settings-row"><div><strong>공식 사용량 새로고침</strong><span>Codex App Server와 Claude status line 캐시를 다시 확인합니다.</span></div><button type="button" className="primary-action" onClick={onRefresh} disabled={refreshing}>{refreshing ? "확인 중" : "지금 확인"}</button></div><div className="settings-note"><Icon name="shield" size={15} /><span>토큰·이메일·세션 원문은 SPECTRA에 복제하지 않습니다. 마지막 확인 · {refreshedAt}</span></div></article></div>;
 });
 
 const VariantADesktop = memo(function VariantADesktop({ view, onView, activeProvider, activeProviderId, activeQuota, quotas, metric, range, onProvider, onMetric, onRange, onOpenOAuth, ...actions }: SharedViewProps) {
@@ -457,6 +463,7 @@ export function App() {
   const [metric, setMetric] = useState<Metric>("remaining");
   const [range, setRange] = useState<UsageRange>("7D");
   const [solid, setSolid] = useState(false);
+  const [theme, setTheme] = useState<ThemeMode>("dark");
   const [refreshedAt, setRefreshedAt] = useState("방금 전");
   const [refreshing, setRefreshing] = useState(false);
   const [quotas, setQuotas] = useState<QuotaRecord>(initialQuotaRecord);
@@ -469,6 +476,10 @@ export function App() {
   const activeQuota = quotas[activeProviderId];
   const oauthProvider = useMemo(() => providers.find(provider => provider.id === oauthProviderId) ?? providers[0], [oauthProviderId]);
   const oauthQuota = quotas[oauthProviderId];
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+  }, [theme]);
 
   const refreshProvider = useCallback(async (id: ProviderId) => {
     try {
@@ -608,8 +619,10 @@ export function App() {
     refreshedAt,
     refreshing,
     solid,
+    theme,
     onRefresh: refresh,
-    onSolid: () => setSolid(value => !value)
+    onSolid: () => setSolid(value => !value),
+    onTheme: () => setTheme(value => value === "dark" ? "light" : "dark")
   };
 
   return <><div className={solid ? "solid-mode" : ""}>{isMobile ? <VariantCMobile {...sharedProps} /> : <VariantADesktop {...sharedProps} />}</div><OAuthDialog open={oauthOpen} provider={oauthProvider} quota={oauthQuota} startResult={actionFeedback} onClose={closeOAuth} onConnect={connectOAuth} onDisconnect={disconnectOAuth} /></>;
