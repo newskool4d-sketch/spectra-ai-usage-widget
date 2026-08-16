@@ -36,6 +36,15 @@ npm run desktop:dev
 npm run desktop:build
 ```
 
+## Windows v0.2.0 공개 릴리스 주의
+
+현재 Windows 설치 파일은 `Authenticode: NotSigned` 상태입니다. 따라서 Windows SmartScreen에서 게시자를 확인할 수 없다는 경고가 표시될 수 있습니다.
+
+- 공개 릴리스: [SPECTRA v0.2.0](https://github.com/newskool4d-sketch/spectra-ai-usage-widget/releases/tag/v0.2.0)
+- 설치 파일 SHA-256: `2D3AD0AD78823222CC3C1B59D9E68611FBC4776DE90EFF10120BF4C991475809`
+- 설치 전 릴리스 페이지의 SHA-256과 로컬 파일을 대조하세요.
+- 공개용 Authenticode 인증서를 확보하면 서명된 설치 파일로 교체할 예정입니다.
+
 데스크톱 앱은 430×720 미니 창으로 시작합니다. 닫기 버튼은 앱을 종료하지 않고 트레이로 숨기며, 트레이 왼쪽 클릭 또는 두 번째 앱 실행으로 미니 창을 다시 엽니다. 트레이 메뉴에서는 미니 창, 1280×860 대시보드, 숨기기, 종료를 선택할 수 있습니다. 패키징 결과는 `src-tauri/target/release/bundle/nsis/`에 생성됩니다.
 
 개인 정보가 제거된 네이티브 연결 진단:
@@ -101,7 +110,7 @@ Claude는 `claude auth status`로 로그인 상태를 확인합니다. 사용자
 
 - OpenAI Codex·Claude의 비공개 웹 세션·스크래핑·잔여량 추정
 - 조직 API 사용량과 ChatGPT/Claude 개인 구독 잔여량의 동일시
-- 과거 사용량 분석·Windows 코드 서명·자동 업데이트
+- 과거 사용량 분석·코드 서명·자동 업데이트
 - 모든 AI 서비스가 공식 한도 API를 제공한다는 전제
 - macOS 메뉴 막대 앱과 iOS SwiftUI/WidgetKit 실구현
 
