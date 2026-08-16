@@ -31,6 +31,7 @@ type ProviderActionFeedback = Readonly<{
 }>;
 
 type QuotaRecord = Readonly<Record<ProviderId, PlanQuota>>;
+type ProductView = "overview" | "services" | "trend" | "alerts" | "settings";
 
 const hasDisplayValue = (quota: PlanQuota) => quota.confidence !== "unavailable";
 const displayPercent = (quota: PlanQuota, window = quota.windows[0]) => hasDisplayValue(quota) ? `${Math.round(window.remainingPercent)}%` : "—";
@@ -198,17 +199,17 @@ const TopActions = memo(function TopActions({ refreshedAt, refreshing, solid, on
   </div>;
 });
 
-const NavRail = memo(function NavRail() {
-  const items: readonly Readonly<{ name: IconName; label: string; notice?: boolean }>[] = [
-    { name: "grid", label: "개요" },
-    { name: "pulse", label: "사용 추이" },
-    { name: "spark", label: "예상 사용량" },
-    { name: "bell", label: "알림", notice: true }
+const NavRail = memo(function NavRail({ view, onView }: Readonly<{ view: ProductView; onView: (view: ProductView) => void }>) {
+  const items: readonly Readonly<{ name: IconName; label: string; view: ProductView; notice?: boolean }>[] = [
+    { name: "grid", label: "개요", view: "overview" },
+    { name: "grid", label: "서비스", view: "services" },
+    { name: "pulse", label: "추이", view: "trend" },
+    { name: "bell", label: "알림", view: "alerts", notice: true }
   ];
   return <aside className="nav-rail" aria-label="주요 메뉴">
     <div className="rail-mark"><span className="brand-mark compact"><i /><i /><i /></span></div>
-    <nav>{items.map((item, index) => <button type="button" className={index === 0 ? "active" : ""} aria-label={item.label} key={item.name}><Icon name={item.name} />{item.notice ? <span className="notification-dot" /> : null}</button>)}</nav>
-    <button type="button" aria-label="설정"><Icon name="settings" /></button>
+    <nav>{items.map(item => <button type="button" className={view === item.view ? "active" : ""} aria-label={item.label} aria-current={view === item.view ? "page" : undefined} key={item.view} onClick={() => onView(item.view)}><Icon name={item.name} />{item.notice ? <span className="notification-dot" /> : null}</button>)}</nav>
+    <button type="button" className={view === "settings" ? "active" : ""} aria-label="설정" aria-current={view === "settings" ? "page" : undefined} onClick={() => onView("settings")}><Icon name="settings" /></button>
   </aside>;
 });
 
@@ -360,6 +361,8 @@ type LayoutActions = Readonly<{
 }>;
 
 type SharedViewProps = LayoutActions & Readonly<{
+  view: ProductView;
+  onView: (view: ProductView) => void;
   activeProvider: Provider;
   activeProviderId: ProviderId;
   activeQuota: PlanQuota;
@@ -372,37 +375,60 @@ type SharedViewProps = LayoutActions & Readonly<{
   onOpenOAuth: (id: ProviderId) => void;
 }>;
 
-const VariantADesktop = memo(function VariantADesktop({ activeProvider, activeProviderId, activeQuota, quotas, metric, range, onProvider, onMetric, onRange, onOpenOAuth, ...actions }: SharedViewProps) {
+function viewCopy(view: ProductView) {
+  if (view === "services") return { eyebrow: "서비스", title: "연결된 서비스를\n비교합니다." };
+  if (view === "trend") return { eyebrow: "추이", title: "현재 한도 창을\n살펴봅니다." };
+  if (view === "alerts") return { eyebrow: "알림", title: "지금 확인할\n항목입니다." };
+  if (view === "settings") return { eyebrow: "설정", title: "사용 환경을\n조정합니다." };
+  return { eyebrow: "개요 · 오늘", title: "오늘 쓸 수 있는 양을\n한눈에 봅니다." };
+}
+
+type ViewPanelProps = Omit<SharedViewProps, "onView">;
+
+const DesktopViewPanel = memo(function DesktopViewPanel({ view, activeProvider, activeProviderId, activeQuota, quotas, metric, range, onProvider, onMetric, onRange, onOpenOAuth, refreshedAt, refreshing, solid, onRefresh, onSolid }: ViewPanelProps) {
+  if (view === "services") {
+    return <div className="view-stack"><article className="glass-card providers-card"><div className="card-heading"><div><span className="eyebrow">서비스</span><h3>서비스별 잔여량</h3></div><span className="live-pill"><i />공식 조회</span></div><div className="provider-list">{providers.map(provider => <ProviderRow key={provider.id} provider={provider} quota={quotas[provider.id]} active={provider.id === activeProviderId} onSelect={onProvider} />)}</div></article><OAuthConnectCard provider={activeProvider} quota={activeQuota} onOpen={onOpenOAuth} /></div>;
+  }
+  if (view === "trend") {
+    return <div className="view-stack"><div className="dashboard-toolbar"><MetricTabs metric={metric} onMetric={onMetric} /><RangeTabs range={range} onRange={onRange} /></div><article className="glass-card trend-panel"><div className="card-heading"><div><span className="eyebrow">현재 한도 창</span><h3>{activeProvider.name} 사용량</h3></div><span className="live-pill"><i />{activeQuota.source === "example" ? "데모 집계" : "현재 스냅샷"}</span></div><p className="view-description">과거 사용량은 저장하지 않고, 공식 경로에서 확인한 현재 한도와 초기화 시각만 보여줍니다.</p><div className="trend-window-grid">{activeQuota.windows.map(window => <QuotaWindowRow key={window.id} window={window} unavailable={!hasDisplayValue(activeQuota)} />)}</div></article></div>;
+  }
+  if (view === "alerts") {
+    return <div className="view-stack"><article className="glass-card alert-panel"><div className="card-heading"><div><span className="eyebrow">알림</span><h3>지금 확인할 항목</h3></div><span className="live-pill"><i />현재 상태</span></div>{providers.map(provider => <div className="alert-row" key={provider.id} style={providerStyle(provider.color)}><ProviderLogo provider={provider} size="sm" /><div><strong>{connectionLabel(quotas[provider.id])}</strong><span>{quotas[provider.id].statusMessage}</span></div><b>{displayPercent(quotas[provider.id])}</b></div>)}</article></div>;
+  }
+  return <div className="view-stack"><article className="glass-card settings-panel"><div className="card-heading"><div><span className="eyebrow">설정</span><h3>사용 환경</h3></div><span className="live-pill"><i />기기 안에서만 처리</span></div><div className="settings-row"><div><strong>가독성용 불투명 모드</strong><span>{solid ? "현재 불투명 표면을 사용합니다." : "현재 유리 효과를 사용합니다."}</span></div><button type="button" className="secondary-action" onClick={onSolid}>{solid ? "유리 모드" : "불투명 모드"}</button></div><div className="settings-row"><div><strong>공식 사용량 새로고침</strong><span>Codex App Server와 Claude status line 캐시를 다시 확인합니다.</span></div><button type="button" className="primary-action" onClick={onRefresh} disabled={refreshing}>{refreshing ? "확인 중" : "지금 확인"}</button></div><div className="settings-note"><Icon name="shield" size={15} /><span>토큰·이메일·세션 원문은 SPECTRA에 복제하지 않습니다. 마지막 확인 · {refreshedAt}</span></div></article></div>;
+});
+
+const VariantADesktop = memo(function VariantADesktop({ view, onView, activeProvider, activeProviderId, activeQuota, quotas, metric, range, onProvider, onMetric, onRange, onOpenOAuth, ...actions }: SharedViewProps) {
   const primary = activeQuota.windows[0];
   const available = hasDisplayValue(activeQuota);
   const demo = activeQuota.source === "example";
+  const copy = viewCopy(view);
   return <div className="product-shell variant-a">
-    <NavRail />
+    <NavRail view={view} onView={onView} />
     <section className="app-surface command-center">
       <header className="app-header">
-        <div><span className="eyebrow">개요 · 오늘</span><h1>오늘 쓸 수 있는 양을<br /><em>한눈에 봅니다.</em></h1></div>
+        <div><span className="eyebrow">{copy.eyebrow}</span><h1>{copy.title.split("\n").map((line, index) => <span key={line}>{index > 0 ? <br /> : null}{index === copy.title.split("\n").length - 1 ? <em>{line}</em> : line}</span>)}</h1></div>
         <TopActions {...actions} />
       </header>
-      <div className="dashboard-toolbar"><MetricTabs metric={metric} onMetric={onMetric} /><RangeTabs range={range} onRange={onRange} /></div>
-      <div className="bento-grid">
+      {view === "overview" ? <><div className="dashboard-toolbar"><MetricTabs metric={metric} onMetric={onMetric} /><RangeTabs range={range} onRange={onRange} /></div><div className="bento-grid">
         <QuotaSummaryCard provider={activeProvider} quota={activeQuota} />
         <article className="glass-card live-card span-2"><div className="card-heading"><div><span className="eyebrow">한도 소진 추이</span><h3>{available ? `${Math.round(primary.usedPercent)}%` : "—"} <small>{available ? "현재 사용" : "실제 데이터 대기"}</small></h3></div><span className="live-pill"><i />{demo ? "데모 집계" : available ? "현재 스냅샷" : "연결 대기"}</span></div>{demo ? <><ChartBars /><div className="chart-axis"><span>09:00</span><span>12:00</span><span>15:00</span><span>지금</span></div></> : <div className="chart-empty"><Icon name="pulse" size={19} /><strong>과거 추이는 저장하지 않습니다.</strong><span>현재 한도 스냅샷만 읽어 메모리 사용을 줄였습니다.</span></div>}</article>
         <article className="glass-card providers-card span-2"><div className="card-heading"><div><span className="eyebrow">서비스</span><h3>서비스별 잔여량</h3></div><button type="button" className="text-button">모두 보기 <Icon name="chevron" size={14} /></button></div><div className="provider-list">{providers.map(provider => <ProviderRow key={provider.id} provider={provider} quota={quotas[provider.id]} active={provider.id === activeProviderId} onSelect={onProvider} />)}</div></article>
         <article className="glass-card focus-card"><div className="card-heading"><div><ProviderLogo provider={activeProvider} size="lg" /><span className="eyebrow">집중 확인</span></div><span className="trend-badge">{displayPercent(activeQuota, primary)}{available ? " 남음" : ""}</span></div><h3>{activeProvider.name}</h3><p>{available ? <>{primary.label}는 {primary.resetLabel} 초기화됩니다. <strong>{activeQuota.planName}</strong> {demo ? "브라우저 데모" : "공식 조회"} 수치입니다.</> : activeQuota.statusMessage}</p>{demo ? <Sparkline values={activeProvider.trend} color={activeProvider.color} width={220} height={62} /> : <div className="focus-status"><Icon name={available ? "check" : "link"} size={17} /><span>{sourceLabel(activeQuota)}</span></div>}</article>
         <article className="glass-card budget-card plan-card"><span className="eyebrow">연결된 요금제</span><h3>{activeQuota.planName}</h3><p><span>{activeQuota.accountLabel}</span><span className={activeQuota.connectionState === "connected" ? "positive" : ""}>{activeQuota.lastSyncedAt ? `마지막 확인 · ${activeQuota.lastSyncedAt}` : connectionLabel(activeQuota)}</span></p><div className="micro-stat"><span>인증 방식</span><strong>{authMethodLabel(activeQuota.authMethod)}</strong></div></article>
         <OAuthConnectCard provider={activeProvider} quota={activeQuota} onOpen={onOpenOAuth} />
-      </div>
+      </div></> : <DesktopViewPanel view={view} activeProvider={activeProvider} activeProviderId={activeProviderId} activeQuota={activeQuota} quotas={quotas} metric={metric} range={range} onProvider={onProvider} onMetric={onMetric} onRange={onRange} onOpenOAuth={onOpenOAuth} {...actions} />}
       <footer className="privacy-strip"><Icon name="shield" size={15} /><span>잔여량 숫자는 공식 조회 경로가 확인된 경우에만 갱신됩니다.</span><i /><span>{sourceLabel(activeQuota)}</span></footer>
     </section>
   </div>;
 });
 
-const MobileNav = memo(function MobileNav() {
-  const items: readonly Readonly<{ name: IconName; label: string }>[] = [{ name: "pulse", label: "현황" }, { name: "grid", label: "서비스" }, { name: "spark", label: "추이" }, { name: "settings", label: "설정" }];
-  return <nav className="mobile-nav" aria-label="하단 메뉴">{items.map((item, index) => <button type="button" className={index === 0 ? "active" : ""} aria-current={index === 0 ? "page" : undefined} key={item.name}><Icon name={item.name} size={19} /><span>{item.label}</span></button>)}</nav>;
+const MobileNav = memo(function MobileNav({ view, onView }: Readonly<{ view: ProductView; onView: (view: ProductView) => void }>) {
+  const items: readonly Readonly<{ name: IconName; label: string; view: ProductView }>[] = [{ name: "pulse", label: "현황", view: "overview" }, { name: "grid", label: "서비스", view: "services" }, { name: "spark", label: "추이", view: "trend" }, { name: "settings", label: "설정", view: "settings" }];
+  return <nav className="mobile-nav" aria-label="하단 메뉴">{items.map(item => <button type="button" className={view === item.view ? "active" : ""} aria-current={view === item.view ? "page" : undefined} key={item.view} onClick={() => onView(item.view)}><Icon name={item.name} size={19} /><span>{item.label}</span></button>)}</nav>;
 });
 
-const VariantCMobile = memo(function VariantCMobile({ activeProvider, activeProviderId, activeQuota, quotas, onProvider, onOpenOAuth }: SharedViewProps) {
+const VariantCMobile = memo(function VariantCMobile({ view, onView, activeProvider, activeProviderId, activeQuota, quotas, onProvider, onOpenOAuth, ...actions }: SharedViewProps) {
   const codex = providers.find(provider => provider.id === "codex") ?? providers[0];
   const claude = providers.find(provider => provider.id === "claude") ?? providers[1];
   const codexQuota = quotas.codex;
@@ -413,19 +439,20 @@ const VariantCMobile = memo(function VariantCMobile({ activeProvider, activeProv
   return <div className="product-shell variant-c"><section className="stream-app"><div className="stream-layout"><section className="mobile-stream">
     <div className="mobile-top"><span>{mobileClockFormatter.format(now)}</span><div><i /><i /><i /></div></div>
     <div className="mobile-title"><div><span className="eyebrow">{mobileDateFormatter.format(now)}</span><h1>사용 현황</h1></div><button type="button" className="icon-button" aria-label="알림"><Icon name="bell" size={18} /><span className="notification-dot" /></button></div>
-    <article className="hero-signal" style={providerStyle(activeProvider.color)}><div className="hero-signal-top"><span className="signal-orb"><ProviderLogo provider={activeProvider} size="md" /></span><span className={`trend-badge ${activeQuota.connectionState === "connected" ? "positive" : ""}`}>{connectionLabel(activeQuota)}</span></div><span className="eyebrow">{activeQuota.planName} · {primary.label}</span><h2>{available ? Math.round(primary.remainingPercent) : "—"}{available ? <span>%</span> : null}</h2><p>{available ? "초기화 전까지 남은 요금제 여유입니다." : activeQuota.statusMessage}</p><div className="spectrum-line"><i style={{ width: `${meterPercent(activeQuota, primary)}%` }} /></div><div className="signal-foot"><span>남은 한도 {displayPercent(activeQuota, primary)}</span><span>초기화 {primary.resetLabel}</span></div></article>
+    {view === "overview" ? <><article className="hero-signal" style={providerStyle(activeProvider.color)}><div className="hero-signal-top"><span className="signal-orb"><ProviderLogo provider={activeProvider} size="md" /></span><span className={`trend-badge ${activeQuota.connectionState === "connected" ? "positive" : ""}`}>{connectionLabel(activeQuota)}</span></div><span className="eyebrow">{activeQuota.planName} · {primary.label}</span><h2>{available ? Math.round(primary.remainingPercent) : "—"}{available ? <span>%</span> : null}</h2><p>{available ? "초기화 전까지 남은 요금제 여유입니다." : activeQuota.statusMessage}</p><div className="spectrum-line"><i style={{ width: `${meterPercent(activeQuota, primary)}%` }} /></div><div className="signal-foot"><span>남은 한도 {displayPercent(activeQuota, primary)}</span><span>초기화 {primary.resetLabel}</span></div></article>
     <div className="chip-scroll" role="group" aria-label="서비스 선택">{providers.map(provider => <ProviderChip key={provider.id} provider={provider} quota={quotas[provider.id]} active={provider.id === activeProviderId} onSelect={onProvider} />)}</div>
     <OAuthConnectCard provider={activeProvider} quota={activeQuota} compact onOpen={onOpenOAuth} />
     <section className="stream-feed"><div className="section-title"><div><span className="eyebrow">알림</span><h3>지금 확인할 항목</h3></div><button type="button">전체</button></div>
       <article className="feed-item priority"><span className="feed-line" style={providerStyle(claude.color)} /><ProviderLogo provider={claude} size="sm" /><div><span className="feed-time">현재 · CLAUDE</span><h4>{connectionLabel(claudeQuota)}</h4><p>{claudeQuota.statusMessage}</p></div><strong>{displayPercent(claudeQuota)}</strong></article>
       <article className="feed-item"><span className="feed-line" style={providerStyle(codex.color)} /><ProviderLogo provider={codex} size="sm" /><div><span className="feed-time">현재 · CODEX</span><h4>{connectionLabel(codexQuota)}</h4><p>{codexQuota.statusMessage}</p></div><strong>{displayPercent(codexQuota)}</strong></article>
-    </section>
-    <MobileNav />
+    </section></> : <DesktopViewPanel view={view} activeProvider={activeProvider} activeProviderId={activeProviderId} activeQuota={activeQuota} quotas={quotas} onProvider={onProvider} onOpenOAuth={onOpenOAuth} {...actions} />}
+    <MobileNav view={view} onView={onView} />
   </section></div></section></div>;
 });
 
 export function App() {
   const isMobile = useIsMobile();
+  const [view, setView] = useState<ProductView>("overview");
   const [activeProviderId, setActiveProviderId] = useState<ProviderId>("codex");
   const [metric, setMetric] = useState<Metric>("remaining");
   const [range, setRange] = useState<UsageRange>("7D");
@@ -566,6 +593,8 @@ export function App() {
   }, [refreshProvider]);
 
   const sharedProps: SharedViewProps = {
+    view,
+    onView: setView,
     activeProvider,
     activeProviderId,
     activeQuota,
