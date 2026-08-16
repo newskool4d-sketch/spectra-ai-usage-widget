@@ -52,6 +52,7 @@
   --color-line-faint: rgba(255, 255, 255, .12);
   --color-track: rgba(255, 255, 255, .07);
   --color-white: #fff;
+  --color-on-control-active: var(--color-white);
   --color-heading-em: #d9d0c4;
   --color-label: #8f8a82;
   --color-nav-icon: #73798b;
@@ -171,6 +172,7 @@
   --color-line-strong: rgba(32, 35, 31, .2);
   --color-line-faint: rgba(32, 35, 31, .14);
   --color-track: rgba(32, 35, 31, .09);
+  --color-on-control-active: #20231f;
   --color-heading-em: #4f6651;
   --color-label: #697269;
   --color-nav-icon: #768078;
