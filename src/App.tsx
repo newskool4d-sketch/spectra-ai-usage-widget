@@ -206,7 +206,7 @@ const TopActions = memo(function TopActions({ refreshedAt, refreshing, solid, th
 const NavRail = memo(function NavRail({ view, onView }: Readonly<{ view: ProductView; onView: (view: ProductView) => void }>) {
   const items: readonly Readonly<{ name: IconName; label: string; view: ProductView; notice?: boolean }>[] = [
     { name: "grid", label: "개요", view: "overview" },
-    { name: "grid", label: "서비스", view: "services" },
+    { name: "list", label: "서비스", view: "services" },
     { name: "pulse", label: "추이", view: "trend" },
     { name: "bell", label: "알림", view: "alerts", notice: true }
   ];
@@ -451,7 +451,7 @@ const VariantADesktop = memo(function VariantADesktop({ view, onView, activeProv
 });
 
 const MobileNav = memo(function MobileNav({ view, onView }: Readonly<{ view: ProductView; onView: (view: ProductView) => void }>) {
-  const items: readonly Readonly<{ name: IconName; label: string; view: ProductView }>[] = [{ name: "pulse", label: "현황", view: "overview" }, { name: "grid", label: "서비스", view: "services" }, { name: "spark", label: "추이", view: "trend" }, { name: "settings", label: "설정", view: "settings" }];
+  const items: readonly Readonly<{ name: IconName; label: string; view: ProductView }>[] = [{ name: "pulse", label: "현황", view: "overview" }, { name: "list", label: "서비스", view: "services" }, { name: "spark", label: "추이", view: "trend" }, { name: "settings", label: "설정", view: "settings" }];
   return <nav className="mobile-nav" aria-label="하단 메뉴">{items.map(item => <button type="button" className={view === item.view ? "active" : ""} aria-current={view === item.view ? "page" : undefined} key={item.view} onClick={() => onView(item.view)}><Icon name={item.name} size={19} /><span>{item.label}</span></button>)}</nav>;
 });
 

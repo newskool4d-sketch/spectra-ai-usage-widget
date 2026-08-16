@@ -12,7 +12,10 @@
     "desktop": "A",
     "mobile": "C",
     "combination": "A+C",
-    "excludedFromProduct": ["B", "prototype-switcher"]
+    "excludedFromProduct": [
+      "B",
+      "prototype-switcher"
+    ]
   },
   "visualLanguage": {
     "locale": "ko",
@@ -42,7 +45,7 @@
       "path": "docs/design-baseline/desktop-a.png",
       "role": "desktop-primary",
       "viewport": "1440x1000",
-      "sha256": "A89A2FCCB5D6FD0CD880248254C1466B2A127EE95CFD4AB7F911634128022364"
+      "sha256": "7CAA0255D9B5E5C361C267428A61109F26119C8A4F004AE0F876C2556993CFE8"
     },
     {
       "path": "docs/design-baseline/desktop-c-context.png",
@@ -54,7 +57,7 @@
       "path": "docs/design-baseline/mobile-c.png",
       "role": "mobile-primary",
       "viewport": "390x844",
-      "sha256": "5CAAD61C507D49871EC0B4DF7D85A07C73A686FADAE733514AAAEE042C3D7898"
+      "sha256": "9D7CDA0466A1C643E6EFEAB7DC09B16A4075BE6F03581D9C2E9C9D53F0483648"
     }
   ],
   "acceptance": [
