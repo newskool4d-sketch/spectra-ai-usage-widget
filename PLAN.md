@@ -14,7 +14,7 @@
 - [x] 4단계 Windows 패키지 QA: 0.2 NSIS·로컬 업그레이드·트레이·Codex 실제 한도 검증
 - [x] 4단계 Claude 수용 QA: opt-in 브리지 설치·첫 실제 5시간/7일 값·화면 동기화 검증
 - [x] GitHub 소스 공개: 검증된 `main` 2커밋 push 및 저장소 Public 전환
-- [ ] v0.2.0 설치 파일 공개 Release: 공개용 Authenticode/Trusted Signing 인증서 확보 후 asset 업로드
+- [x] v0.2.0 unsigned 공개 Release: Public prerelease와 SHA-256 검증 asset 업로드
 - [ ] Windows 코드 서명·자동 업데이트: 서명 체계와 업데이트 경로 구성
 - [ ] 5단계: macOS 메뉴 막대 앱과 iOS SwiftUI/WidgetKit 동기화
 

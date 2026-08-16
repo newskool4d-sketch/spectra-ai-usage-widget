@@ -69,5 +69,5 @@
 - 설치 파일은 코드 서명되지 않아 SmartScreen 경고가 날 수 있음.
 - Codex Security 워크벤치는 한글 사용자 경로를 CP949로 디코딩하는 플러그인 오류로 시작하지 못함. 대신 이번 diff를 수동 검토해 입력 상한과 timeout을 보강했지만, 정식 SARIF 보고서는 없음.
 - GitHub `main` push 및 저장소 Public 전환: PASS
-- `v0.2.0` unsigned 사전 Release·설치 파일 asset 업로드: 사용자 요청에 따라 진행
+- `v0.2.0` unsigned 사전 Release·설치 파일 asset 업로드: PASS — https://github.com/newskool4d-sketch/spectra-ai-usage-widget/releases/tag/v0.2.0
 - macOS/iOS는 현재 Windows 환경에서 NOT_RUN.
