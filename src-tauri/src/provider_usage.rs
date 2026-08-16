@@ -293,11 +293,21 @@ fn quota_label(duration_mins: Option<u64>, fallback: &str) -> String {
     format!("{minutes}분 한도")
 }
 
-fn quota_window(value: &Value, id: &str, fallback_label: &str) -> Option<ProviderQuotaWindow> {
+fn quota_window(value: &Value, fallback_id: &str, fallback_label: &str) -> Option<ProviderQuotaWindow> {
     let used_percent = value.get("usedPercent")?.as_f64()?.clamp(0.0, 100.0);
     let duration = value.get("windowDurationMins").and_then(Value::as_u64);
+    // Codex's "primary"/"secondary" API fields don't reliably correspond to
+    // short/long windows — a plan can expose a single, week-long window as
+    // "primary". Derive the id from the actual duration (the same signal
+    // quota_label already uses) so a truly weekly window always lands under
+    // the "weekly" id, regardless of which field it arrived in.
+    let id = match duration {
+        Some(minutes) if minutes >= 7 * 24 * 60 => "weekly".to_string(),
+        Some(_) => "rolling".to_string(),
+        None => fallback_id.to_string(),
+    };
     Some(ProviderQuotaWindow {
-        id: id.to_string(),
+        id,
         label: quota_label(duration, fallback_label),
         used_percent,
         remaining_percent: (100.0 - used_percent).clamp(0.0, 100.0),
@@ -1052,6 +1062,24 @@ mod tests {
         assert_eq!(windows[0].remaining_percent, 75.0);
         assert_eq!(windows[1].label, "주간 한도");
         assert_eq!(windows[1].remaining_percent, 58.0);
+    }
+
+    #[test]
+    fn codex_window_id_follows_actual_duration_not_api_field_name() {
+        // Some Codex plans expose only one window, under the "primary" field,
+        // whose real cadence is weekly — not the 5-hour-ish window "rolling"
+        // implies. The id must reflect the real duration so the frontend's
+        // by-id lookup (rolling = short window, weekly = long window) stays
+        // correct regardless of which API field the window arrived in.
+        let result = json!({
+            "rateLimits": {
+                "primary": { "usedPercent": 49.0, "windowDurationMins": 10_080, "resetsAt": 1_787_224_998 }
+            }
+        });
+        let windows = parse_codex_windows(&result);
+        assert_eq!(windows.len(), 1);
+        assert_eq!(windows[0].id, "weekly");
+        assert_eq!(windows[0].label, "주간 한도");
     }
 
     #[test]
