@@ -36,11 +36,11 @@ npm run desktop:dev
 npm run desktop:build
 ```
 
-## Windows v0.2.0 공개 릴리스 주의
+## Windows v0.2.1 공개 릴리스 주의
 
 현재 Windows 설치 파일은 `Authenticode: NotSigned` 상태입니다. 따라서 Windows SmartScreen에서 게시자를 확인할 수 없다는 경고가 표시될 수 있습니다.
 
-- 공개 릴리스: [SPECTRA v0.2.0](https://github.com/newskool4d-sketch/spectra-ai-usage-widget/releases/tag/v0.2.0)
+- 공개 릴리스: [SPECTRA v0.2.1](https://github.com/newskool4d-sketch/spectra-ai-usage-widget/releases/tag/v0.2.1)
 - 설치 파일 SHA-256: `2D3AD0AD78823222CC3C1B59D9E68611FBC4776DE90EFF10120BF4C991475809`
 - 설치 전 릴리스 페이지의 SHA-256과 로컬 파일을 대조하세요.
 - 공개용 Authenticode 인증서를 확보하면 서명된 설치 파일로 교체할 예정입니다.

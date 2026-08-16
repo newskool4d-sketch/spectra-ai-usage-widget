@@ -1,6 +1,6 @@
 [package]
 name = "spectra-native"
-version = "0.2.0"
+version = "0.2.1"
 description = "Native account and personal-plan quota bridge for SPECTRA"
 authors = ["SPECTRA"]
 edition = "2021"
