@@ -96,6 +96,10 @@
   --tracking-label: -.01em;
   --leading-ui: 1.08;
   --leading-copy: 1.6;
+  --text-2xs: 12px;
+  --text-xs: 13px;
+  --text-sm: 14px;
+  --text-2xl: 40px;
 
   /* Spacing — a compact 4px rhythm, with 6px/7px values reserved for controls. */
   --space-1: 4px;
