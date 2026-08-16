@@ -241,17 +241,16 @@ const QuotaWindowRow = memo(function QuotaWindowRow({ window, unavailable = fals
   </div>;
 });
 
-const emptyQuotaWindow = (id: QuotaWindowId): QuotaWindow => ({
+const emptyQuotaWindow = (id: QuotaWindowId, providerId: ProviderId): QuotaWindow => ({
   id,
-  label: id === "rolling" ? "5시간 한도" : "주간 한도",
+  label: planQuotas[providerId].windows.find(candidate => candidate.id === id)?.label ?? (id === "rolling" ? "5시간 한도" : "주간 한도"),
   usedPercent: 0,
   remainingPercent: 0,
   resetLabel: "연결 후 표시",
   kindLabel: "실제 데이터 대기"
 });
 
-const QuotaCell = memo(function QuotaCell({ provider, quota, window }: Readonly<{ provider: Provider; quota: PlanQuota; window: QuotaWindow }>) {
-  const available = hasDisplayValue(quota);
+const QuotaCell = memo(function QuotaCell({ provider, window, available }: Readonly<{ provider: Provider; window: QuotaWindow; available: boolean }>) {
   return <div className="quota-cell" style={providerStyle(provider.color)}>
     <div className="quota-cell-top"><span className="quota-cell-pill">{provider.name}</span><span className="quota-cell-window">{window.label}</span></div>
     <div className="quota-cell-value">{available ? Math.round(window.remainingPercent) : "—"}{available ? <span>%</span> : null}</div>
@@ -265,8 +264,10 @@ const QuotaBoard = memo(function QuotaBoard({ quotas }: Readonly<{ quotas: Quota
   return <div className="quota-board span-2" role="group" aria-label="공급자별 한도 현황">
     {providers.flatMap(provider => windowIds.map(id => {
       const quota = quotas[provider.id];
-      const window = quota.windows.find(candidate => candidate.id === id) ?? emptyQuotaWindow(id);
-      return <QuotaCell key={`${provider.id}-${id}`} provider={provider} quota={quota} window={window} />;
+      const found = quota.windows.find(candidate => candidate.id === id);
+      const window = found ?? emptyQuotaWindow(id, provider.id);
+      const available = hasDisplayValue(quota) && found !== undefined;
+      return <QuotaCell key={`${provider.id}-${id}`} provider={provider} window={window} available={available} />;
     }))}
   </div>;
 });
