@@ -1,5 +1,5 @@
 # SPECTRA 활성 provider: Claude + Codex
 #
-# 현재 개인 구독용 authorize/token/잔여량 endpoint가 공개되지 않았으므로
-# 배포 앱 client ID를 설정하지 않습니다. 비공개 세션·쿠키를 넣지 마세요.
-# 조직 API 사용량 모드는 향후 OS vault/보안 런타임 주입으로 별도 추가합니다.
+# Codex CLI와 Claude Code가 로그인·자격 증명을 직접 관리하므로
+# SPECTRA용 client ID, access token, API key 환경 변수는 필요하지 않습니다.
+# 비공개 세션·쿠키·provider token을 이 파일에 넣지 마세요.

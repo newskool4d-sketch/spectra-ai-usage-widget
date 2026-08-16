@@ -1,62 +1,53 @@
-# 네이티브 인증 callback과 OS Credential Vault
+# 네이티브 계정 연결과 자격 증명 경계
 
 검토 기준일: 2026-08-16
 
-현재 활성 공급자는 Claude와 Codex입니다. 두 공급자 모두 개인 구독의 잔여량을 반환하는 공개 OAuth/API endpoint가 확인되지 않았으므로, SPECTRA는 비공개 웹 세션·쿠키·내부 endpoint를 연결하지 않습니다. 아래 네이티브 경계는 향후 공식 endpoint가 공개될 때만 활성화할 수 있도록 안전하게 보존합니다.
-
-## 현재 제품 경계
+SPECTRA 0.2의 Codex·Claude 연결은 앱 자체 OAuth client ID나 토큰 교환을 사용하지 않습니다. 사용자가 이미 신뢰하는 공식 CLI가 로그인·토큰 갱신·자격 증명 보관을 담당하고, SPECTRA는 계정 상태와 개인 요금제 한도 필드만 읽습니다.
 
 ```text
-Claude / Codex 공식 사용량 페이지 또는 조직 Admin API
-        │  개인 잔여량과 조직 API 사용량을 별도 분류
+SPECTRA React 화면
+        │ provider id만 Tauri command로 전달
         ▼
-React 화면
-        │  공식 endpoint가 검증되지 않으면 예시 snapshot 유지
+Rust provider_usage
+        ├─ Codex CLI App Server ─ account/read + account/rateLimits/read
+        └─ Claude Code ─ auth status + opt-in statusLine bridge
+        │ 토큰·이메일·세션 원문 제외
         ▼
-OS Credential Manager / macOS Keychain / iOS Keychain
-        │  credential 상태만 반환
-        ▼
-SPECTRA 위젯
+PlanQuota: 사용률·잔여률·초기화 시각·최신성
 ```
 
-authorization code, access token, refresh token은 React 상태·`localStorage`·`sessionStorage`·Tauri 이벤트 payload에 넣지 않습니다.
+## Codex
 
-## Tauri 데스크톱
+1. 설치 여부를 로컬 `PATH`에서 확인합니다.
+2. 로그아웃 상태에서는 `codex login`을 시작해 공식 브라우저 로그인을 사용합니다.
+3. 조회 때마다 `codex app-server --stdio`를 한 번 실행합니다.
+4. `initialize` 응답을 받은 뒤 `initialized`를 보내고 `account/read`를 호출합니다.
+5. ChatGPT 계정이면 `account/rateLimits/read`의 한도 창만 파싱합니다.
+6. 응답 또는 12초 제한 뒤 App Server 자식 프로세스를 종료합니다.
 
-- `src-tauri/src/oauth_callback.rs`는 state·만료·scheme·host·path·fragment·중복 query를 검증하는 callback 경계를 유지합니다.
-- `oauth_prepare`는 현재 Codex/Claude에 대해 `api-key-only`와 `callbackMode=none`을 반환하며 pending OAuth transaction을 만들지 않습니다.
-- `credential_status`, `credential_remove`만 웹뷰에 상태를 반환합니다. token·authorization code·refresh token은 이벤트 payload에 넣지 않습니다.
-- 공개 OAuth endpoint가 추가되기 전에는 시스템 브라우저를 열거나 client ID를 요구하지 않습니다.
+SPECTRA는 Codex의 `email`, access token, refresh token, 계정 ID를 직렬화하거나 화면에 전달하지 않습니다. Codex 자격 증명은 Codex 설정에 따라 OS keyring 또는 Codex 전용 로컬 저장소에 남습니다.
 
-## iOS/macOS Swift
+## Claude
 
-`native/apple/SpectraAuth`의 callback parser, `ASWebAuthenticationSession` 경계, Keychain vault는 향후 공식 OAuth를 위한 공통 코드입니다.
+1. `claude auth status`로 설치·로그인·구독 종류만 확인합니다.
+2. 사용자가 화면에서 동의한 경우에만 `~/.claude/settings.json`의 `statusLine.command`를 SPECTRA 브리지로 바꿉니다.
+3. 기존 상태선 객체와 명령은 `%LOCALAPPDATA%\SPECTRA\claude-statusline-bridge.json`에 보존합니다.
+4. 브리지는 stdin 원문에서 `rate_limits.five_hour`·`seven_day`만 추출해 `%LOCALAPPDATA%\SPECTRA\claude-usage.json`에 저장합니다.
+5. 기존 상태선 명령이 있으면 같은 stdin을 넘기고 기존 출력을 그대로 사용합니다.
+6. 제거 시 기존 `statusLine` 객체를 복원합니다.
 
-- `OAuthProviderConfiguration`은 Codex/Claude의 현재 조직 사용량 endpoint와 `organization-usage-only` 상태를 선언합니다.
-- 두 provider의 개인 구독용 `authorizeURL`·`tokenURL`은 의도적으로 `nil`입니다.
-- `OAuthTokenExchange`는 token endpoint가 없으면 교환하지 않고 종료합니다.
-- `SpectraKeychainCredentialVault`는 `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`를 사용합니다.
+Claude 상태선 입력에는 작업 경로와 세션 정보도 포함될 수 있지만, SPECTRA 캐시에는 한도 사용률·초기화 epoch·캡처 시각만 남습니다. 브리지는 첫 Claude 응답 이후 값을 받으며, 24시간이 지났거나 초기화 시각을 넘긴 캐시는 `stale`로 표시합니다.
 
-## 조직 API 사용량 모드
+## 기존 OAuth callback·OS vault 코드
 
-조직 사용량을 별도 기능으로 추가할 경우 다음 원칙을 지킵니다.
-
-1. OpenAI Usage API 또는 Anthropic Admin Usage Report의 Admin API 키를 OS vault/보안 런타임에만 주입합니다.
-2. 조직 API 사용량을 ChatGPT/Codex 또는 Claude Pro/Max 개인 잔여량으로 표시하지 않습니다.
-3. `source=official-usage`, `scope=organization`처럼 데이터 범위를 모델에 명시합니다.
-4. API 키·응답 원문·토큰을 React 이벤트나 로그에 남기지 않습니다.
-
-## 다음 활성화 조건
-
-1. 공급자가 개인 구독용 공식 OAuth authorize/token endpoint를 공개합니다.
-2. 같은 계정 범위의 잔여량·reset 시각 endpoint가 문서화됩니다.
-3. client ID·redirect URI 정책과 native 앱 배포 조건을 검증합니다.
-4. 실제 계정으로 Windows Credential Manager, macOS Keychain, iOS Keychain 저장·삭제·만료 갱신을 검증합니다.
+`src-tauri/src/oauth_callback.rs`, `credential_vault.rs`, `provider_connection.rs`와 `native/apple/SpectraAuth`는 향후 독립 OAuth provider 또는 iOS 동기화를 위한 안전 경계로 남겨 둡니다. 현재 Codex·Claude 개인 요금제 흐름에서는 이 vault에 provider token을 복제하지 않습니다.
 
 ## 검증 상태
 
-- React/Vite build: 변경 후 실행
-- Tauri Rust: `cargo fmt --check`, `cargo test`, `cargo check` 실행
-- Swift: 현재 작업 환경(Windows)에 Swift/Xcode가 없어 `NOT_RUN`
-- 실제 공급자 로그인·토큰 교환: 공개 개인 구독 endpoint가 없어 `NOT_RUN`
-- 개인 요금제 잔여량 endpoint: Codex·Claude 모두 `NOT_PUBLISHED`
+- React/Vite production build: `PASS`
+- Rust 단위 테스트: `PASS` — 14개, App Server 응답 파싱·Claude 필드 정제·상태선 복원·입력 상한 포함
+- Windows 0.2.0 설치·미니 창·트레이 복원·Codex 실제 한도: `PASS`
+- Claude Max 로그인·미연결 숫자 숨김: `PASS`
+- Claude 브리지 실제 설치·첫 5시간/7일 값·제거: 사용자 opt-in이 필요해 `NOT_RUN`
+- macOS/iOS Swift·WidgetKit: Windows 환경에서 `NOT_RUN`
+- 코드 서명·자동 업데이트: `NOT_CONFIGURED`

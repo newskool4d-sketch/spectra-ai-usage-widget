@@ -2,8 +2,16 @@ export type ProviderId = "codex" | "claude";
 export type Metric = "remaining" | "cost" | "requests";
 export type UsageRange = "24H" | "7D" | "30D";
 export type QuotaWindowId = "rolling" | "weekly";
-export type QuotaConnectionState = "not_connected" | "connected" | "unsupported" | "error";
-export type QuotaSource = "example" | "oauth" | "unavailable";
+export type QuotaConnectionState =
+  | "not_connected"
+  | "not_installed"
+  | "signed_out"
+  | "waiting"
+  | "connected"
+  | "stale"
+  | "unsupported"
+  | "error";
+export type QuotaSource = "example" | "codex-app-server" | "claude-statusline" | "unavailable";
 export type QuotaConfidence = "example" | "verified" | "unavailable";
 export type AuthMethod = "oauth-pkce" | "provider-delegated" | "not-published";
 
@@ -25,6 +33,8 @@ export type PlanQuota = Readonly<{
   source: QuotaSource;
   confidence: QuotaConfidence;
   lastSyncedAt: string | null;
+  bridgeInstalled: boolean;
+  statusMessage: string;
   windows: readonly QuotaWindow[];
 }>;
 
@@ -49,12 +59,14 @@ export const planQuotas: Readonly<Record<ProviderId, PlanQuota>> = Object.freeze
   codex: {
     providerId: "codex",
     planName: "ChatGPT Pro · Codex",
-    accountLabel: "예시 계정 · 공식 확인 전",
-    authMethod: "not-published",
+    accountLabel: "브라우저 데모 · 네이티브 앱에서 연결",
+    authMethod: "provider-delegated",
     connectionState: "not_connected",
     source: "example",
     confidence: "example",
     lastSyncedAt: null,
+    bridgeInstalled: false,
+    statusMessage: "네이티브 앱에서는 Codex App Server로 실제 한도를 확인합니다.",
     windows: Object.freeze([
       { id: "rolling", label: "에이전트 한도", usedPercent: 76, remainingPercent: 24, resetLabel: "1시간 18분 후", kindLabel: "공유 에이전트 사용량" },
       { id: "weekly", label: "주간 에이전트 한도", usedPercent: 42, remainingPercent: 58, resetLabel: "3일 4시간 후", kindLabel: "주간 사용량" }
@@ -63,12 +75,14 @@ export const planQuotas: Readonly<Record<ProviderId, PlanQuota>> = Object.freeze
   claude: {
     providerId: "claude",
     planName: "Claude Max",
-    accountLabel: "예시 계정 · 공식 확인 전",
-    authMethod: "not-published",
+    accountLabel: "브라우저 데모 · 네이티브 앱에서 연결",
+    authMethod: "provider-delegated",
     connectionState: "not_connected",
     source: "example",
     confidence: "example",
     lastSyncedAt: null,
+    bridgeInstalled: false,
+    statusMessage: "네이티브 앱에서는 Claude Code 상태선 브리지로 실제 한도를 확인합니다.",
     windows: Object.freeze([
       { id: "rolling", label: "5시간 한도", usedPercent: 68, remainingPercent: 32, resetLabel: "3시간 42분 후", kindLabel: "공유 사용량" },
       { id: "weekly", label: "주간 한도", usedPercent: 51, remainingPercent: 49, resetLabel: "4일 2시간 후", kindLabel: "주간 사용량" }

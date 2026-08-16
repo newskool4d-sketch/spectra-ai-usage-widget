@@ -44,13 +44,13 @@ pub fn read(provider_id: &str) -> Result<Option<StoredCredential>, VaultError> {
     #[cfg(any(target_os = "windows", target_os = "macos"))]
     {
         let entry = entry(provider_id)?;
-        return match entry.get_password() {
+        match entry.get_password() {
             Ok(raw) => serde_json::from_str(&raw)
                 .map(Some)
                 .map_err(|_| VaultError::CorruptCredential),
             Err(keyring::Error::NoEntry) => Ok(None),
             Err(_) => Err(VaultError::Unavailable),
-        };
+        }
     }
 
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
@@ -76,9 +76,9 @@ pub fn write(credential: &StoredCredential) -> Result<(), VaultError> {
         let entry = entry(&credential.provider_id)?;
         let serialized =
             serde_json::to_string(credential).map_err(|_| VaultError::CorruptCredential)?;
-        return entry
+        entry
             .set_password(&serialized)
-            .map_err(|_| VaultError::Unavailable);
+            .map_err(|_| VaultError::Unavailable)
     }
 
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
@@ -91,10 +91,10 @@ pub fn remove(provider_id: &str) -> Result<(), VaultError> {
     #[cfg(any(target_os = "windows", target_os = "macos"))]
     {
         let entry = entry(provider_id)?;
-        return match entry.delete_credential() {
+        match entry.delete_credential() {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
             Err(_) => Err(VaultError::DeleteFailed),
-        };
+        }
     }
 
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]

@@ -8,17 +8,13 @@ fn rounded_square_contains(x: u32, y: u32, radius: u32) -> bool {
     let max = ICON_SIZE - 1;
     let corner_x = if x < radius {
         radius - x
-    } else if x > max - radius {
-        x - (max - radius)
     } else {
-        0
+        x.saturating_sub(max - radius)
     };
     let corner_y = if y < radius {
         radius - y
-    } else if y > max - radius {
-        y - (max - radius)
     } else {
-        0
+        y.saturating_sub(max - radius)
     };
 
     corner_x * corner_x + corner_y * corner_y <= radius * radius

@@ -47,6 +47,35 @@ export type NativeCredentialStatus = Readonly<{
   present: boolean;
 }>;
 
+export type NativeProviderQuotaWindow = Readonly<{
+  id: "rolling" | "weekly";
+  label: string;
+  usedPercent: number;
+  remainingPercent: number;
+  resetsAt: number | null;
+  windowDurationMins: number | null;
+}>;
+
+export type NativeProviderUsageSnapshot = Readonly<{
+  providerId: ProviderId;
+  runtimeAvailable: boolean;
+  authState: "signed-in" | "signed-out" | "unknown";
+  connectionState: "not-installed" | "signed-out" | "waiting-for-usage" | "connected" | "stale" | "error";
+  authMethod: string | null;
+  planType: string | null;
+  source: "codex-app-server" | "claude-statusline" | null;
+  lastSyncedAt: number | null;
+  bridgeInstalled: boolean;
+  windows: readonly NativeProviderQuotaWindow[];
+  message: string;
+}>;
+
+export type NativeProviderActionResult = Readonly<{
+  providerId: ProviderId;
+  status: "login-started" | "bridge-installed" | "bridge-removed" | "not-installed" | "not-supported" | "not-available";
+  message: string;
+}>;
+
 const nativeGlobal = (): TauriGlobal | undefined =>
   typeof window === "undefined" ? undefined : window.__TAURI__;
 
@@ -71,6 +100,30 @@ export async function removeNativeCredential(providerId: ProviderId): Promise<bo
   if (!command) return false;
   await command<void>("credential_remove", { providerId });
   return true;
+}
+
+export async function getNativeProviderUsage(providerId: ProviderId): Promise<NativeProviderUsageSnapshot | null> {
+  const command = invoke();
+  if (!command) return null;
+  return command<NativeProviderUsageSnapshot>("provider_usage_snapshot", { providerId });
+}
+
+export async function startNativeProviderLogin(providerId: ProviderId): Promise<NativeProviderActionResult | null> {
+  const command = invoke();
+  if (!command) return null;
+  return command<NativeProviderActionResult>("provider_start_login", { providerId });
+}
+
+export async function installNativeProviderBridge(providerId: ProviderId): Promise<NativeProviderActionResult | null> {
+  const command = invoke();
+  if (!command) return null;
+  return command<NativeProviderActionResult>("provider_install_bridge", { providerId });
+}
+
+export async function removeNativeProviderBridge(providerId: ProviderId): Promise<NativeProviderActionResult | null> {
+  const command = invoke();
+  if (!command) return null;
+  return command<NativeProviderActionResult>("provider_remove_bridge", { providerId });
 }
 
 export async function listenNativeOAuth(

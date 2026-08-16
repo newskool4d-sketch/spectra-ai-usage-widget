@@ -1,6 +1,6 @@
 import type { ProviderId } from "../data/providers";
 
-export type OAuthCapability = "documented" | "api-key" | "provider-delegated" | "unverified";
+export type OAuthCapability = "documented" | "api-key" | "app-server" | "cli-managed" | "provider-delegated" | "unverified";
 export type QuotaScope = "subscription" | "api-project" | "organization" | "unverified";
 export type ConnectionStatus = "supported" | "client-id-required" | "api-key-only" | "not-published";
 export type QuotaEndpointStatus =
@@ -29,47 +29,46 @@ export type ProviderCapability = Readonly<{
 
 /**
  * Capability facts are deliberately separate from the example snapshot.
- * A provider can document OAuth for API access without exposing personal-plan
- * remaining quota. The UI must not promote that path to `confidence=verified`.
+ * Native integrations use only provider-owned, documented account surfaces.
+ * SPECTRA never copies provider tokens into React or browser storage.
  */
 export const providerCapabilities: Readonly<Record<ProviderId, ProviderCapability>> = Object.freeze({
   codex: {
     providerId: "codex",
-    oauth: "api-key",
-    oauthLabel: "OpenAI 조직 Admin API 키",
-    quotaScope: "organization",
-    quotaLabel: "ChatGPT/Codex 개인 잔여량 조회 경로 미공개 · 조직 API 사용량만",
-    planQuotaVerified: false,
+    oauth: "app-server",
+    oauthLabel: "Codex App Server · ChatGPT 로그인",
+    quotaScope: "subscription",
+    quotaLabel: "ChatGPT 요금제 한도 창·사용률·초기화 시각",
+    planQuotaVerified: true,
     authorizeUrl: null,
     tokenUrl: null,
     clientIdEnv: null,
-    connectionStatus: "api-key-only",
-    quotaEndpoint: "https://api.openai.com/v1/organization/usage/completions",
-    quotaEndpointStatus: "organization-usage-only",
+    connectionStatus: "supported",
+    quotaEndpoint: "account/rateLimits/read",
+    quotaEndpointStatus: "remaining-published",
     docs: Object.freeze([
-      "https://platform.openai.com/docs/api-reference/authentication",
-      "https://platform.openai.com/docs/api-reference/usage",
-      "https://help.openai.com/en/articles/11369540-using-codex-with-your-chatgpt-plan"
+      "https://developers.openai.com/codex/auth",
+      "https://developers.openai.com/codex/app-server"
     ] as const),
     reviewedAt: "2026-08-16"
   },
   claude: {
     providerId: "claude",
-    oauth: "api-key",
-    oauthLabel: "Anthropic Admin API 키",
-    quotaScope: "organization",
-    quotaLabel: "Claude Pro/Max 개인 잔여량 조회 경로 미공개 · 조직 사용량만",
-    planQuotaVerified: false,
+    oauth: "cli-managed",
+    oauthLabel: "Claude Code · Claude.ai 로그인",
+    quotaScope: "subscription",
+    quotaLabel: "Pro/Max 5시간·7일 사용률·초기화 시각",
+    planQuotaVerified: true,
     authorizeUrl: null,
     tokenUrl: null,
     clientIdEnv: null,
-    connectionStatus: "api-key-only",
-    quotaEndpoint: "https://api.anthropic.com/v1/organizations/usage_report/messages",
-    quotaEndpointStatus: "organization-usage-only",
+    connectionStatus: "supported",
+    quotaEndpoint: "Claude Code statusLine.rate_limits",
+    quotaEndpointStatus: "remaining-published",
     docs: Object.freeze([
-      "https://support.anthropic.com/en/articles/8114521-how-can-i-access-the-anthropic-api",
-      "https://docs.anthropic.com/en/api/admin-api/usage-cost/get-messages-usage-report",
-      "https://support.anthropic.com/en/articles/11145838-using-claude-code-with-your-pro-or-max-plan"
+      "https://code.claude.com/docs/en/cli-usage",
+      "https://code.claude.com/docs/en/statusline",
+      "https://support.claude.com/en/articles/11145838-use-claude-code-with-your-pro-or-max-plan"
     ] as const),
     reviewedAt: "2026-08-16"
   }

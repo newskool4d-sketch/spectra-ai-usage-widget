@@ -2,6 +2,7 @@ mod credential_vault;
 mod desktop_shell;
 mod oauth_callback;
 mod provider_connection;
+mod provider_usage;
 
 use std::io::{Read, Write};
 use std::net::TcpListener;
@@ -101,7 +102,7 @@ fn spawn_loopback_listener<R: Runtime + 'static>(app: AppHandle<R>, listener: Tc
             let body = "SPECTRA 로그인 완료. 이 창을 닫아도 됩니다.";
             let response = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                body.as_bytes().len(),
+                body.len(),
                 body
             );
             let _ = stream.write_all(response.as_bytes());
@@ -152,6 +153,30 @@ fn credential_remove(provider_id: String) -> Result<(), String> {
     credential_vault::remove(&provider_id).map_err(|_| "credential removal failed".to_string())
 }
 
+#[tauri::command]
+async fn provider_usage_snapshot(
+    provider_id: String,
+) -> Result<provider_usage::ProviderUsageSnapshot, String> {
+    tauri::async_runtime::spawn_blocking(move || provider_usage::snapshot(&provider_id))
+        .await
+        .map_err(|_| "provider usage worker failed".to_string())
+}
+
+#[tauri::command]
+fn provider_start_login(provider_id: String) -> provider_usage::ProviderActionResult {
+    provider_usage::start_login(&provider_id)
+}
+
+#[tauri::command]
+fn provider_install_bridge(provider_id: String) -> provider_usage::ProviderActionResult {
+    provider_usage::install_bridge(&provider_id)
+}
+
+#[tauri::command]
+fn provider_remove_bridge(provider_id: String) -> provider_usage::ProviderActionResult {
+    provider_usage::remove_bridge(&provider_id)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let mut builder = tauri::Builder::default().plugin(tauri_plugin_deep_link::init());
@@ -176,7 +201,11 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             oauth_prepare,
             credential_status,
-            credential_remove
+            credential_remove,
+            provider_usage_snapshot,
+            provider_start_login,
+            provider_install_bridge,
+            provider_remove_bridge
         ])
         .setup(|app| {
             desktop_shell::install(app)?;
@@ -198,4 +227,8 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("error while running SPECTRA native shell");
+}
+
+pub fn run_cli_mode() -> bool {
+    provider_usage::run_statusline_bridge() || provider_usage::run_provider_snapshot_cli()
 }

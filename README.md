@@ -1,8 +1,16 @@
 # SPECTRA — AI 사용량 위젯
 
-> A+C 방향을 제품 화면으로 옮긴 React/TypeScript 코드 퍼스트 프로젝트입니다. 이전 세 시안과 `app.js`는 시각 회귀 기준선으로만 보존합니다.
+> A+C 방향을 제품 화면으로 옮긴 React/TypeScript + Tauri 코드 퍼스트 프로젝트입니다. 이전 세 시안과 `app.js`는 시각 회귀 기준선으로만 보존합니다.
 
-Claude와 OpenAI Codex의 사용 상태를 맥·윈도우·iOS에서 가장 빠르게 읽을 수 있는 구조를 찾습니다.
+Claude와 OpenAI Codex의 **개인 요금제 잔여량**을 Windows 트레이에서 빠르게 확인합니다. macOS와 iOS는 후속 플랫폼입니다.
+
+## 현재 구현
+
+- Windows 미니 창·대시보드·트레이 숨김/복원·단일 실행
+- Codex 공식 App Server의 ChatGPT 계정 및 rate limit 조회
+- Claude 공식 로그인 상태와 사용자가 동의해 설치하는 status line 한도 브리지
+- 브라우저에서는 디자인 확인용 예시 수치, 네이티브 앱에서는 실제 값이 없을 때 `—` 표시
+- provider 토큰·이메일·세션 원문을 React 또는 SPECTRA 사용량 캐시에 복제하지 않음
 
 ## 확정된 방향
 
@@ -30,6 +38,13 @@ npm run desktop:build
 
 데스크톱 앱은 430×720 미니 창으로 시작합니다. 닫기 버튼은 앱을 종료하지 않고 트레이로 숨기며, 트레이 왼쪽 클릭 또는 두 번째 앱 실행으로 미니 창을 다시 엽니다. 트레이 메뉴에서는 미니 창, 1280×860 대시보드, 숨기기, 종료를 선택할 수 있습니다. 패키징 결과는 `src-tauri/target/release/bundle/nsis/`에 생성됩니다.
 
+개인 정보가 제거된 네이티브 연결 진단:
+
+```powershell
+src-tauri\target\release\spectra-native.exe --provider-snapshot codex
+src-tauri\target\release\spectra-native.exe --provider-snapshot claude
+```
+
 기준선 파일과 Figma 비의존성은 다음 명령으로 확인합니다.
 
 ```powershell
@@ -50,24 +65,28 @@ npm run verify:tokens
 - `?variant=B` — 서비스 비교: 서비스를 원형으로 놓고 한도를 비교하는 화면
 - `?variant=C` — 모바일 알림: iOS 중심 알림 목록과 기기별 위젯
 
-제품 화면의 수치는 예시 snapshot입니다. 서비스 선택, 단위·기간 선택, 새로고침, 유리·불투명 모드가 실제로 작동합니다. 현재 Claude와 Codex는 개인 구독용 공식 OAuth·잔여량 endpoint가 공개되지 않았으므로, 비공개 세션을 읽지 않고 공식 사용량 페이지와 조직 Admin API 범위만 연결 대상으로 둡니다.
+브라우저 제품 화면은 예시 snapshot을 사용합니다. 설치된 Tauri 앱은 공식 CLI에서 실제 한도 창을 받았을 때만 숫자를 표시합니다. 서비스 선택, 단위·기간 선택, 새로고침, 유리·불투명 모드가 실제로 작동합니다.
 
-## 요금제 잔여량과 OAuth UX
+## 요금제 잔여량과 계정 연결
 
 `src/data/providers.ts`의 `PlanQuota` 모델은 서비스마다 다른 요금제 한도를 다음 공통 필드로 표현합니다.
 
 - `planName`, `accountLabel`: 요금제와 계정 표시명
 - `windows`: 롤링·일일·주간·월간 등 한도 창, 사용률, 잔여률, 초기화 시각
 - `connectionState`, `source`, `confidence`, `lastSyncedAt`: 연결 상태와 데이터 신뢰도
-- `authMethod`: `not-published`·`api-key` 등 공급자별 공식 인증 경계
+- `authMethod`: 공급자 공식 도구에 위임된 인증 경계
 
-데스크톱 A에는 잔여량 요약·서비스별 잔여량·연결 카드가, 모바일 C에는 잔여량 히어로·OAuth 연결 카드·한도 알림이 들어갑니다. 공급자별 공식 잔여량 경로가 확인되기 전까지는 계정 토큰이나 비공개 세션을 읽지 않습니다.
+데스크톱 A에는 잔여량 요약·서비스별 잔여량·연결 카드가, 모바일 C에는 잔여량 히어로·계정 연결 카드·한도 알림이 들어갑니다.
 
-공급자별 공식 endpoint와 쿼터 범위는 [`docs/integrations/provider-capability-matrix.md`](./docs/integrations/provider-capability-matrix.md)에 기록합니다. `src/integrations/oauth-adapter.ts`는 브라우저에서는 데모만, Tauri에서는 공개된 공식 endpoint가 있는 provider만 native adapter로 넘깁니다. 현재 활성 provider에는 개인 구독 OAuth endpoint가 없으므로 브라우저 제품 화면에서는 네트워크 호출과 토큰 교환을 하지 않습니다.
+Codex는 로그아웃 상태에서 `codex login`을 시작하고, 로그인 뒤 `codex app-server --stdio`의 `account/read`와 `account/rateLimits/read`를 호출합니다. App Server는 요청 때만 실행하며 응답 또는 제한 시간 뒤 종료합니다. API key 로그인은 ChatGPT 개인 요금제 한도로 취급하지 않습니다.
 
-네이티브 OAuth 경계와 OS vault 규칙은 [`docs/integrations/native-oauth.md`](./docs/integrations/native-oauth.md)에 있습니다. 데스크톱은 `src-tauri/`의 callback 검증과 OS Credential Manager/Keychain 경계를 보존하고, iOS/macOS 공유 Swift 코드는 `native/apple/SpectraAuth/`에 둡니다. 현재 Claude/Codex의 개인 구독 OAuth endpoint는 연결하지 않으며, 개인 요금제 잔여량 API가 공개될 때만 native 교환을 활성화합니다.
+Claude는 `claude auth status`로 로그인 상태를 확인합니다. 사용자가 `사용량 브리지 설치`를 선택하면 공식 status line 입력의 5시간·7일 `rate_limits` 필드만 정제해 저장합니다. 첫 Claude 응답 전에는 `첫 사용량 대기`로 표시될 수 있으며, 브리지 제거 시 기존 상태선 설정을 복원합니다.
 
-네이티브 테스트 설정 경계는 [`docs/integrations/provider-env.example`](./docs/integrations/provider-env.example)에 있습니다. 현재 활성 provider는 배포 앱 client ID를 요구하지 않으며, 실제 Admin API 키도 OS vault 또는 별도 보안 런타임에만 주입해야 합니다.
+공급자별 공식 인터페이스와 호환성 범위는 [`docs/integrations/provider-capability-matrix.md`](./docs/integrations/provider-capability-matrix.md), 데이터·자격 증명 경계는 [`docs/integrations/native-oauth.md`](./docs/integrations/native-oauth.md)에 기록합니다. 현재 활성 흐름은 별도 client ID나 SPECTRA 소유 token vault를 요구하지 않습니다. 공식 CLI가 자격 증명을 계속 관리합니다.
+
+## 메모리 정책
+
+앱은 과거 시계열을 저장하거나 유휴 상태에서 계속 폴링하지 않습니다. 시작·수동 새로고침 때 현재 스냅샷만 읽고 Codex App Server는 즉시 종료합니다. 자세한 기준은 [`docs/performance/memory-budget.md`](./docs/performance/memory-budget.md)에 있습니다.
 
 ## 디자인 방향
 
@@ -78,11 +97,12 @@ npm run verify:tokens
 - 표현: 영문 대문자 라벨, 네온 후광, 과한 그라데이션을 줄이고 실제 운영 도구처럼 짧고 담백한 한국어를 사용
 - 플랫폼: Apple의 반투명 재질과 Windows의 Mica/Acrylic 특성을 같은 디자인 토큰으로 조정
 
-## 이번 시안에서 다루지 않는 것
+## 아직 다루지 않는 것
 
-- OpenAI Codex·Claude의 비공개 계정 세션·스크래핑·개인 요금제 잔여량 추정
+- OpenAI Codex·Claude의 비공개 웹 세션·스크래핑·잔여량 추정
 - 조직 API 사용량과 ChatGPT/Claude 개인 구독 잔여량의 동일시
-- 운영용 데이터 저장·분석 도구·배포 서명·자동 업데이트
+- 과거 사용량 분석·Windows 코드 서명·자동 업데이트
 - 모든 AI 서비스가 공식 한도 API를 제공한다는 전제
+- macOS 메뉴 막대 앱과 iOS SwiftUI/WidgetKit 실구현
 
 선택된 A+C 화면과 Claude/Codex provider만 제품 런타임에 포함하고, B와 시안 전환 UI는 기준선으로 별도 보관합니다.
