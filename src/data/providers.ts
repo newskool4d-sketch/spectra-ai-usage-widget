@@ -68,8 +68,8 @@ export const planQuotas: Readonly<Record<ProviderId, PlanQuota>> = Object.freeze
     bridgeInstalled: false,
     statusMessage: "네이티브 앱에서는 Codex App Server로 실제 한도를 확인합니다.",
     windows: Object.freeze([
-      { id: "rolling", label: "에이전트 한도", usedPercent: 76, remainingPercent: 24, resetLabel: "1시간 18분 후", kindLabel: "공유 에이전트 사용량" },
-      { id: "weekly", label: "주간 에이전트 한도", usedPercent: 42, remainingPercent: 58, resetLabel: "3일 4시간 후", kindLabel: "주간 사용량" }
+      { id: "rolling", label: "5시간 한도", usedPercent: 76, remainingPercent: 24, resetLabel: "1시간 18분 후", kindLabel: "공유 에이전트 사용량" },
+      { id: "weekly", label: "주간 한도", usedPercent: 42, remainingPercent: 58, resetLabel: "3일 4시간 후", kindLabel: "주간 사용량" }
     ] as const)
   },
   claude: {
