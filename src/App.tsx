@@ -289,16 +289,6 @@ const ProviderChip = memo(function ProviderChip({ provider, quota, active, onSel
   </button>;
 });
 
-const QuotaSummaryCard = memo(function QuotaSummaryCard({ provider, quota }: Readonly<{ provider: Provider; quota: PlanQuota }>) {
-  const [primary, secondary] = quota.windows;
-  const available = hasDisplayValue(quota);
-  const valueCopy = available ? `${primary.label}의 ${Math.round(primary.remainingPercent)}%가 남아 있습니다.` : quota.statusMessage;
-  return <article className="glass-card runway-card quota-card span-2" style={providerStyle(provider.color)}>
-    <div className="card-heading"><div><span className="eyebrow">요금제 잔여량</span><h2>{available ? Math.round(primary.remainingPercent) : "—"}{available ? <span>%</span> : null}</h2></div><span className={`quota-status ${quota.connectionState}`}><i />{connectionLabel(quota)}</span></div>
-    <div className="runway-content"><div className="runway-ring quota-ring" style={{ "--value": meterPercent(quota, primary), "--provider": provider.color } as CSSProperties}><div><strong>{displayPercent(quota, primary)}</strong><span>잔여</span></div></div><div className="runway-copy"><p><strong>{quota.planName}</strong> · {valueCopy} <span className="quota-source">{sourceLabel(quota)}</span></p><div className="rainbow-track"><i style={{ width: `${meterPercent(quota, primary)}%` }} /></div><div className="track-labels"><span>{primary.kindLabel}</span><span>초기화 · {primary.resetLabel}</span></div>{secondary ? <div className="quota-window-list"><QuotaWindowRow window={secondary} unavailable={!available} compact /></div> : null}</div></div>
-  </article>;
-});
-
 const OAuthConnectCard = memo(function OAuthConnectCard({ provider, quota, compact = false, onOpen }: Readonly<{ provider: Provider; quota: PlanQuota; compact?: boolean; onOpen: (id: ProviderId) => void }>) {
   const unsupported = quota.connectionState === "unsupported";
   const connected = quota.connectionState === "connected";
@@ -448,7 +438,7 @@ const VariantADesktop = memo(function VariantADesktop({ view, onView, activeProv
         <TopActions {...actions} />
       </header>
       {view === "overview" ? <><div className="dashboard-toolbar"><MetricTabs metric={metric} onMetric={onMetric} /><RangeTabs range={range} onRange={onRange} /></div><div className="bento-grid">
-        <QuotaSummaryCard provider={activeProvider} quota={activeQuota} />
+        <QuotaBoard quotas={quotas} />
         <article className="glass-card live-card span-2"><div className="card-heading"><div><span className="eyebrow">한도 소진 추이</span><h3>{available ? `${Math.round(primary.usedPercent)}%` : "—"} <small>{available ? "현재 사용" : "실제 데이터 대기"}</small></h3></div><span className="live-pill"><i />{demo ? "데모 집계" : available ? "현재 스냅샷" : "연결 대기"}</span></div>{demo ? <><ChartBars /><div className="chart-axis"><span>09:00</span><span>12:00</span><span>15:00</span><span>지금</span></div></> : <div className="chart-empty"><Icon name="pulse" size={19} /><strong>과거 추이는 저장하지 않습니다.</strong><span>현재 한도 스냅샷만 읽어 메모리 사용을 줄였습니다.</span></div>}</article>
         <article className="glass-card providers-card span-2"><div className="card-heading"><div><span className="eyebrow">서비스</span><h3>서비스별 잔여량</h3></div><button type="button" className="text-button">모두 보기 <Icon name="chevron" size={14} /></button></div><div className="provider-list">{providers.map(provider => <ProviderRow key={provider.id} provider={provider} quota={quotas[provider.id]} active={provider.id === activeProviderId} onSelect={onProvider} />)}</div></article>
         <article className="glass-card focus-card"><div className="card-heading"><div><ProviderLogo provider={activeProvider} size="lg" /><span className="eyebrow">집중 확인</span></div><span className="trend-badge">{displayPercent(activeQuota, primary)}{available ? " 남음" : ""}</span></div><h3>{activeProvider.name}</h3><p>{available ? <>{primary.label}는 {primary.resetLabel} 초기화됩니다. <strong>{activeQuota.planName}</strong> {demo ? "브라우저 데모" : "공식 조회"} 수치입니다.</> : activeQuota.statusMessage}</p>{demo ? <Sparkline values={activeProvider.trend} color={activeProvider.color} width={220} height={62} /> : <div className="focus-status"><Icon name={available ? "check" : "link"} size={17} /><span>{sourceLabel(activeQuota)}</span></div>}</article>
@@ -470,13 +460,11 @@ const VariantCMobile = memo(function VariantCMobile({ view, onView, activeProvid
   const claude = providers.find(provider => provider.id === "claude") ?? providers[1];
   const codexQuota = quotas.codex;
   const claudeQuota = quotas.claude;
-  const primary = activeQuota.windows[0];
-  const available = hasDisplayValue(activeQuota);
   const now = new Date();
   return <div className="product-shell variant-c"><section className="stream-app"><div className="stream-layout"><section className="mobile-stream">
     <div className="mobile-top"><span>{mobileClockFormatter.format(now)}</span><div><i /><i /><i /></div></div>
     <div className="mobile-title"><div><span className="eyebrow">{mobileDateFormatter.format(now)}</span><h1>사용 현황</h1></div><button type="button" className="icon-button" aria-label="알림"><Icon name="bell" size={18} /><span className="notification-dot" /></button></div>
-    {view === "overview" ? <><article className="hero-signal" style={providerStyle(activeProvider.color)}><div className="hero-signal-top"><span className="signal-orb"><ProviderLogo provider={activeProvider} size="md" /></span><span className={`trend-badge ${activeQuota.connectionState === "connected" ? "positive" : ""}`}>{connectionLabel(activeQuota)}</span></div><span className="eyebrow">{activeQuota.planName} · {primary.label}</span><h2>{available ? Math.round(primary.remainingPercent) : "—"}{available ? <span>%</span> : null}</h2><p>{available ? "초기화 전까지 남은 요금제 여유입니다." : activeQuota.statusMessage}</p><div className="spectrum-line"><i style={{ width: `${meterPercent(activeQuota, primary)}%` }} /></div><div className="signal-foot"><span>남은 한도 {displayPercent(activeQuota, primary)}</span><span>초기화 {primary.resetLabel}</span></div></article>
+    {view === "overview" ? <><QuotaBoard quotas={quotas} />
     <div className="chip-scroll" role="group" aria-label="서비스 선택">{providers.map(provider => <ProviderChip key={provider.id} provider={provider} quota={quotas[provider.id]} active={provider.id === activeProviderId} onSelect={onProvider} />)}</div>
     <OAuthConnectCard provider={activeProvider} quota={activeQuota} compact onOpen={onOpenOAuth} />
     <section className="stream-feed"><div className="section-title"><div><span className="eyebrow">알림</span><h3>지금 확인할 항목</h3></div><button type="button">전체</button></div>
