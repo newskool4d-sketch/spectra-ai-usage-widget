@@ -1,7 +1,7 @@
 # SPECTRA 0.2.0 Windows QA
 
 검증일: 2026-08-16  
-판정: **PASS — Windows 설치·Codex 실데이터**, **PARTIAL — Claude 사용량 브리지 실데이터**
+판정: **PASS — Windows 설치·Codex·Claude 실데이터**
 
 ## 빌드 산출물
 
@@ -36,9 +36,12 @@
 ### Claude
 
 - 설치된 릴리스 진단: `runtimeAvailable=true`, `authState=signed-in`, `planType=max`
-- 브리지 미설치 상태를 `waiting-for-usage`로 표시하고 숫자는 `—` 처리
-- 연결 CTA와 opt-in 브리지 설명 대화상자 정상
-- 실제 사용자 `~/.claude/settings.json`은 QA 중 변경하지 않음
+- SPECTRA 연결 대화상자에서 사용자가 요청한 opt-in 브리지를 설치하고 `~/.claude/settings.json`에 status line 명령을 등록
+- 기존 상태선 백업 파일 생성 및 기존 상태선 출력 보존 확인
+- 대화형 Claude Code 실제 응답 후 status line: `5h 1% · 7d 47%` 사용
+- 설치된 SPECTRA 진단: 5시간 `used=1%, remaining=99%`, 주간 `used=47%, remaining=53%`
+- 5시간 초기화 시각과 주간 초기화 시각 epoch 수신, SPECTRA 화면에 5시간 잔여 `99%` 표시
+- 이메일·token·세션 원문은 SPECTRA 캐시와 진단에 없음
 
 ### Windows 셸
 
@@ -49,6 +52,7 @@
 - 두 번째 실행으로 창 복원: PASS
 - 복원 후 `spectra-native.exe` 단일 프로세스: PASS
 - 로컬 0.2.0 silent upgrade와 설치 후 GUI: PASS
+- Claude status line 설치·실제 응답·5시간/7일 동기화: PASS
 
 ## 보안·메모리 경계
 
@@ -61,7 +65,7 @@
 
 ## 남은 위험
 
-- Claude 브리지 설치·첫 Claude 응답·실제 5시간/7일 값·제거 복원은 사용자 opt-in 실계정 QA가 남음.
+- Claude 사용률과 초기화 시각은 공급자 응답에 따라 변동하므로, 장기 사용 후 새로고침 회귀 QA가 필요함.
 - 설치 파일은 코드 서명되지 않아 SmartScreen 경고가 날 수 있음.
 - Codex Security 워크벤치는 한글 사용자 경로를 CP949로 디코딩하는 플러그인 오류로 시작하지 못함. 대신 이번 diff를 수동 검토해 입력 상한과 timeout을 보강했지만, 정식 SARIF 보고서는 없음.
 - GitHub push·Release asset 업로드는 수행하지 않음.

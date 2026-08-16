@@ -48,6 +48,7 @@ Claude 상태선 입력에는 작업 경로와 세션 정보도 포함될 수 �
 - Rust 단위 테스트: `PASS` — 14개, App Server 응답 파싱·Claude 필드 정제·상태선 복원·입력 상한 포함
 - Windows 0.2.0 설치·미니 창·트레이 복원·Codex 실제 한도: `PASS`
 - Claude Max 로그인·미연결 숫자 숨김: `PASS`
-- Claude 브리지 실제 설치·첫 5시간/7일 값·제거: 사용자 opt-in이 필요해 `NOT_RUN`
+- Claude 브리지 설치·첫 실제 5시간/7일 값·SPECTRA 화면 동기화: `PASS`
+- Claude 브리지 제거·기존 상태선 복원: `NOT_RUN` — 현재 사용을 위해 브리지를 유지
 - macOS/iOS Swift·WidgetKit: Windows 환경에서 `NOT_RUN`
 - 코드 서명·자동 업데이트: `NOT_CONFIGURED`

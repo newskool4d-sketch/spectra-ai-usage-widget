@@ -12,7 +12,7 @@
 - [x] 4단계 Windows 데이터 연결: Codex App Server와 Claude Code status line을 통한 개인 요금제 잔여량
 - [x] 4단계 계정 UX: 공식 CLI 로그인 시작, Codex 로그인 확인, Claude opt-in 브리지 설치·복원
 - [x] 4단계 Windows 패키지 QA: 0.2 NSIS·로컬 업그레이드·트레이·Codex 실제 한도 검증
-- [ ] 4단계 Claude 수용 QA: opt-in 브리지 설치·첫 실제 5시간/7일 값·제거 복원 검증
+- [x] 4단계 Claude 수용 QA: opt-in 브리지 설치·첫 실제 5시간/7일 값·화면 동기화 검증
 - [ ] 5단계: macOS 메뉴 막대 앱과 iOS SwiftUI/WidgetKit 동기화
 
 ## 제품이 바로 답해야 할 것
