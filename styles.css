@@ -36,9 +36,8 @@ h1 em { color: var(--color-heading-em); font-style: normal; }
 .top-actions { display: flex; align-items: center; gap: var(--space-2); }
 .sync-state { display: flex; align-items: center; gap: 7px; padding: 9px var(--space-control-x); border: 1px solid var(--line); border-radius: var(--radius-pill); color: var(--muted); background: var(--color-surface-control-soft); font-size: var(--text-sm); }
 .sync-state i, .live-pill i { width: 6px; height: 6px; border-radius: 50%; background: var(--lime); }
-.icon-button, .avatar { display: grid; width: 36px; height: 36px; padding: 0; place-items: center; border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--color-surface-control); cursor: pointer; transition: var(--motion-fast); }
-.icon-button:hover, .avatar:hover { border-color: var(--line-strong); background: var(--color-control-hover); transform: translateY(-1px); }
-.avatar { color: var(--color-ink-button); font-size: var(--text-sm); font-weight: 800; background: var(--color-avatar); }
+.icon-button { display: grid; width: 36px; height: 36px; padding: 0; place-items: center; border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--color-surface-control); cursor: pointer; transition: var(--motion-fast); }
+.icon-button:hover { border-color: var(--line-strong); background: var(--color-control-hover); transform: translateY(-1px); }
 .spinning .icon { animation: spin .4s linear; }
 .provider-logo { display: inline-grid; flex: 0 0 auto; place-items: center; border: 1px solid color-mix(in srgb, var(--provider), transparent 58%); color: var(--provider); font-weight: 800; letter-spacing: -.02em; background: color-mix(in srgb, var(--provider), transparent 91%); box-shadow: var(--shadow-inset); }
 .provider-logo.xs { width: 23px; height: 23px; border-radius: var(--radius-sm); font-size: var(--text-2xs); }

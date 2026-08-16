@@ -198,8 +198,7 @@ const TopActions = memo(function TopActions({ refreshedAt, refreshing, solid, th
     <span className="sync-state"><i /> 동기화 · {refreshedAt}</span>
     <button type="button" className={`icon-button ${refreshing ? "spinning" : ""}`} onClick={onRefresh} aria-label="데이터 새로고침"><Icon name="refresh" size={17} /></button>
     <button type="button" className="icon-button" onClick={onSolid} aria-label="투명도 전환" title={solid ? "유리 모드" : "가독성용 불투명 모드"}><Icon name="eye" size={17} /></button>
-    <button type="button" className="icon-button" onClick={onTheme} aria-label="테마 전환" title={theme === "dark" ? "일반 모드" : "다크 모드"}><Icon name="spark" size={17} /></button>
-    <button type="button" className="avatar" aria-label="프로필">HJ</button>
+    <button type="button" className="icon-button" onClick={onTheme} aria-label="테마 전환" title={theme === "dark" ? "일반 모드" : "다크 모드"}><Icon name={theme === "dark" ? "sun" : "moon"} size={17} /></button>
   </div>;
 });
 

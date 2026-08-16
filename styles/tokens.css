@@ -58,7 +58,6 @@
   --color-nav-icon: #73798b;
   --color-ink-button: #262720;
   --color-button: #eee9df;
-  --color-avatar: #d6cfc3;
   --color-ambient-gradient: linear-gradient(145deg, #10110f, #171713 54%, #0f100e);
 
   --color-violet: #8879c6;
@@ -178,7 +177,6 @@
   --color-nav-icon: #768078;
   --color-ink-button: #f7f9f6;
   --color-button: #273128;
-  --color-avatar: #d7e1d5;
   --color-ambient-gradient: linear-gradient(145deg, #edf2ed, #f8faf7 54%, #e8efea);
   --shadow-inset: inset 0 1px 0 rgba(255, 255, 255, .85);
   --shadow-app: 0 20px 54px rgba(43, 61, 48, .12), inset 0 1px 0 rgba(255, 255, 255, .8);

@@ -45,7 +45,7 @@
       "path": "docs/design-baseline/desktop-a.png",
       "role": "desktop-primary",
       "viewport": "1440x1000",
-      "sha256": "7CAA0255D9B5E5C361C267428A61109F26119C8A4F004AE0F876C2556993CFE8"
+      "sha256": "A8ECD041D9D55BB45930229615BBD0FDA831119F528305CC682ECB054A9B0E1F"
     },
     {
       "path": "docs/design-baseline/desktop-c-context.png",
@@ -57,7 +57,7 @@
       "path": "docs/design-baseline/mobile-c.png",
       "role": "mobile-primary",
       "viewport": "390x844",
-      "sha256": "9D7CDA0466A1C643E6EFEAB7DC09B16A4075BE6F03581D9C2E9C9D53F0483648"
+      "sha256": "555BBB553396B591C195A0651294F7ECD7AF95F5F9FCBA25D7947EE6BF7EAA89"
     }
   ],
   "acceptance": [
