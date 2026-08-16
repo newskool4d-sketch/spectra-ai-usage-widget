@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Icon, type IconName } from "./components/Icon";
 import { Sparkline } from "./components/Sparkline";
-import { metricLabels, planQuotas, providers, rangeLabels, usageBars, type AuthMethod, type Metric, type PlanQuota, type Provider, type ProviderId, type QuotaWindow, type UsageRange } from "./data/providers";
+import { metricLabels, planQuotas, providers, rangeLabels, usageBars, type AuthMethod, type Metric, type PlanQuota, type Provider, type ProviderId, type QuotaWindow, type QuotaWindowId, type UsageRange } from "./data/providers";
 import { providerCapabilities, type ProviderCapability } from "./integrations/provider-capabilities";
 import { getNativeProviderUsage, installNativeProviderBridge, isTauriRuntime, removeNativeProviderBridge, startNativeProviderLogin, type NativeProviderActionResult, type NativeProviderUsageSnapshot } from "./integrations/tauri-native-bridge";
 
@@ -238,6 +238,36 @@ const QuotaWindowRow = memo(function QuotaWindowRow({ window, unavailable = fals
     <div className="quota-window-copy"><span>{window.label}</span><strong>{unavailable ? "—" : `${Math.round(window.remainingPercent)}% 남음`}</strong></div>
     <div className="quota-window-meta"><span>{window.kindLabel}</span><span>{window.resetLabel}</span></div>
     <div className="quota-window-meter" aria-label={unavailable ? `${window.label} 데이터 대기` : `${window.label} ${window.usedPercent}% 사용`}><i style={{ width: `${unavailable ? 0 : window.usedPercent}%` }} /></div>
+  </div>;
+});
+
+const emptyQuotaWindow = (id: QuotaWindowId): QuotaWindow => ({
+  id,
+  label: id === "rolling" ? "5시간 한도" : "주간 한도",
+  usedPercent: 0,
+  remainingPercent: 0,
+  resetLabel: "연결 후 표시",
+  kindLabel: "실제 데이터 대기"
+});
+
+const QuotaCell = memo(function QuotaCell({ provider, quota, window }: Readonly<{ provider: Provider; quota: PlanQuota; window: QuotaWindow }>) {
+  const available = hasDisplayValue(quota);
+  return <div className="quota-cell" style={providerStyle(provider.color)}>
+    <div className="quota-cell-top"><span className="quota-cell-pill">{provider.name}</span><span className="quota-cell-window">{window.label}</span></div>
+    <div className="quota-cell-value">{available ? Math.round(window.remainingPercent) : "—"}{available ? <span>%</span> : null}</div>
+    <div className="quota-cell-meta">{available ? `초기화 · ${window.resetLabel}` : "연결 후 표시"}</div>
+    <div className="quota-cell-meter" aria-label={available ? `${provider.name} ${window.label} ${Math.round(window.remainingPercent)}% 남음` : `${provider.name} ${window.label} 데이터 대기`}><i style={{ width: `${available ? window.remainingPercent : 0}%` }} /></div>
+  </div>;
+});
+
+const QuotaBoard = memo(function QuotaBoard({ quotas }: Readonly<{ quotas: QuotaRecord }>) {
+  const windowIds: readonly QuotaWindowId[] = ["rolling", "weekly"];
+  return <div className="quota-board span-2" role="group" aria-label="공급자별 한도 현황">
+    {providers.flatMap(provider => windowIds.map(id => {
+      const quota = quotas[provider.id];
+      const window = quota.windows.find(candidate => candidate.id === id) ?? emptyQuotaWindow(id);
+      return <QuotaCell key={`${provider.id}-${id}`} provider={provider} quota={quota} window={window} />;
+    }))}
   </div>;
 });
 

@@ -86,6 +86,16 @@ h1 em { color: var(--color-heading-em); font-style: normal; }
 .glass-card { position: relative; min-height: 170px; padding: var(--space-5); overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--glass-card-bg); backdrop-filter: blur(var(--glass-card-blur)); box-shadow: var(--shadow-card); }
 .glass-card::before { display: none; }
 .span-2 { grid-column: span 2; }
+.quota-board { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-3); }
+.quota-cell { position: relative; padding: var(--space-5); overflow: hidden; border: 1px solid color-mix(in srgb, var(--provider), transparent 68%); border-radius: var(--radius-lg); background: color-mix(in srgb, var(--provider), var(--color-surface-inner) 95%); box-shadow: var(--shadow-inset); }
+.quota-cell-top { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
+.quota-cell-pill { padding: 3px 9px; border-radius: var(--radius-pill); color: var(--provider); background: color-mix(in srgb, var(--provider), transparent 85%); font-size: var(--text-xs); font-weight: 700; }
+.quota-cell-window { color: var(--subtle); font-size: var(--text-xs); }
+.quota-cell-value { margin-top: 10px; font-size: var(--text-2xl); line-height: .95; letter-spacing: -.04em; }
+.quota-cell-value span { margin-left: 2px; color: var(--provider); font-size: var(--text-sm); }
+.quota-cell-meta { margin-top: 6px; color: var(--muted); font-size: var(--text-xs); }
+.quota-cell-meter { height: 4px; margin-top: 12px; overflow: hidden; border-radius: 4px; background: var(--color-track); }
+.quota-cell-meter i { display: block; height: 100%; background: var(--provider); }
 .card-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-3); }
 .card-heading h2 { margin-top: 5px; font-size: 50px; letter-spacing: -.07em; }
 .card-heading h2 span { color: var(--subtle); font-size: 22px; }
