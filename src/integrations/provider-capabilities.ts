@@ -63,7 +63,7 @@ export const providerCapabilities: Readonly<Record<ProviderId, ProviderCapabilit
     tokenUrl: null,
     clientIdEnv: null,
     connectionStatus: "supported",
-    quotaEndpoint: "Claude Code statusLine.rate_limits",
+    quotaEndpoint: "api/oauth/usage · Claude Code statusLine.rate_limits",
     quotaEndpointStatus: "remaining-published",
     docs: Object.freeze([
       "https://code.claude.com/docs/en/cli-usage",

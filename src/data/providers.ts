@@ -11,7 +11,7 @@ export type QuotaConnectionState =
   | "stale"
   | "unsupported"
   | "error";
-export type QuotaSource = "example" | "codex-app-server" | "claude-statusline" | "unavailable";
+export type QuotaSource = "example" | "codex-app-server" | "claude-statusline" | "claude-usage-api" | "unavailable";
 export type QuotaConfidence = "example" | "verified" | "unavailable";
 export type AuthMethod = "oauth-pkce" | "provider-delegated" | "not-published";
 

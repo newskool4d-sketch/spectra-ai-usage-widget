@@ -536,6 +536,166 @@ fn claude_bridge_config_path() -> Option<PathBuf> {
     app_data_dir().map(|path| path.join("claude-statusline-bridge.json"))
 }
 
+// --- Claude direct usage lookup --------------------------------------------
+// The statusline bridge only receives data while a terminal Claude Code
+// session is rendering its status line. To let the refresh button fetch the
+// current windows on demand, we read the OAuth access token Claude Code keeps
+// in its own credentials file and query Anthropic's usage endpoint. The token
+// is read per request and never persisted or logged by SPECTRA.
+
+const CLAUDE_CREDENTIALS_ENV: &str = "SPECTRA_CLAUDE_CREDENTIALS";
+const CLAUDE_USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
+const CLAUDE_USAGE_TIMEOUT: Duration = Duration::from_secs(10);
+
+fn claude_credentials_path() -> Option<PathBuf> {
+    if let Some(path) = env::var_os(CLAUDE_CREDENTIALS_ENV) {
+        return Some(PathBuf::from(path));
+    }
+    env::var_os("USERPROFILE")
+        .or_else(|| env::var_os("HOME"))
+        .map(PathBuf::from)
+        .map(|path| path.join(".claude").join(".credentials.json"))
+}
+
+fn unix_now_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+fn read_claude_oauth_token_at(path: &Path, now_ms: u64) -> Result<String, String> {
+    let value = read_json(path)?;
+    let oauth = value
+        .get("claudeAiOauth")
+        .ok_or_else(|| "claude-oauth-token-missing".to_string())?;
+    let token = oauth
+        .get("accessToken")
+        .and_then(Value::as_str)
+        .filter(|token| !token.trim().is_empty())
+        .ok_or_else(|| "claude-oauth-token-missing".to_string())?;
+    if let Some(expires_at) = oauth.get("expiresAt").and_then(Value::as_u64) {
+        if expires_at <= now_ms {
+            return Err("claude-oauth-token-expired".to_string());
+        }
+    }
+    Ok(token.to_string())
+}
+
+/// Parses an RFC 3339 timestamp such as `2026-08-23T19:10:00Z`,
+/// `2026-08-23T19:10:00.123Z` or `2026-08-24T04:10:00+09:00` into unix
+/// seconds. Sub-second precision is dropped. Returns `None` on any syntax
+/// error rather than guessing.
+fn parse_rfc3339_seconds(input: &str) -> Option<u64> {
+    let input = input.trim();
+    if input.len() < 20 {
+        return None;
+    }
+    let bytes = input.as_bytes();
+    let num = |range: std::ops::Range<usize>| -> Option<i64> {
+        input.get(range)?.parse::<i64>().ok()
+    };
+    if bytes[4] != b'-' || bytes[7] != b'-' || (bytes[10] != b'T' && bytes[10] != b't') {
+        return None;
+    }
+    let year = num(0..4)?;
+    let month = num(5..7)?;
+    let day = num(8..10)?;
+    let hour = num(11..13)?;
+    let minute = num(14..16)?;
+    let second = num(17..19)?;
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) || hour > 23 || minute > 59 || second > 60 {
+        return None;
+    }
+    let mut rest = &input[19..];
+    if rest.starts_with('.') {
+        let digits = rest[1..]
+            .bytes()
+            .take_while(u8::is_ascii_digit)
+            .count();
+        rest = &rest[1 + digits..];
+    }
+    let offset_seconds: i64 = match rest {
+        "Z" | "z" => 0,
+        _ => {
+            let sign = match rest.as_bytes().first() {
+                Some(b'+') => 1,
+                Some(b'-') => -1,
+                _ => return None,
+            };
+            let rest_bytes = rest.as_bytes();
+            if rest_bytes.len() != 6 || rest_bytes[3] != b':' {
+                return None;
+            }
+            let oh = rest.get(1..3)?.parse::<i64>().ok()?;
+            let om = rest.get(4..6)?.parse::<i64>().ok()?;
+            sign * (oh * 3600 + om * 60)
+        }
+    };
+    // Days from civil (Howard Hinnant's algorithm), valid for the proleptic Gregorian calendar.
+    let (y, m) = if month <= 2 { (year - 1, month + 9) } else { (year, month - 3) };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let doy = (153 * m + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    let seconds = days * 86_400 + hour * 3_600 + minute * 60 + second - offset_seconds;
+    u64::try_from(seconds).ok()
+}
+
+fn parse_claude_usage_window(value: &Value) -> Option<ClaudeRateWindow> {
+    let used = value.get("utilization")?.as_f64()?.clamp(0.0, 100.0);
+    let resets_at = value.get("resets_at").and_then(|reset| {
+        reset
+            .as_u64()
+            .or_else(|| reset.as_str().and_then(parse_rfc3339_seconds))
+    });
+    Some(ClaudeRateWindow {
+        used_percentage: used,
+        resets_at,
+    })
+}
+
+fn parse_claude_usage_response(body: &Value, now: u64) -> Option<ClaudeUsageCache> {
+    let five_hour = body.get("five_hour").and_then(parse_claude_usage_window);
+    let seven_day = body.get("seven_day").and_then(parse_claude_usage_window);
+    (five_hour.is_some() || seven_day.is_some()).then(|| ClaudeUsageCache {
+        captured_at: now,
+        five_hour,
+        seven_day,
+    })
+}
+
+fn fetch_claude_usage_live(token: &str) -> Result<ClaudeUsageCache, String> {
+    let client = reqwest::Client::builder()
+        .user_agent(concat!("SPECTRA/", env!("CARGO_PKG_VERSION")))
+        .timeout(CLAUDE_USAGE_TIMEOUT)
+        .build()
+        .map_err(|_| "claude-usage-client-failed".to_string())?;
+    let body = tauri::async_runtime::block_on(async {
+        let response = client
+            .get(CLAUDE_USAGE_URL)
+            .bearer_auth(token)
+            .header("anthropic-beta", "oauth-2025-04-20")
+            .header("Accept", "application/json")
+            .send()
+            .await
+            .map_err(|_| "claude-usage-network-failed".to_string())?;
+        let status = response.status();
+        if status.as_u16() == 401 || status.as_u16() == 403 {
+            return Err("claude-usage-unauthorized".to_string());
+        }
+        if !status.is_success() {
+            return Err(format!("claude-usage-http-{}", status.as_u16()));
+        }
+        response
+            .json::<Value>()
+            .await
+            .map_err(|_| "claude-usage-invalid-json".to_string())
+    })?;
+    parse_claude_usage_response(&body, unix_now()).ok_or_else(|| "claude-usage-no-windows".to_string())
+}
+
 fn read_json(path: &Path) -> Result<Value, String> {
     if fs::metadata(path)
         .map_err(|_| "json-read-failed".to_string())?
@@ -625,9 +785,29 @@ fn claude_snapshot() -> ProviderUsageSnapshot {
     };
 
     let bridge_installed = claude_bridge_installed();
-    let cache = claude_cache_path()
-        .and_then(|path| fs::read_to_string(path).ok())
-        .and_then(|content| serde_json::from_str::<ClaudeUsageCache>(&content).ok());
+
+    // Prefer a direct lookup so the refresh button works even when no terminal
+    // Claude Code session is rendering the status line. On success the result
+    // is written to the same cache the statusline bridge uses, so both paths
+    // stay consistent; on failure we fall back to whatever the bridge last
+    // recorded and surface the reason.
+    let live_result = claude_credentials_path()
+        .ok_or_else(|| "claude-credentials-path-unavailable".to_string())
+        .and_then(|path| read_claude_oauth_token_at(&path, unix_now_millis()))
+        .and_then(|token| fetch_claude_usage_live(&token));
+    let live_error = live_result.as_ref().err().cloned();
+    let source_is_live = live_result.is_ok();
+    let cache = match live_result {
+        Ok(fresh) => {
+            if let (Some(path), Ok(value)) = (claude_cache_path(), serde_json::to_value(&fresh)) {
+                let _ = write_json(&path, &value);
+            }
+            Some(fresh)
+        }
+        Err(_) => claude_cache_path()
+            .and_then(|path| fs::read_to_string(path).ok())
+            .and_then(|content| serde_json::from_str::<ClaudeUsageCache>(&content).ok()),
+    };
     let mut windows = Vec::new();
     let mut captured_at = None;
     let mut stale = false;
@@ -668,16 +848,38 @@ fn claude_snapshot() -> ProviderUsageSnapshot {
     } else {
         "waiting-for-usage"
     };
+    let live_failure_hint = match live_error.as_deref() {
+        Some("claude-oauth-token-expired") => {
+            Some("Claude Code 로그인 토큰이 만료됐습니다. Claude Code를 한 번 실행하면 갱신됩니다.")
+        }
+        Some("claude-usage-unauthorized") => {
+            Some("Claude 사용량 직접 조회가 거부됐습니다. Claude Code에서 다시 로그인해 주세요.")
+        }
+        Some("claude-usage-network-failed") => Some("Claude 사용량 서버에 연결하지 못했습니다."),
+        Some("json-read-failed") | Some("claude-oauth-token-missing") => {
+            Some("Claude Code 로그인 정보를 찾지 못해 상태선 캐시만 사용합니다.")
+        }
+        Some(_) => Some("Claude 사용량 직접 조회에 실패해 상태선 캐시만 사용합니다."),
+        None => None,
+    };
     let message = if env::var_os("ANTHROPIC_API_KEY").is_some() {
-        "ANTHROPIC_API_KEY가 구독 로그인보다 우선할 수 있습니다."
-    } else if !bridge_installed {
-        "로그인은 확인됐습니다. 사용량 브리지를 설치하면 5시간·주간 한도를 표시합니다."
+        "ANTHROPIC_API_KEY가 구독 로그인보다 우선할 수 있습니다.".to_string()
+    } else if source_is_live {
+        "Claude 공식 사용량을 직접 조회했습니다.".to_string()
     } else if !has_usage {
-        "브리지 설치 완료. Claude Code에서 응답을 한 번 받은 뒤 동기화됩니다."
+        match live_failure_hint {
+            Some(hint) if bridge_installed => format!("{hint} 터미널 Claude Code에서 응답을 한 번 받으면 동기화됩니다."),
+            Some(hint) => format!("{hint} 사용량 브리지를 설치하면 Claude Code 사용 시 자동 동기화됩니다."),
+            None if !bridge_installed => "로그인은 확인됐습니다. 사용량 브리지를 설치하면 5시간·주간 한도를 표시합니다.".to_string(),
+            None => "브리지 설치 완료. Claude Code에서 응답을 한 번 받은 뒤 동기화됩니다.".to_string(),
+        }
     } else if stale {
-        "마지막 Claude Code 활동 이후 한도 창이 갱신되지 않았습니다."
+        match live_failure_hint {
+            Some(hint) => format!("{hint} 마지막 동기화 값을 표시합니다."),
+            None => "마지막 Claude Code 활동 이후 한도 창이 갱신되지 않았습니다.".to_string(),
+        }
     } else {
-        "Claude Code 공식 상태선 한도를 동기화했습니다."
+        "Claude Code 공식 상태선 한도를 동기화했습니다.".to_string()
     };
     ProviderUsageSnapshot {
         provider_id: "claude".to_string(),
@@ -686,11 +888,17 @@ fn claude_snapshot() -> ProviderUsageSnapshot {
         connection_state: connection_state.to_string(),
         auth_method: status.auth_method,
         plan_type: status.subscription_type,
-        source: has_usage.then(|| "claude-statusline".to_string()),
+        source: has_usage.then(|| {
+            if source_is_live {
+                "claude-usage-api".to_string()
+            } else {
+                "claude-statusline".to_string()
+            }
+        }),
         last_synced_at: captured_at,
         bridge_installed,
         windows,
-        message: message.to_string(),
+        message,
     }
 }
 
@@ -1080,6 +1288,96 @@ mod tests {
         assert_eq!(windows.len(), 1);
         assert_eq!(windows[0].id, "weekly");
         assert_eq!(windows[0].label, "주간 한도");
+    }
+
+    #[test]
+    fn parses_rfc3339_timestamps_into_unix_seconds() {
+        // 2026-08-23T19:10:00Z == 1787512200 (verified via python calendar.timegm)
+        assert_eq!(parse_rfc3339_seconds("2026-08-23T19:10:00Z"), Some(1_787_512_200));
+        assert_eq!(
+            parse_rfc3339_seconds("2026-08-23T19:10:00.123456Z"),
+            Some(1_787_512_200)
+        );
+        // Same instant expressed in KST (+09:00) must map to the same epoch.
+        assert_eq!(
+            parse_rfc3339_seconds("2026-08-24T04:10:00+09:00"),
+            Some(1_787_512_200)
+        );
+        assert_eq!(parse_rfc3339_seconds("not a date"), None);
+        assert_eq!(parse_rfc3339_seconds(""), None);
+    }
+
+    #[test]
+    fn parses_claude_usage_api_response_into_cache() {
+        let body = json!({
+            "five_hour": { "utilization": 9.0, "resets_at": "2026-08-23T19:10:00Z" },
+            "seven_day": { "utilization": 31.0, "resets_at": "2026-08-23T23:00:00Z" },
+            "seven_day_opus": { "utilization": 2.0, "resets_at": "2026-08-23T23:00:00Z" }
+        });
+        let cache = parse_claude_usage_response(&body, 1_787_483_484).unwrap();
+        assert_eq!(cache.captured_at, 1_787_483_484);
+        let five = cache.five_hour.unwrap();
+        assert_eq!(five.used_percentage, 9.0);
+        assert_eq!(five.resets_at, Some(1_787_512_200));
+        let seven = cache.seven_day.unwrap();
+        assert_eq!(seven.used_percentage, 31.0);
+        assert_eq!(seven.resets_at, Some(1_787_526_000));
+    }
+
+    #[test]
+    fn claude_usage_response_accepts_epoch_resets_and_clamps_utilization() {
+        let body = json!({
+            "five_hour": { "utilization": 140.0, "resets_at": 1_787_479_800 },
+            "seven_day": { "utilization": -5.0 }
+        });
+        let cache = parse_claude_usage_response(&body, 1).unwrap();
+        assert_eq!(cache.five_hour.as_ref().unwrap().used_percentage, 100.0);
+        assert_eq!(cache.five_hour.unwrap().resets_at, Some(1_787_479_800));
+        let seven = cache.seven_day.unwrap();
+        assert_eq!(seven.used_percentage, 0.0);
+        assert_eq!(seven.resets_at, None);
+    }
+
+    #[test]
+    fn claude_usage_response_without_any_window_is_rejected() {
+        assert!(parse_claude_usage_response(&json!({ "extra_usage": {} }), 1).is_none());
+        assert!(parse_claude_usage_response(&json!("nope"), 1).is_none());
+    }
+
+    #[test]
+    fn reads_claude_oauth_token_only_while_unexpired() {
+        let root = temp_dir("claude-oauth");
+        let path = root.join(".credentials.json");
+        let now_ms: u64 = 1_787_483_484_000;
+        write_json(
+            &path,
+            &json!({ "claudeAiOauth": { "accessToken": "sk-ant-test", "expiresAt": now_ms + 600_000 } }),
+        )
+        .unwrap();
+        let token = read_claude_oauth_token_at(&path, now_ms).unwrap();
+        assert_eq!(token, "sk-ant-test");
+
+        write_json(
+            &path,
+            &json!({ "claudeAiOauth": { "accessToken": "sk-ant-old", "expiresAt": now_ms - 1 } }),
+        )
+        .unwrap();
+        assert_eq!(
+            read_claude_oauth_token_at(&path, now_ms).unwrap_err(),
+            "claude-oauth-token-expired"
+        );
+
+        write_json(&path, &json!({ "mcpOAuth": {} })).unwrap();
+        assert_eq!(
+            read_claude_oauth_token_at(&path, now_ms).unwrap_err(),
+            "claude-oauth-token-missing"
+        );
+
+        assert_eq!(
+            read_claude_oauth_token_at(&root.join("nope.json"), now_ms).unwrap_err(),
+            "json-read-failed"
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

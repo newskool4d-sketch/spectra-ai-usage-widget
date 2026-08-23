@@ -63,7 +63,7 @@ export type NativeProviderUsageSnapshot = Readonly<{
   connectionState: "not-installed" | "signed-out" | "waiting-for-usage" | "connected" | "stale" | "error";
   authMethod: string | null;
   planType: string | null;
-  source: "codex-app-server" | "claude-statusline" | null;
+  source: "codex-app-server" | "claude-statusline" | "claude-usage-api" | null;
   lastSyncedAt: number | null;
   bridgeInstalled: boolean;
   windows: readonly NativeProviderQuotaWindow[];

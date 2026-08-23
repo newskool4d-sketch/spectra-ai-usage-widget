@@ -7,7 +7,7 @@ SPECTRA 0.2의 활성 공급자는 **OpenAI Codex**와 **Claude** 두 가지입�
 | 공급자 | 계정 연결 | 개인 요금제 잔여량 | SPECTRA 구현 |
 | --- | --- | --- | --- |
 | Codex | `codex login`의 ChatGPT 브라우저 로그인. 토큰 저장·갱신은 Codex가 관리 | App Server `account/rateLimits/read`의 `usedPercent`, `windowDurationMins`, `resetsAt` | 로컬 stdio App Server를 요청 때만 실행하고 응답 후 즉시 종료 |
-| Claude | `claude auth login`의 Claude.ai 로그인. 토큰은 Claude Code가 관리 | 공식 status line 입력의 `rate_limits.five_hour`·`seven_day` | 사용자가 동의하면 상태선 브리지를 설치하고 한도 필드만 정제해 로컬 캐시 |
+| Claude | `claude auth login`의 Claude.ai 로그인. 토큰은 Claude Code가 관리 | ① 새로고침 시 Claude Code가 보관한 OAuth 액세스 토큰으로 `api.anthropic.com/api/oauth/usage`의 `five_hour`·`seven_day`(`utilization`, `resets_at`) 직접 조회 ② 실패 시 공식 status line 입력의 `rate_limits.five_hour`·`seven_day` 캐시로 폴백 | 토큰은 요청 시 `~/.claude/.credentials.json`에서 읽기만 하고 저장·로그하지 않음. 상태선 브리지는 사용자가 동의하면 설치하며 두 경로가 같은 로컬 캐시를 공유 |
 
 ## 구현 경계
 
@@ -16,6 +16,7 @@ SPECTRA 0.2의 활성 공급자는 **OpenAI Codex**와 **Claude** 두 가지입�
 - Codex App Server 연결은 `initialize` → `initialized` 핸드셰이크 뒤 `account/read`와 `account/rateLimits/read`만 호출합니다.
 - Claude 브리지는 `rate_limits.*.used_percentage`, `rate_limits.*.resets_at`, 캡처 시각만 저장합니다. 세션 ID, 작업 경로, 대화 기록, 토큰 수, 비용은 저장하지 않습니다.
 - Claude의 기존 `statusLine` 설정은 설치 전에 보존하고 브리지 제거 시 복원합니다. 기존 명령이 있으면 그 출력도 이어서 표시합니다.
+- Claude 직접 조회는 `claudeAiOauth.accessToken`만 메모리에서 사용하고 만료(`expiresAt`)·401/403·네트워크 오류 시 조회를 포기하고 캐시로 폴백합니다. 토큰 갱신(refresh)은 시도하지 않으며 Claude Code에 맡깁니다. `SPECTRA_CLAUDE_CREDENTIALS` 환경변수로 경로를 바꿀 수 있습니다. 이 엔드포인트는 Anthropic 공개 문서에 없는 비공식 경로이므로 변경 시 폴백 경로가 안전망입니다.
 - React 상태·브라우저 저장소·Tauri 이벤트에는 provider access token이나 refresh token을 넣지 않습니다.
 - 조직 API 사용량은 이번 개인 구독 잔여량 기능에 포함하지 않습니다.
 

@@ -84,7 +84,7 @@ function quotaFromSnapshot(snapshot: NativeProviderUsageSnapshot, fallback: Plan
       : snapshot.connectionState === "waiting-for-usage"
         ? "waiting"
         : snapshot.connectionState;
-  const verified = snapshot.windows.length > 0 && (snapshot.source === "codex-app-server" || snapshot.source === "claude-statusline");
+  const verified = snapshot.windows.length > 0 && (snapshot.source === "codex-app-server" || snapshot.source === "claude-statusline" || snapshot.source === "claude-usage-api");
   const windows = snapshot.windows.length > 0
     ? snapshot.windows.map(window => ({
         id: window.id,
@@ -152,6 +152,7 @@ function connectionLabel(quota: PlanQuota) {
 function sourceLabel(quota: PlanQuota) {
   if (quota.source === "codex-app-server") return "Codex 공식 App Server";
   if (quota.source === "claude-statusline") return "Claude Code 공식 상태선";
+  if (quota.source === "claude-usage-api") return "Claude 공식 사용량 조회";
   if (quota.source === "unavailable") return "실제 사용량 데이터 대기";
   return "브라우저 데모 수치";
 }
