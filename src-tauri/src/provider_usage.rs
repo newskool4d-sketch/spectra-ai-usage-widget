@@ -70,12 +70,10 @@ struct CommandSpec {
 impl CommandSpec {
     fn command(&self, args: &[&str]) -> Command {
         let mut command = match self.kind {
-            CommandKind::Direct => Command::new(&self.path),
-            CommandKind::Cmd => {
-                let mut command = Command::new("cmd.exe");
-                command.args(["/D", "/S", "/C"]).arg(&self.path);
-                command
-            }
+            // Rust 1.77.2+ spawns .bat/.cmd through cmd.exe itself with safe quoting
+            // (BatBadBut mitigation), so paths with spaces work. Wrapping in our own
+            // `cmd.exe /S /C` stripped the quotes around such paths and broke them.
+            CommandKind::Direct | CommandKind::Cmd => Command::new(&self.path),
             CommandKind::PowerShell => {
                 let mut command = Command::new("powershell.exe");
                 command
@@ -1249,6 +1247,7 @@ pub fn run_provider_snapshot_cli() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsStr;
 
     fn temp_dir(name: &str) -> PathBuf {
         let path = env::temp_dir().join(format!("spectra-{name}-{}", uuid::Uuid::new_v4()));
@@ -1470,5 +1469,18 @@ mod tests {
         let rejected = vec![b'x'; MAX_STATUSLINE_INPUT_BYTES as usize + 1];
         assert!(read_statusline_input(std::io::Cursor::new(accepted)).is_some());
         assert!(read_statusline_input(std::io::Cursor::new(rejected)).is_none());
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn cmd_scripts_run_directly_so_std_handles_quoting() {
+        let spec = CommandSpec {
+            path: PathBuf::from(r"C:\Program Files\Codex Tools\codex.cmd"),
+            kind: CommandKind::Cmd,
+        };
+        let command = spec.command(&["app-server", "--stdio"]);
+        assert_eq!(command.get_program(), spec.path.as_os_str());
+        let args: Vec<_> = command.get_args().collect();
+        assert_eq!(args, [OsStr::new("app-server"), OsStr::new("--stdio")]);
     }
 }
