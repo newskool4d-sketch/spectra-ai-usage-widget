@@ -7,3 +7,4 @@ coverage/
 Thumbs.db
 src-tauri/icons/
 src-tauri/target/
+docs/performance/measurements/

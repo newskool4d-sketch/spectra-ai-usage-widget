@@ -12,7 +12,8 @@
     "desktop:build": "tauri build --bundles nsis",
     "verify:baseline": "node scripts/verify-design-baseline.mjs",
     "verify:tokens": "node scripts/verify-design-tokens.mjs",
-    "verify:memory": "node scripts/verify-memory-budget.mjs"
+    "verify:memory": "node scripts/verify-memory-budget.mjs",
+    "measure:memory": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/measure-memory.ps1"
   },
   "dependencies": {
     "react": "^19.2.8",
