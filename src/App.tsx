@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Icon, type IconName } from "./components/Icon";
 import { Sparkline } from "./components/Sparkline";
+import { createRefreshSequencer } from "./data/refresh-sequence";
 import { metricLabels, planQuotas, providers, rangeLabels, usageBars, type AuthMethod, type Metric, type PlanQuota, type Provider, type ProviderId, type QuotaWindow, type QuotaWindowId, type UsageRange } from "./data/providers";
 import { providerCapabilities, type ProviderCapability } from "./integrations/provider-capabilities";
 import { getNativeProviderUsage, installNativeProviderBridge, isTauriRuntime, removeNativeProviderBridge, startNativeProviderLogin, type NativeProviderActionResult, type NativeProviderUsageSnapshot } from "./integrations/tauri-native-bridge";
@@ -491,6 +492,7 @@ export function App() {
   const [actionFeedback, setActionFeedback] = useState<ProviderActionFeedback | null>(null);
   const [loginPollingProviderId, setLoginPollingProviderId] = useState<ProviderId | null>(null);
   const initialRefreshStarted = useRef(false);
+  const refreshSequence = useRef(createRefreshSequencer<ProviderId>()).current;
   const activeProvider = useMemo(() => providers.find(provider => provider.id === activeProviderId) ?? providers[0], [activeProviderId]);
   const activeQuota = quotas[activeProviderId];
   const oauthProvider = useMemo(() => providers.find(provider => provider.id === oauthProviderId) ?? providers[0], [oauthProviderId]);
@@ -501,12 +503,15 @@ export function App() {
   }, [theme]);
 
   const refreshProvider = useCallback(async (id: ProviderId) => {
+    const ticket = refreshSequence.begin(id);
     try {
       const snapshot = await getNativeProviderUsage(id);
       if (!snapshot) return null;
+      if (!refreshSequence.isCurrent(id, ticket)) return snapshot;
       setQuotas(current => ({ ...current, [id]: quotaFromSnapshot(snapshot, planQuotas[id]) }));
       return snapshot;
     } catch (error) {
+      if (!refreshSequence.isCurrent(id, ticket)) return null;
       const message = error instanceof Error ? error.message : "공식 사용량을 불러오지 못했습니다.";
       setQuotas(current => {
         const previous = current[id];
@@ -524,7 +529,7 @@ export function App() {
       });
       return null;
     }
-  }, []);
+  }, [refreshSequence]);
 
   const refresh = useCallback(async () => {
     setRefreshing(true);
