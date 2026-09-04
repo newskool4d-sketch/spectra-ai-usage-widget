@@ -7,13 +7,6 @@
 }
 @font-face {
   font-family: "Pretendard Variable";
-  font-weight: 500;
-  font-style: normal;
-  font-display: swap;
-  src: url("./fonts/Pretendard-Medium.subset.woff2") format("woff2");
-}
-@font-face {
-  font-family: "Pretendard Variable";
   font-weight: 600;
   font-style: normal;
   font-display: swap;
@@ -87,7 +80,8 @@
 
   /* Fonts — self-hosted so the UI font stays consistent regardless of what's
      installed on the user's machine. Static subset (Korean + Latin only,
-     not the full variable font) at the 4 weights this stylesheet uses. */
+     not the full variable font) at the 3 weights this stylesheet uses:
+     400 (body), 600 (labels), 700 (headings and numbers). */
 
   /* Typography */
   --font-ui: "Pretendard Variable", Pretendard, "Noto Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", "Segoe UI", sans-serif;

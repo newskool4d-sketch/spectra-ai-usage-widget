@@ -53,9 +53,9 @@ if (existsSync(distAssets)) {
 }
 
 const maxJsBytes = 500_000;
-const maxCssBytes = 45_000;
-const maxFontBytes = 1_100_000;
-const maxFontFiles = 4;
+const maxCssBytes = 34_000;
+const maxFontBytes = 820_000;
+const maxFontFiles = 3;
 if (jsBytes > maxJsBytes) failures.push(`JavaScript bundle ${jsBytes} bytes exceeds ${maxJsBytes} byte structural budget`);
 if (jsFiles > 3) failures.push(`JavaScript asset count ${jsFiles} exceeds 3`);
 if (cssBytes > maxCssBytes) failures.push(`CSS bundle ${cssBytes} bytes exceeds ${maxCssBytes}`);
