@@ -7,10 +7,12 @@ const projectRoot = path.resolve(scriptDirectory, "..");
 const tokenPath = path.join(projectRoot, "styles", "tokens.css");
 const stylePath = path.join(projectRoot, "styles.css");
 const indexPath = path.join(projectRoot, "index.html");
+const prototypePath = path.join(projectRoot, "styles", "prototype.css");
 const manifestPath = path.join(projectRoot, "docs", "design-baseline", "baseline.json");
-const [tokens, styles, indexHtml, manifest] = await Promise.all([
+const [tokens, styles, prototype, indexHtml, manifest] = await Promise.all([
   readFile(tokenPath, "utf8"),
   readFile(stylePath, "utf8"),
+  readFile(prototypePath, "utf8"),
   readFile(indexPath, "utf8"),
   readFile(manifestPath, "utf8").then(JSON.parse)
 ]);
@@ -39,6 +41,9 @@ if (tokenLink === -1 || styleLink === -1 || tokenLink > styleLink) {
   failures.push("tokens.css가 styles.css보다 먼저 로드되지 않습니다.");
 }
 if (/:root\s*\{/.test(styles)) failures.push("styles.css에 토큰 선언 블록이 남아 있습니다.");
+if (/:root\s*\{/.test(prototype)) failures.push("prototype.css에 토큰 선언 블록이 있습니다.");
+if (!/orbit-app/.test(prototype)) failures.push("B 시안 규칙이 prototype.css에 없습니다.");
+if (/orbit-|prototype-switcher|widget-lab/.test(styles)) failures.push("제품 styles.css에 프로토타입 전용 규칙이 남아 있습니다.");
 if (!/font-family:\s*var\(--font-ui\)/.test(styles)) failures.push("본문이 --font-ui 토큰을 사용하지 않습니다.");
 if (!/var\(--glass-card-blur\)/.test(styles)) failures.push("카드가 --glass-card-blur 토큰을 사용하지 않습니다.");
 if (!/var\(--space-6\)/.test(styles)) failures.push("화면 간격이 --space-6 토큰을 사용하지 않습니다.");
