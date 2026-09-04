@@ -659,7 +659,7 @@ fn parse_claude_usage_window(value: &Value) -> Option<ClaudeRateWindow> {
 fn parse_claude_usage_response(body: &Value, now: u64) -> Option<ClaudeUsageCache> {
     let five_hour = body.get("five_hour").and_then(parse_claude_usage_window);
     let seven_day = body.get("seven_day").and_then(parse_claude_usage_window);
-    (five_hour.is_some() || seven_day.is_some()).then(|| ClaudeUsageCache {
+    (five_hour.is_some() || seven_day.is_some()).then_some(ClaudeUsageCache {
         captured_at: now,
         five_hour,
         seven_day,
