@@ -14,6 +14,8 @@ const CLAUDE_BRIDGE_FLAG: &str = "--claude-statusline-bridge";
 const PROVIDER_SNAPSHOT_FLAG: &str = "--provider-snapshot";
 const RPC_TIMEOUT: Duration = Duration::from_secs(12);
 const STATUSLINE_COMMAND_TIMEOUT: Duration = Duration::from_secs(2);
+const CLAUDE_AUTH_TIMEOUT: Duration = Duration::from_secs(5);
+const MAX_COMMAND_OUTPUT_BYTES: u64 = 256 * 1024;
 const MAX_CODEX_RPC_STREAM_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_JSON_FILE_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_STATUSLINE_INPUT_BYTES: u64 = 1024 * 1024;
@@ -734,13 +736,60 @@ fn claude_bridge_installed() -> bool {
         .is_some_and(claude_bridge_installed_at)
 }
 
-fn command_output(spec: &CommandSpec, args: &[&str]) -> Result<Output, String> {
-    spec.command(args)
-        .stdin(Stdio::null())
+/// Spawns `command` and waits at most `timeout` for it, capping stdout at
+/// `max_stdout` bytes. Used for short provider CLI probes such as
+/// `claude auth status`, which previously could hang the refresh forever.
+fn output_with_timeout(command: &mut Command, timeout: Duration, max_stdout: u64) -> Result<Output, String> {
+    let child = command
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
-        .output()
-        .map_err(|_| "provider-command-failed".to_string())
+        .spawn()
+        .map_err(|_| "provider-command-failed".to_string())?;
+    wait_with_timeout(child, timeout, max_stdout)
+}
+
+/// Drains the child's stdout on a helper thread (so a chatty child cannot
+/// dead-lock on a full pipe) and kills it once `timeout` passes.
+fn wait_with_timeout(mut child: Child, timeout: Duration, max_stdout: u64) -> Result<Output, String> {
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "provider-command-failed".to_string())?;
+    let reader = std::thread::spawn(move || {
+        let mut buffer = Vec::new();
+        let _ = stdout.take(max_stdout + 1).read_to_end(&mut buffer);
+        buffer
+    });
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("provider-command-timeout".to_string());
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(15)),
+            Err(_) => return Err("provider-command-failed".to_string()),
+        }
+    };
+    let stdout = reader
+        .join()
+        .map_err(|_| "provider-command-failed".to_string())?;
+    if stdout.len() as u64 > max_stdout {
+        return Err("provider-command-output-too-large".to_string());
+    }
+    Ok(Output {
+        status,
+        stdout,
+        stderr: Vec::new(),
+    })
+}
+
+fn command_output(spec: &CommandSpec, args: &[&str]) -> Result<Output, String> {
+    let mut command = spec.command(args);
+    command.stdin(Stdio::null());
+    output_with_timeout(&mut command, CLAUDE_AUTH_TIMEOUT, MAX_COMMAND_OUTPUT_BYTES)
 }
 
 fn claude_snapshot() -> ProviderUsageSnapshot {
@@ -1128,48 +1177,29 @@ fn run_previous_statusline(command: &str, input: &[u8]) -> Option<String> {
         return None;
     }
     #[cfg(target_os = "windows")]
-    let mut child = Command::new("cmd.exe")
-        .args(["/D", "/S", "/C", command])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
+    let mut shell = {
+        let mut shell = Command::new("cmd.exe");
+        shell.args(["/D", "/S", "/C", command]);
+        shell
+    };
     #[cfg(not(target_os = "windows"))]
-    let mut child = Command::new("sh")
-        .args(["-c", command])
+    let mut shell = {
+        let mut shell = Command::new("sh");
+        shell.args(["-c", command]);
+        shell
+    };
+    let mut child = shell
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
         .ok()?;
     child.stdin.take()?.write_all(input).ok()?;
-    let deadline = Instant::now() + STATUSLINE_COMMAND_TIMEOUT;
-    let status = loop {
-        if let Some(status) = child.try_wait().ok()? {
-            break status;
-        }
-        if Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            return None;
-        }
-        std::thread::sleep(Duration::from_millis(15));
-    };
-    if !status.success() {
+    let output = wait_with_timeout(child, STATUSLINE_COMMAND_TIMEOUT, MAX_STATUSLINE_OUTPUT_BYTES).ok()?;
+    if !output.status.success() {
         return None;
     }
-    let mut output = Vec::new();
-    child
-        .stdout
-        .take()?
-        .take(MAX_STATUSLINE_OUTPUT_BYTES + 1)
-        .read_to_end(&mut output)
-        .ok()?;
-    if output.len() as u64 > MAX_STATUSLINE_OUTPUT_BYTES {
-        return None;
-    }
-    Some(String::from_utf8_lossy(&output).trim_end().to_string())
+    Some(String::from_utf8_lossy(&output.stdout).trim_end().to_string())
 }
 
 fn read_statusline_input(reader: impl Read) -> Option<Vec<u8>> {
@@ -1482,5 +1512,35 @@ mod tests {
         assert_eq!(command.get_program(), spec.path.as_os_str());
         let args: Vec<_> = command.get_args().collect();
         assert_eq!(args, [OsStr::new("app-server"), OsStr::new("--stdio")]);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn output_with_timeout_kills_slow_child() {
+        let mut command = Command::new("powershell.exe");
+        command.args(["-NoProfile", "-Command", "Start-Sleep -Seconds 5"]);
+        let started = Instant::now();
+        let result = output_with_timeout(&mut command, Duration::from_millis(300), 1024);
+        assert_eq!(result.unwrap_err(), "provider-command-timeout");
+        assert!(started.elapsed() < Duration::from_secs(3));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn output_with_timeout_returns_stdout() {
+        let mut command = Command::new("cmd.exe");
+        command.args(["/D", "/C", "echo spectra"]);
+        let output = output_with_timeout(&mut command, Duration::from_secs(5), 1024).unwrap();
+        assert!(output.status.success());
+        assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "spectra");
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn output_with_timeout_rejects_oversized_stdout() {
+        let mut command = Command::new("cmd.exe");
+        command.args(["/D", "/C", "echo 0123456789abcdef"]);
+        let result = output_with_timeout(&mut command, Duration::from_secs(5), 4);
+        assert_eq!(result.unwrap_err(), "provider-command-output-too-large");
     }
 }
