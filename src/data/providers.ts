@@ -22,6 +22,8 @@ export type QuotaWindow = Readonly<{
   remainingPercent: number;
   resetLabel: string;
   kindLabel: string;
+  resetsAt?: number | null;
+  windowDurationMins?: number | null;
 }>;
 
 export type PlanQuota = Readonly<{
