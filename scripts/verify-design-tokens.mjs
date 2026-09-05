@@ -26,7 +26,8 @@ const requiredTokens = [
   "--shadow-card",
   "--glass-nav-blur",
   "--color-cyan",
-  "--color-coral"
+  "--color-coral",
+  "--color-surface-subtle"
 ];
 
 for (const token of requiredTokens) {
@@ -52,6 +53,10 @@ if (!/var\(--shadow-card\)/.test(styles)) failures.push("카드가 --shadow-card
 if (manifest.tokenSource !== "styles/tokens.css" || manifest.tokenRevision !== 1) {
   failures.push("기준선 매니페스트의 토큰 출처 또는 버전이 맞지 않습니다.");
 }
+
+const hardcodedWhite = /#fff(?:fff)?\b|rgba\(\s*255\s*,\s*255\s*,\s*255/i;
+const whiteLines = styles.split("\n").flatMap((line, index) => hardcodedWhite.test(line) ? [index + 1] : []);
+if (whiteLines.length > 0) failures.push(`styles.css에 하드코딩 화이트가 남아 있습니다 (lines: ${whiteLines.join(", ")})`);
 
 const tokenCount = (tokens.match(/--[a-z0-9-]+\s*:/g) ?? []).length;
 if (tokenCount < 40) failures.push(`토큰 수가 너무 적습니다: ${tokenCount}`);

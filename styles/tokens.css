@@ -38,6 +38,7 @@
   --color-surface-inner: #272824;
   --color-surface-control: rgba(255, 255, 255, .045);
   --color-surface-control-soft: rgba(255, 255, 255, .035);
+  --color-surface-subtle: rgba(255, 255, 255, .025);
   --color-surface-control-active: rgba(255, 255, 255, .09);
   --color-control-hover: rgba(255, 255, 255, .09);
   --color-line: rgba(245, 239, 229, .1);
@@ -157,6 +158,7 @@
   --color-surface-inner: #e8ede7;
   --color-surface-control: rgba(32, 35, 31, .045);
   --color-surface-control-soft: rgba(32, 35, 31, .035);
+  --color-surface-subtle: rgba(32, 35, 31, .025);
   --color-surface-control-active: rgba(32, 35, 31, .1);
   --color-control-hover: rgba(32, 35, 31, .1);
   --color-line: rgba(32, 35, 31, .12);
