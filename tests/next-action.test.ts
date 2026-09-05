@@ -31,10 +31,10 @@ describe("computeNextAction", () => {
 
   it("breaks a tie by the later reset time", () => {
     const result = computeNextAction({
-      codex: connected("codex", [window({ remainingPercent: 50, resetsAt: base + 3 * hour })]),
-      claude: connected("claude", [window({ remainingPercent: 50, resetsAt: base + 1 * hour })])
+      codex: connected("codex", [window({ remainingPercent: 50, resetsAt: base + 1 * hour })]),
+      claude: connected("claude", [window({ remainingPercent: 50, resetsAt: base + 3 * hour })])
     });
-    assert.equal(result.recommendedProvider, "codex");
+    assert.equal(result.recommendedProvider, "claude");
   });
 
   it("keeps provider order when tied and reset time is unknown", () => {
