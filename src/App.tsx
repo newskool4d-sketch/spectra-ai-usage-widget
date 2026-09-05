@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Icon, type IconName } from "./components/Icon";
 import { Sparkline } from "./components/Sparkline";
+import { computeNextAction } from "./data/next-action";
 import { createRefreshSequencer } from "./data/refresh-sequence";
 import { metricLabels, planQuotas, providers, rangeLabels, usageBars, type AuthMethod, type Metric, type PlanQuota, type Provider, type ProviderId, type QuotaWindow, type QuotaWindowId, type UsageRange } from "./data/providers";
 import { providerCapabilities, type ProviderCapability } from "./integrations/provider-capabilities";
@@ -260,6 +261,15 @@ const QuotaCell = memo(function QuotaCell({ provider, window, available }: Reado
   </div>;
 });
 
+const NextActionStrip = memo(function NextActionStrip({ quotas, eyebrow }: Readonly<{ quotas: QuotaRecord; eyebrow?: string }>) {
+  const action = useMemo(() => computeNextAction(quotas), [quotas]);
+  return <div className="next-action">
+    {eyebrow ? <span className="eyebrow">{eyebrow}</span> : null}
+    <h1>{action.headline}</h1>
+    <ul className="next-action-chips" aria-label="판단 근거">{action.chips.map(chip => <li key={chip}>{chip}</li>)}</ul>
+  </div>;
+});
+
 const QuotaBoard = memo(function QuotaBoard({ quotas }: Readonly<{ quotas: QuotaRecord }>) {
   const windowIds: readonly QuotaWindowId[] = ["rolling", "weekly"];
   return <div className="quota-board span-2" role="group" aria-label="공급자별 한도 현황">
@@ -408,7 +418,7 @@ function viewCopy(view: ProductView) {
   if (view === "trend") return { eyebrow: "추이", title: "현재 한도 창을\n살펴봅니다." };
   if (view === "alerts") return { eyebrow: "알림", title: "지금 확인할\n항목입니다." };
   if (view === "settings") return { eyebrow: "설정", title: "사용 환경을\n조정합니다." };
-  return { eyebrow: "개요 · 오늘", title: "오늘 쓸 수 있는 양을\n한눈에 봅니다." };
+  return { eyebrow: "개요 · 오늘", title: "" };
 }
 
 type ViewPanelProps = Omit<SharedViewProps, "onView">;
@@ -435,7 +445,9 @@ const VariantADesktop = memo(function VariantADesktop({ view, onView, activeProv
     <NavRail view={view} onView={onView} />
     <section className="app-surface command-center">
       <header className="app-header">
-        <div><span className="eyebrow">{copy.eyebrow}</span><h1>{copy.title.split("\n").map((line, index) => <span key={line}>{index > 0 ? <br /> : null}{index === copy.title.split("\n").length - 1 ? <em>{line}</em> : line}</span>)}</h1></div>
+        {view === "overview"
+          ? <NextActionStrip quotas={quotas} eyebrow={copy.eyebrow} />
+          : <div><span className="eyebrow">{copy.eyebrow}</span><h1>{copy.title.split("\n").map((line, index) => <span key={line}>{index > 0 ? <br /> : null}{index === copy.title.split("\n").length - 1 ? <em>{line}</em> : line}</span>)}</h1></div>}
         <TopActions {...actions} />
       </header>
       {view === "overview" ? <><div className="dashboard-toolbar"><MetricTabs metric={metric} onMetric={onMetric} /><RangeTabs range={range} onRange={onRange} /></div><div className="bento-grid">
@@ -464,7 +476,7 @@ const VariantCMobile = memo(function VariantCMobile({ view, onView, activeProvid
   const now = new Date();
   return <div className="product-shell variant-c"><section className="stream-app"><div className="stream-layout"><section className="mobile-stream">
     <div className="mobile-top"><span>{mobileClockFormatter.format(now)}</span><div><i /><i /><i /></div></div>
-    <div className="mobile-title"><div><span className="eyebrow">{mobileDateFormatter.format(now)}</span><h1>사용 현황</h1></div><button type="button" className="icon-button" aria-label="알림"><Icon name="bell" size={18} /><span className="notification-dot" /></button></div>
+    <div className="mobile-title">{view === "overview" ? <NextActionStrip quotas={quotas} eyebrow={mobileDateFormatter.format(now)} /> : <div><span className="eyebrow">{mobileDateFormatter.format(now)}</span><h1>사용 현황</h1></div>}<button type="button" className="icon-button" aria-label="알림"><Icon name="bell" size={18} /><span className="notification-dot" /></button></div>
     {view === "overview" ? <><QuotaBoard quotas={quotas} />
     <div className="chip-scroll" role="group" aria-label="서비스 선택">{providers.map(provider => <ProviderChip key={provider.id} provider={provider} quota={quotas[provider.id]} active={provider.id === activeProviderId} onSelect={onProvider} />)}</div>
     <OAuthConnectCard provider={activeProvider} quota={activeQuota} compact onOpen={onOpenOAuth} />

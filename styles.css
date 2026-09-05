@@ -57,6 +57,11 @@ h1 em { color: var(--color-heading-em); font-style: normal; }
 .command-center::after { display: none; }
 .app-header { position: relative; z-index: 1; display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-6); }
 .app-header h1 { max-width: 650px; margin-top: 12px; font-size: clamp(34px, 3.2vw, 54px); }
+.next-action { display: flex; min-width: 0; flex-direction: column; gap: var(--space-2); }
+.next-action h1 { max-width: none; margin-top: 0; font-size: 24px; font-weight: 700; letter-spacing: var(--tracking-tight); line-height: var(--leading-ui); }
+.next-action-chips { display: flex; margin: 0; padding: 0; flex-wrap: wrap; gap: var(--space-2); list-style: none; }
+.next-action-chips li { padding: 3px 10px; border-radius: var(--radius-pill); background: var(--color-surface-control); color: var(--color-muted); font-size: var(--text-xs); font-weight: 600; white-space: nowrap; }
+.mobile-title .next-action h1 { margin-top: 7px; font-size: 24px; }
 .dashboard-toolbar { display: flex; margin: 26px 0 var(--space-4); align-items: center; justify-content: space-between; }
 .segmented, .range-tabs { display: flex; padding: var(--space-1); gap: 3px; border: 1px solid var(--line); border-radius: var(--radius-control); background: rgba(255,255,255,.025); }
 .segmented button, .range-tabs button { padding: var(--space-control-y) var(--space-control-x); border: 0; border-radius: var(--radius-sm); color: var(--color-nav-icon); background: transparent; font-size: var(--text-sm); font-weight: 700; cursor: pointer; }
