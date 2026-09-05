@@ -24,7 +24,7 @@ const requiredTokens = [
   "--space-6",
   "--radius-lg",
   "--shadow-card",
-  "--glass-card-blur",
+  "--glass-nav-blur",
   "--color-cyan",
   "--color-coral"
 ];
@@ -45,7 +45,8 @@ if (/:root\s*\{/.test(prototype)) failures.push("prototype.css에 토큰 선언 
 if (!/orbit-app/.test(prototype)) failures.push("B 시안 규칙이 prototype.css에 없습니다.");
 if (/orbit-|prototype-switcher|widget-lab/.test(styles)) failures.push("제품 styles.css에 프로토타입 전용 규칙이 남아 있습니다.");
 if (!/font-family:\s*var\(--font-ui\)/.test(styles)) failures.push("본문이 --font-ui 토큰을 사용하지 않습니다.");
-if (!/var\(--glass-card-blur\)/.test(styles)) failures.push("카드가 --glass-card-blur 토큰을 사용하지 않습니다.");
+if (!/var\(--glass-nav-blur\)/.test(styles)) failures.push("내비게이션이 --glass-nav-blur 토큰을 사용하지 않습니다.");
+if (/\.glass-card\s*\{[^}]*backdrop-filter/.test(styles)) failures.push("카드에 backdrop-filter가 남아 있습니다.");
 if (!/var\(--space-6\)/.test(styles)) failures.push("화면 간격이 --space-6 토큰을 사용하지 않습니다.");
 if (!/var\(--shadow-card\)/.test(styles)) failures.push("카드가 --shadow-card 토큰을 사용하지 않습니다.");
 if (manifest.tokenSource !== "styles/tokens.css" || manifest.tokenRevision !== 1) {

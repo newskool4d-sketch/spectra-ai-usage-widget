@@ -121,8 +121,8 @@
 
   /* Depth */
   --shadow-inset: inset 0 1px 0 rgba(255, 255, 255, .06);
-  --shadow-app: 0 20px 54px rgba(0, 0, 0, .28), inset 0 1px 0 rgba(255, 255, 255, .055);
-  --shadow-card: inset 0 1px 0 rgba(255, 255, 255, .045), 0 14px 34px rgba(0, 0, 0, .16);
+  --shadow-app: 0 12px 24px rgba(0, 0, 0, .22), var(--shadow-inset);
+  --shadow-card: var(--shadow-inset), 0 8px 16px rgba(0, 0, 0, .12);
   --shadow-control: 0 14px 32px rgba(0, 0, 0, .26), inset 0 1px 0 rgba(255, 255, 255, .06);
   --shadow-widget: 0 20px 54px rgba(0, 0, 0, .28), inset 0 1px 0 rgba(255, 255, 255, .055);
   --shadow: var(--shadow-app);
@@ -132,8 +132,6 @@
   --glass-app-blur: 18px;
   --glass-nav-bg: var(--color-surface-nav);
   --glass-nav-blur: 18px;
-  --glass-card-bg: var(--color-surface-card);
-  --glass-card-blur: 14px;
   --glass-widget-bg: rgba(39, 40, 36, .78);
   --glass-widget-blur: 16px;
 
@@ -173,8 +171,8 @@
   --color-button: #273128;
   --color-ambient-gradient: linear-gradient(145deg, #edf2ed, #f8faf7 54%, #e8efea);
   --shadow-inset: inset 0 1px 0 rgba(255, 255, 255, .85);
-  --shadow-app: 0 20px 54px rgba(43, 61, 48, .12), inset 0 1px 0 rgba(255, 255, 255, .8);
-  --shadow-card: inset 0 1px 0 rgba(255, 255, 255, .8), 0 14px 34px rgba(43, 61, 48, .08);
+  --shadow-app: 0 12px 24px rgba(43, 61, 48, .09), var(--shadow-inset);
+  --shadow-card: var(--shadow-inset), 0 8px 16px rgba(43, 61, 48, .06);
   --shadow-control: 0 14px 32px rgba(43, 61, 48, .12), inset 0 1px 0 rgba(255, 255, 255, .8);
   --shadow-widget: 0 20px 54px rgba(43, 61, 48, .12), inset 0 1px 0 rgba(255, 255, 255, .8);
   --glass-widget-bg: rgba(255, 255, 255, .82);
