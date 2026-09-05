@@ -8,7 +8,8 @@ const sourceFiles = [
   "src/main.tsx",
   "src/components/Icon.tsx",
   "src/components/Sparkline.tsx",
-  "src/data/providers.ts"
+  "src/data/providers.ts",
+  "src/data/next-action.ts"
 ];
 const source = sourceFiles.map(file => readFileSync(join(root, file), "utf8")).join("\n");
 const failures = [];
@@ -39,10 +40,11 @@ if (existsSync(distAssets)) {
       jsFiles += 1;
       const bundle = readFileSync(path, "utf8");
       if (/setInterval\s*\(|requestAnimationFrame\s*\(|localStorage|sessionStorage/.test(bundle)) failures.push(`forbidden runtime pattern in ${file}`);
+      if (/43,58,49,70,64,83/.test(bundle)) failures.push(`example chart data shipped in ${file}`);
     } else if (file.endsWith(".css")) {
       cssBytes += size;
       const css = readFileSync(path, "utf8");
-      for (const forbidden of ["orbit-", "prototype-switcher", "widget-lab", "@keyframes drift"]) {
+      for (const forbidden of ["orbit-", "prototype-switcher", "widget-lab", "@keyframes drift", "bar-chart", "barRise"]) {
         if (css.includes(forbidden)) failures.push(`prototype-only CSS shipped in ${file}: ${forbidden}`);
       }
     } else if (file.endsWith(".woff2")) {
