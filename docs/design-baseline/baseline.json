@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "decisionId": "SPECTRA-ADR-001",
-  "baselineRevision": 2,
-  "approvedAt": "2026-08-15",
+  "baselineRevision": 3,
+  "approvedAt": "2026-09-05",
   "status": "approved",
   "sourceOfTruth": "code-and-screenshots",
   "figmaRequired": false,
@@ -45,7 +45,7 @@
       "path": "docs/design-baseline/desktop-a.png",
       "role": "desktop-primary",
       "viewport": "1440x1000",
-      "sha256": "A8ECD041D9D55BB45930229615BBD0FDA831119F528305CC682ECB054A9B0E1F"
+      "sha256": "783A7A7C290C846C85F2B25B04A954B6C49125BAD24937620291EBC659B4254B"
     },
     {
       "path": "docs/design-baseline/desktop-c-context.png",
@@ -57,7 +57,7 @@
       "path": "docs/design-baseline/mobile-c.png",
       "role": "mobile-primary",
       "viewport": "390x844",
-      "sha256": "555BBB553396B591C195A0651294F7ECD7AF95F5F9FCBA25D7947EE6BF7EAA89"
+      "sha256": "DF82B105238D1325C75319B156C21CA75E5A28345972B187F97E1EF9546C7CE3"
     }
   ],
   "acceptance": [
