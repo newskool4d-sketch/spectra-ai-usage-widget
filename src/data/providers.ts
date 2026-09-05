@@ -22,7 +22,7 @@ export type QuotaWindow = Readonly<{
   remainingPercent: number;
   resetLabel: string;
   kindLabel: string;
-  resetsAt?: number | null;
+  resetsAt?: number | null; // epoch ms
   windowDurationMins?: number | null;
 }>;
 

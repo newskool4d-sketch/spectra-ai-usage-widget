@@ -52,7 +52,7 @@ export type NativeProviderQuotaWindow = Readonly<{
   label: string;
   usedPercent: number;
   remainingPercent: number;
-  resetsAt: number | null;
+  resetsAt: number | null; // epoch seconds
   windowDurationMins: number | null;
 }>;
 

@@ -34,6 +34,8 @@ declare global {
 function useWindowMode(): WindowMode {
   const [mode, setMode] = useState<WindowMode>(() => window.__SPECTRA_MODE__ ?? (isTauriRuntime() ? "mini" : "browser"));
   useEffect(() => {
+    const current = window.__SPECTRA_MODE__;
+    if (current) setMode(current);
     const onMode = (event: Event) => {
       const detail = (event as CustomEvent<string>).detail;
       if (detail === "mini" || detail === "dashboard") setMode(detail);
@@ -114,7 +116,7 @@ function quotaFromSnapshot(snapshot: NativeProviderUsageSnapshot, fallback: Plan
         remainingPercent: window.remainingPercent,
         resetLabel: formatReset(window.resetsAt),
         kindLabel: snapshot.source === "codex-app-server" ? "Codex 요금제 사용량" : "Claude.ai 공유 사용량",
-        resetsAt: window.resetsAt == null ? null : window.resetsAt * 1000,
+        resetsAt: window.resetsAt ? window.resetsAt * 1000 : null,
         windowDurationMins: window.windowDurationMins
       }))
     : fallback.windows.map(window => ({ ...window, usedPercent: 0, remainingPercent: 0, resetLabel: "연결 후 표시", kindLabel: "실제 데이터 대기" }));
@@ -268,10 +270,10 @@ const WindowSummary = memo(function WindowSummary({ quotas }: Readonly<{ quotas:
   return <figure className="window-summary">
     <svg viewBox="0 0 200 100" role="img" aria-label="창별 시간 진행 대비 사용률">
       <line x1="0" y1="100" x2="200" y2="0" />
-      {points.map(({ provider, window, progress }) => <circle key={`${provider.id}-${window.id}`} cx={progress.timePercent * 2} cy={100 - window.usedPercent} r="4" style={providerStyle(provider.color)} />)}
+      {points.map(({ provider, window, progress }, index) => <circle key={`${provider.id}-${window.id}-${index}`} cx={progress.timePercent * 2} cy={100 - window.usedPercent} r="4" style={providerStyle(provider.color)} />)}
     </svg>
     <ul className="window-summary-legend">
-      {points.map(({ provider, window, progress }) => <li key={`${provider.id}-${window.id}`} style={providerStyle(provider.color)}><i />{provider.name} {window.label} · 사용 {Math.round(window.usedPercent)}% / 시간 {Math.round(progress.timePercent)}% · {paceLabel(progress.pace)}</li>)}
+      {points.map(({ provider, window, progress }, index) => <li key={`${provider.id}-${window.id}-${index}`} style={providerStyle(provider.color)}><i />{provider.name} {window.label} · 사용 {Math.round(window.usedPercent)}% / 시간 {Math.round(progress.timePercent)}% · {paceLabel(progress.pace)}</li>)}
     </ul>
   </figure>;
 });
@@ -305,7 +307,7 @@ const QuotaCell = memo(function QuotaCell({ provider, window, available }: Reado
 });
 
 const NextActionStrip = memo(function NextActionStrip({ quotas, eyebrow }: Readonly<{ quotas: QuotaRecord; eyebrow?: string }>) {
-  const action = useMemo(() => computeNextAction(quotas), [quotas]);
+  const action = useMemo(() => computeNextAction(quotas, Date.now()), [quotas]);
   return <div className="next-action">
     {eyebrow ? <span className="eyebrow">{eyebrow}</span> : null}
     <h1>{action.headline}</h1>

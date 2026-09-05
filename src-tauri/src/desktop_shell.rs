@@ -65,7 +65,6 @@ pub(crate) fn show_main_window<R: Runtime>(
         profile.height,
     )))?;
     window.set_always_on_top(profile.always_on_top)?;
-    window.eval(&mode_script(mode))?;
 
     if window.is_minimized()? {
         window.unminimize()?;
@@ -74,6 +73,7 @@ pub(crate) fn show_main_window<R: Runtime>(
     window.center()?;
     window.show()?;
     window.set_focus()?;
+    window.eval(&mode_script(mode))?;
     Ok(())
 }
 
@@ -155,9 +155,8 @@ mod tests {
 
     #[test]
     fn mode_script_sets_global_and_dispatches_event() {
-        let script = mode_script(WindowMode::Dashboard);
-        assert!(script.contains("window.__SPECTRA_MODE__='dashboard'"));
-        assert!(script.contains("new CustomEvent('spectra-mode',{detail:'dashboard'})"));
+        assert_eq!(mode_script(WindowMode::Mini), "window.__SPECTRA_MODE__='mini';window.dispatchEvent(new CustomEvent('spectra-mode',{detail:'mini'}));");
+        assert_eq!(mode_script(WindowMode::Dashboard), "window.__SPECTRA_MODE__='dashboard';window.dispatchEvent(new CustomEvent('spectra-mode',{detail:'dashboard'}));");
     }
 
     #[test]

@@ -23,7 +23,7 @@ describe("computeNextAction", () => {
     const result = computeNextAction({
       codex: connected("codex", [window({ usedPercent: 76, remainingPercent: 24, resetLabel: "1시간 18분 후" })]),
       claude: connected("claude", [window({ usedPercent: 68, remainingPercent: 32, resetLabel: "3시간 후" })])
-    });
+    }, base);
     assert.equal(result.recommendedProvider, "claude");
     assert.equal(result.headline, "지금은 Claude에서 작업");
     assert.deepEqual(result.chips, ["Codex 5시간 한도 24% 남음 · 1시간 18분 후 초기화", "Claude 5시간 한도 32% 남음 · 3시간 후 초기화"]);
@@ -33,7 +33,7 @@ describe("computeNextAction", () => {
     const result = computeNextAction({
       codex: connected("codex", [window({ remainingPercent: 50, resetsAt: base + 1 * hour })]),
       claude: connected("claude", [window({ remainingPercent: 50, resetsAt: base + 3 * hour })])
-    });
+    }, base);
     assert.equal(result.recommendedProvider, "claude");
   });
 
@@ -41,7 +41,15 @@ describe("computeNextAction", () => {
     const result = computeNextAction({
       codex: connected("codex", [window({ remainingPercent: 50, resetsAt: null })]),
       claude: connected("claude", [window({ remainingPercent: 50, resetsAt: null })])
-    });
+    }, base);
+    assert.equal(result.recommendedProvider, "codex");
+  });
+
+  it("keeps provider order when only one tied window has a known reset", () => {
+    const result = computeNextAction({
+      codex: connected("codex", [window({ remainingPercent: 50, resetsAt: null })]),
+      claude: connected("claude", [window({ remainingPercent: 50, resetsAt: base + 3 * hour })])
+    }, base);
     assert.equal(result.recommendedProvider, "codex");
   });
 
@@ -50,20 +58,60 @@ describe("computeNextAction", () => {
     const result = computeNextAction({
       codex: connected("codex", [weekly, window({ remainingPercent: 10 })]),
       claude: connected("claude", [window({ remainingPercent: 30 })])
-    });
+    }, base);
     assert.equal(result.recommendedProvider, "claude");
   });
 
+  it("recommends codex when it keeps more remaining", () => {
+    const result = computeNextAction({
+      codex: connected("codex", [window({ remainingPercent: 60 })]),
+      claude: connected("claude", [window({ remainingPercent: 40 })])
+    }, base);
+    assert.equal(result.recommendedProvider, "codex");
+    assert.equal(result.headline, "지금은 Codex에서 작업");
+  });
+
   it("asks to connect when no provider has verified usage", () => {
-    const result = computeNextAction({ codex: pending("codex"), claude: pending("claude") });
+    const result = computeNextAction({ codex: pending("codex"), claude: pending("claude") }, base);
     assert.equal(result.recommendedProvider, null);
     assert.equal(result.headline, "Codex·Claude 연결 후 권장 서비스를 알려 드립니다");
     assert.deepEqual(result.chips, ["Codex 연결 필요", "Claude 연결 필요"]);
   });
 
   it("recommends the only connected provider and marks the other as needing connection", () => {
-    const result = computeNextAction({ codex: pending("codex"), claude: connected("claude") });
+    const result = computeNextAction({ codex: pending("codex"), claude: connected("claude") }, base);
     assert.equal(result.recommendedProvider, "claude");
     assert.equal(result.chips[0], "Codex 연결 필요");
+  });
+
+  it("treats example-confidence demo data as unconnected", () => {
+    const result = computeNextAction({
+      codex: { ...connected("codex"), source: "example", confidence: "example" },
+      claude: { ...connected("claude"), source: "example", confidence: "example" }
+    }, base);
+    assert.equal(result.recommendedProvider, null);
+    assert.deepEqual(result.chips, ["Codex 연결 필요", "Claude 연결 필요"]);
+  });
+
+  it("labels a signed-in provider waiting for first usage", () => {
+    const result = computeNextAction({
+      codex: { ...pending("codex"), connectionState: "waiting" },
+      claude: connected("claude")
+    }, base);
+    assert.equal(result.chips[0], "Codex 첫 사용량 대기");
+  });
+
+  it("does not append 초기화 to sentinel reset labels", () => {
+    const claudeResult = computeNextAction({
+      codex: pending("codex"),
+      claude: connected("claude", [window({ resetLabel: "초기화 시각 확인 중", resetsAt: null })])
+    }, base);
+    assert.equal(claudeResult.chips[1], "Claude 5시간 한도 40% 남음 · 초기화 시각 확인 중");
+
+    const codexResult = computeNextAction({
+      codex: connected("codex", [window({ resetLabel: "초기화 정보 갱신 필요", resetsAt: base - hour })]),
+      claude: pending("claude")
+    }, base);
+    assert.equal(codexResult.chips[0], "Codex 5시간 한도 40% 남음 · 초기화 정보 갱신 필요");
   });
 });

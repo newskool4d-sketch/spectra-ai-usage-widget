@@ -131,7 +131,7 @@ h1 em { color: var(--color-heading-em); font-style: normal; }
 .chart-empty strong { color: var(--muted); font-size: var(--text-sm); }
 .chart-empty span { max-width: 260px; font-size: var(--text-xs); line-height: 1.5; }
 .window-summary { display: grid; margin: var(--space-3) 0 0; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--space-4); align-items: center; }
-.window-summary svg { width: 100%; aspect-ratio: 2 / 1; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--color-surface-control-soft); }
+.window-summary svg { width: 100%; aspect-ratio: 2 / 1; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--color-surface-control-soft); overflow: visible; }
 .window-summary line { stroke: var(--line-strong); stroke-width: 1; stroke-dasharray: 4 4; }
 .window-summary circle { fill: var(--provider); }
 .window-summary-legend { display: grid; margin: 0; padding: 0; gap: 6px; list-style: none; color: var(--muted); font-size: var(--text-xs); }
@@ -219,12 +219,6 @@ h1 em { color: var(--color-heading-em); font-style: normal; }
 .mobile-top i { width: 3px; border-radius: 2px; background: var(--color-on-control-active); }.mobile-top i:nth-child(1){height:5px}.mobile-top i:nth-child(2){height:8px}.mobile-top i:nth-child(3){height:11px}
 .mobile-title { display: flex; align-items: flex-end; justify-content: space-between; }
 .mobile-title h1 { margin-top: 7px; font-size: 36px; }
-.hero-signal { position: relative; margin-top: 21px; padding: var(--space-6); overflow: hidden; border: 1px solid color-mix(in srgb, var(--provider), transparent 68%); border-radius: 27px; background: color-mix(in srgb, var(--provider), var(--color-surface-inner) 95%); box-shadow: var(--shadow-inset), 0 18px 42px rgba(0,0,0,.2); }
-.hero-signal::after { display: none; }
-.hero-signal-top { display: flex; margin-bottom: 27px; align-items: center; justify-content: space-between; }
-.hero-signal h2 { margin-top: 5px; font-size: 66px; line-height: .9; letter-spacing: -.08em; }
-.hero-signal h2 span { margin-left: 3px; color: var(--provider); font-size: 22px; }
-.hero-signal > p { margin-top: 10px; color: var(--muted); font-size: 11px; }
 .spectrum-line { height: 4px; margin-top: 24px; overflow: hidden; border-radius: 8px; background: var(--color-track); }
 .spectrum-line i { display: block; width: 82%; height: 100%; background: linear-gradient(90deg,var(--cyan),var(--violet),var(--pink),var(--amber),var(--lime)); }
 .signal-foot { display: flex; margin-top: 8px; justify-content: space-between; color: var(--subtle); font-size: var(--text-xs); }

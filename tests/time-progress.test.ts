@@ -30,9 +30,13 @@ describe("computeTimeProgress", () => {
     assert.equal(result?.pace, "steady");
   });
 
-  it("clamps to the 0–100 range", () => {
-    assert.equal(computeTimeProgress({ usedPercent: 0, resetsAt: now - minute, windowDurationMins: 300 }, now)?.timePercent, 100);
+  it("returns null once the reset time has passed and clamps future windows to 0", () => {
+    assert.equal(computeTimeProgress({ usedPercent: 0, resetsAt: now - minute, windowDurationMins: 300 }, now), null);
     assert.equal(computeTimeProgress({ usedPercent: 0, resetsAt: now + 400 * minute, windowDurationMins: 300 }, now)?.timePercent, 0);
+  });
+
+  it("returns null for a window whose reset already passed", () => {
+    assert.equal(computeTimeProgress({ usedPercent: 30, resetsAt: now - minute, windowDurationMins: 300 }, now), null);
   });
 
   it("labels each pace in Korean", () => {

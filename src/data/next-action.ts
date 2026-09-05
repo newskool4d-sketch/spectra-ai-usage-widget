@@ -17,10 +17,11 @@ export function primaryWindow(quota: PlanQuota): QuotaWindow | undefined {
   return quota.windows.find(window => window.id === "rolling") ?? quota.windows[0];
 }
 
-function chipText(id: ProviderId, quota: PlanQuota): string {
+function chipText(id: ProviderId, quota: PlanQuota, now: number): string {
   const window = hasVerifiedUsage(quota) ? primaryWindow(quota) : undefined;
-  if (!window) return `${providerNames[id]} 연결 필요`;
-  return `${providerNames[id]} ${window.label} ${Math.round(window.remainingPercent)}% 남음 · ${window.resetLabel} 초기화`;
+  if (!window) return quota.connectionState === "waiting" ? `${providerNames[id]} 첫 사용량 대기` : `${providerNames[id]} 연결 필요`;
+  const reset = window.resetsAt != null && window.resetsAt > now ? `${window.resetLabel} 초기화` : window.resetLabel;
+  return `${providerNames[id]} ${window.label} ${Math.round(window.remainingPercent)}% 남음 · ${reset}`;
 }
 
 function beats(candidate: QuotaWindow, current: QuotaWindow): boolean {
@@ -29,8 +30,8 @@ function beats(candidate: QuotaWindow, current: QuotaWindow): boolean {
   return candidate.resetsAt > current.resetsAt;
 }
 
-export function computeNextAction(quotas: Readonly<Record<ProviderId, PlanQuota>>): NextAction {
-  const chips = providerIds.map(id => chipText(id, quotas[id]));
+export function computeNextAction(quotas: Readonly<Record<ProviderId, PlanQuota>>, now: number): NextAction {
+  const chips = providerIds.map(id => chipText(id, quotas[id], now));
   const connected = providerIds.filter(id => hasVerifiedUsage(quotas[id]));
   if (connected.length === 0) {
     return { recommendedProvider: null, headline: `${providerIds.map(id => providerNames[id]).join("·")} 연결 후 권장 서비스를 알려 드립니다`, chips };
@@ -52,6 +53,7 @@ export function computeTimeProgress(
   now: number
 ): TimeProgress | null {
   if (window.resetsAt == null || window.windowDurationMins == null || window.windowDurationMins <= 0) return null;
+  if (window.resetsAt <= now) return null;
   const durationMs = window.windowDurationMins * 60 * 1000;
   const elapsed = now - (window.resetsAt - durationMs);
   const timePercent = Math.max(0, Math.min(100, (elapsed / durationMs) * 100));

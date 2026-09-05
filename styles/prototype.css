@@ -96,3 +96,17 @@
   .widget-lab{display:none}
   .prototype-switcher { bottom:12px; min-width:min(330px,calc(100vw - 24px)); }
 }
+
+.hero-signal { position: relative; margin-top: 21px; padding: var(--space-6); overflow: hidden; border: 1px solid color-mix(in srgb, var(--provider), transparent 68%); border-radius: 27px; background: color-mix(in srgb, var(--provider), var(--color-surface-inner) 95%); box-shadow: var(--shadow-inset), 0 18px 42px rgba(0,0,0,.2); }
+.hero-signal::after { display: none; }
+.hero-signal-top { display: flex; margin-bottom: 27px; align-items: center; justify-content: space-between; }
+.hero-signal h2 { margin-top: 5px; font-size: 66px; line-height: .9; letter-spacing: -.08em; }
+.hero-signal h2 span { margin-left: 3px; color: var(--provider); font-size: 22px; }
+.hero-signal > p { margin-top: 10px; color: var(--muted); font-size: 11px; }
+
+@keyframes barRise { from { height: 8%; opacity: .2; } }
+.bar-chart { display: flex; height: 92px; margin-top: var(--space-4); align-items: flex-end; gap: 5px; }
+.bar-chart i { flex: 1; height: var(--h); border-radius: 4px 4px 2px 2px; background: linear-gradient(180deg, var(--cyan), color-mix(in srgb, var(--blue), transparent 76%)); animation: barRise .7s var(--delay) cubic-bezier(.2,.8,.2,1) both; }
+.bar-chart i:nth-child(3n+2) { background: linear-gradient(180deg, var(--violet), color-mix(in srgb, var(--pink), transparent 80%)); }
+.bar-chart i.peak { outline: 1px solid color-mix(in srgb, var(--cyan), transparent 45%); }
+.chart-axis { display: flex; margin-top: 8px; justify-content: space-between; color: var(--subtle); font-size: var(--text-xs); }
