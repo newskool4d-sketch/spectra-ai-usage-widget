@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Icon, type IconName } from "./components/Icon";
 import { Sparkline } from "./components/Sparkline";
-import { computeNextAction } from "./data/next-action";
+import { computeNextAction, computeTimeProgress, paceLabel } from "./data/next-action";
 import { createRefreshSequencer } from "./data/refresh-sequence";
 import { metricLabels, planQuotas, providers, rangeLabels, usageBars, type AuthMethod, type Metric, type PlanQuota, type Provider, type ProviderId, type QuotaWindow, type QuotaWindowId, type UsageRange } from "./data/providers";
 import { providerCapabilities, type ProviderCapability } from "./integrations/provider-capabilities";
@@ -94,7 +94,9 @@ function quotaFromSnapshot(snapshot: NativeProviderUsageSnapshot, fallback: Plan
         usedPercent: window.usedPercent,
         remainingPercent: window.remainingPercent,
         resetLabel: formatReset(window.resetsAt),
-        kindLabel: snapshot.source === "codex-app-server" ? "Codex 요금제 사용량" : "Claude.ai 공유 사용량"
+        kindLabel: snapshot.source === "codex-app-server" ? "Codex 요금제 사용량" : "Claude.ai 공유 사용량",
+        resetsAt: window.resetsAt == null ? null : window.resetsAt * 1000,
+        windowDurationMins: window.windowDurationMins
       }))
     : fallback.windows.map(window => ({ ...window, usedPercent: 0, remainingPercent: 0, resetLabel: "연결 후 표시", kindLabel: "실제 데이터 대기" }));
   return {
@@ -253,11 +255,13 @@ const emptyQuotaWindow = (id: QuotaWindowId, providerId: ProviderId): QuotaWindo
 });
 
 const QuotaCell = memo(function QuotaCell({ provider, window, available }: Readonly<{ provider: Provider; window: QuotaWindow; available: boolean }>) {
+  const progress = available ? computeTimeProgress(window, Date.now()) : null;
   return <div className="quota-cell" style={providerStyle(provider.color)}>
     <div className="quota-cell-top"><span className="quota-cell-pill">{provider.name}</span><span className="quota-cell-window">{window.label}</span></div>
     <div className="quota-cell-value">{available ? Math.round(window.remainingPercent) : "—"}{available ? <span>%</span> : null}</div>
     <div className="quota-cell-meta">{available ? `초기화 · ${window.resetLabel}` : "연결 후 표시"}</div>
     <div className="quota-cell-meter" aria-label={available ? `${provider.name} ${window.label} ${Math.round(window.remainingPercent)}% 남음` : `${provider.name} ${window.label} 데이터 대기`}><i style={{ width: `${available ? window.remainingPercent : 0}%` }} /></div>
+    {progress ? <div className="quota-cell-time"><i style={{ "--progress": `${progress.timePercent}%` } as CSSProperties} aria-label={`시간 진행 ${Math.round(progress.timePercent)}%`} />{progress.pace !== "even" ? <span className={`quota-cell-pace ${progress.pace}`}>{paceLabel(progress.pace)}</span> : null}</div> : null}
   </div>;
 });
 

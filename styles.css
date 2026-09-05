@@ -103,6 +103,11 @@ h1 em { color: var(--color-heading-em); font-style: normal; }
 .quota-cell-meta { margin-top: 6px; color: var(--muted); font-size: var(--text-xs); }
 .quota-cell-meter { height: 4px; margin-top: 12px; overflow: hidden; border-radius: 4px; background: var(--color-track); }
 .quota-cell-meter i { display: block; height: 100%; background: var(--provider-ink); }
+.quota-cell-time { display: flex; margin-top: 6px; align-items: center; gap: 6px; }
+.quota-cell-time i { display: block; flex: 1; height: 3px; border-radius: 2px; background: linear-gradient(90deg, var(--color-subtle) var(--progress), var(--color-track) var(--progress)); }
+.quota-cell-pace { font-size: var(--text-2xs); font-weight: 700; line-height: 1; }
+.quota-cell-pace.fast { color: var(--color-coral); }
+.quota-cell-pace.steady { color: var(--color-cyan); }
 .card-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-3); }
 .card-heading h3 { margin-top: 6px; font-size: 19px; letter-spacing: -.035em; }
 .card-heading h3 small, .budget-card h3 small { color: var(--subtle); font-size: var(--text-sm); font-weight: 600; letter-spacing: 0; }

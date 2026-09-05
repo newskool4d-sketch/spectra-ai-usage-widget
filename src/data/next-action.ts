@@ -43,3 +43,22 @@ export function computeNextAction(quotas: Readonly<Record<ProviderId, PlanQuota>
   }
   return { recommendedProvider: best, headline: `지금은 ${providerNames[best]}에서 작업`, chips };
 }
+
+export type Pace = "fast" | "steady" | "even";
+export type TimeProgress = Readonly<{ timePercent: number; pace: Pace }>;
+
+export function computeTimeProgress(
+  window: Pick<QuotaWindow, "usedPercent" | "resetsAt" | "windowDurationMins">,
+  now: number
+): TimeProgress | null {
+  if (window.resetsAt == null || window.windowDurationMins == null || window.windowDurationMins <= 0) return null;
+  const durationMs = window.windowDurationMins * 60 * 1000;
+  const elapsed = now - (window.resetsAt - durationMs);
+  const timePercent = Math.max(0, Math.min(100, (elapsed / durationMs) * 100));
+  const gap = window.usedPercent - timePercent;
+  return { timePercent, pace: gap > 10 ? "fast" : gap < -10 ? "steady" : "even" };
+}
+
+export function paceLabel(pace: Pace): string {
+  return pace === "fast" ? "빠름" : pace === "steady" ? "여유" : "보통";
+}
