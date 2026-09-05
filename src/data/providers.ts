@@ -92,8 +92,6 @@ export const planQuotas: Readonly<Record<ProviderId, PlanQuota>> = Object.freeze
   }
 });
 
-export const usageBars = Object.freeze([43, 58, 49, 70, 64, 83, 74, 91, 66, 79, 88, 72, 96, 82]);
-
 export const metricLabels: Readonly<Record<Metric, string>> = Object.freeze({
   remaining: "잔여량",
   cost: "비용",

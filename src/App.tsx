@@ -1,9 +1,9 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Icon, type IconName } from "./components/Icon";
 import { Sparkline } from "./components/Sparkline";
-import { computeNextAction, computeTimeProgress, paceLabel } from "./data/next-action";
+import { computeNextAction, computeTimeProgress, hasVerifiedUsage, paceLabel } from "./data/next-action";
 import { createRefreshSequencer } from "./data/refresh-sequence";
-import { metricLabels, planQuotas, providers, rangeLabels, usageBars, type AuthMethod, type Metric, type PlanQuota, type Provider, type ProviderId, type QuotaWindow, type QuotaWindowId, type UsageRange } from "./data/providers";
+import { metricLabels, planQuotas, providers, rangeLabels, type AuthMethod, type Metric, type PlanQuota, type Provider, type ProviderId, type QuotaWindow, type QuotaWindowId, type UsageRange } from "./data/providers";
 import { providerCapabilities, type ProviderCapability } from "./integrations/provider-capabilities";
 import { getNativeProviderUsage, installNativeProviderBridge, isTauriRuntime, removeNativeProviderBridge, startNativeProviderLogin, type NativeProviderActionResult, type NativeProviderUsageSnapshot } from "./integrations/tauri-native-bridge";
 
@@ -233,8 +233,28 @@ const RangeTabs = memo(function RangeTabs({ range, onRange }: Readonly<{ range: 
   </div>;
 });
 
-const ChartBars = memo(function ChartBars() {
-  return <div className="bar-chart" aria-label="시간별 한도 소진 추이">{usageBars.map((height, index) => <i key={`bar-${index}`} className={index === 12 ? "peak" : ""} style={{ "--h": `${height}%`, "--delay": `${index * 35}ms` } as CSSProperties} />)}</div>;
+const WindowSummary = memo(function WindowSummary({ quotas }: Readonly<{ quotas: QuotaRecord }>) {
+  const now = Date.now();
+  const points = providers.flatMap(provider => {
+    const quota = quotas[provider.id];
+    if (!hasVerifiedUsage(quota)) return [];
+    return quota.windows.flatMap(window => {
+      const progress = computeTimeProgress(window, now);
+      return progress ? [{ provider, window, progress }] : [];
+    });
+  });
+  if (points.length === 0) {
+    return <div className="chart-empty"><Icon name="pulse" size={19} /><strong>서비스 연결 후 창 요약을 표시합니다.</strong><span>창별 시간 진행과 사용률을 한 그림에서 비교합니다.</span></div>;
+  }
+  return <figure className="window-summary">
+    <svg viewBox="0 0 200 100" role="img" aria-label="창별 시간 진행 대비 사용률">
+      <line x1="0" y1="100" x2="200" y2="0" />
+      {points.map(({ provider, window, progress }) => <circle key={`${provider.id}-${window.id}`} cx={progress.timePercent * 2} cy={100 - window.usedPercent} r="4" style={providerStyle(provider.color)} />)}
+    </svg>
+    <ul className="window-summary-legend">
+      {points.map(({ provider, window, progress }) => <li key={`${provider.id}-${window.id}`} style={providerStyle(provider.color)}><i />{provider.name} {window.label} · 사용 {Math.round(window.usedPercent)}% / 시간 {Math.round(progress.timePercent)}% · {paceLabel(progress.pace)}</li>)}
+    </ul>
+  </figure>;
 });
 
 const QuotaWindowRow = memo(function QuotaWindowRow({ window, unavailable = false, compact = false }: Readonly<{ window: QuotaWindow; unavailable?: boolean; compact?: boolean }>) {
@@ -456,7 +476,7 @@ const VariantADesktop = memo(function VariantADesktop({ view, onView, activeProv
       </header>
       {view === "overview" ? <><div className="dashboard-toolbar"><MetricTabs metric={metric} onMetric={onMetric} /><RangeTabs range={range} onRange={onRange} /></div><div className="bento-grid">
         <QuotaBoard quotas={quotas} />
-        <article className="glass-card live-card span-2"><div className="card-heading"><div><span className="eyebrow">한도 소진 추이</span><h3>{available ? `${Math.round(primary.usedPercent)}%` : "—"} <small>{available ? "현재 사용" : "실제 데이터 대기"}</small></h3></div><span className="live-pill"><i />{demo ? "데모 집계" : available ? "현재 스냅샷" : "연결 대기"}</span></div>{demo ? <><ChartBars /><div className="chart-axis"><span>09:00</span><span>12:00</span><span>15:00</span><span>지금</span></div></> : <div className="chart-empty"><Icon name="pulse" size={19} /><strong>과거 추이는 저장하지 않습니다.</strong><span>현재 한도 스냅샷만 읽어 메모리 사용을 줄였습니다.</span></div>}</article>
+        <article className="glass-card live-card span-2"><div className="card-heading"><div><span className="eyebrow">창 요약</span><h3>{available ? `${Math.round(primary.usedPercent)}%` : "—"} <small>{available ? "현재 사용" : "실제 데이터 대기"}</small></h3></div><span className="live-pill"><i />{demo ? "브라우저 데모" : available ? "현재 스냅샷" : "연결 대기"}</span></div><WindowSummary quotas={quotas} /></article>
         <article className="glass-card providers-card span-2"><div className="card-heading"><div><span className="eyebrow">서비스</span><h3>서비스별 잔여량</h3></div><button type="button" className="text-button">모두 보기 <Icon name="chevron" size={14} /></button></div><div className="provider-list">{providers.map(provider => <ProviderRow key={provider.id} provider={provider} quota={quotas[provider.id]} active={provider.id === activeProviderId} onSelect={onProvider} />)}</div></article>
         <article className="glass-card focus-card"><div className="card-heading"><div><ProviderLogo provider={activeProvider} size="lg" /><span className="eyebrow">집중 확인</span></div><span className="trend-badge">{displayPercent(activeQuota, primary)}{available ? " 남음" : ""}</span></div><h3>{activeProvider.name}</h3><p>{available ? <>{primary.label}는 {primary.resetLabel} 초기화됩니다. <strong>{activeQuota.planName}</strong> {demo ? "브라우저 데모" : "공식 조회"} 수치입니다.</> : activeQuota.statusMessage}</p>{demo ? <Sparkline values={activeProvider.trend} color={activeProvider.color} width={220} height={62} /> : <div className="focus-status"><Icon name={available ? "check" : "link"} size={17} /><span>{sourceLabel(activeQuota)}</span></div>}</article>
         <article className="glass-card budget-card plan-card"><span className="eyebrow">연결된 요금제</span><h3>{activeQuota.planName}</h3><p><span>{activeQuota.accountLabel}</span><span className={activeQuota.connectionState === "connected" ? "positive" : ""}>{activeQuota.lastSyncedAt ? `마지막 확인 · ${activeQuota.lastSyncedAt}` : connectionLabel(activeQuota)}</span></p><div className="micro-stat"><span>인증 방식</span><strong>{authMethodLabel(activeQuota.authMethod)}</strong></div></article>
