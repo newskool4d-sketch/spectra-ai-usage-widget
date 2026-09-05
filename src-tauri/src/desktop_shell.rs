@@ -37,6 +37,18 @@ impl WindowMode {
             },
         }
     }
+
+    fn slug(self) -> &'static str {
+        match self {
+            Self::Mini => "mini",
+            Self::Dashboard => "dashboard",
+        }
+    }
+}
+
+fn mode_script(mode: WindowMode) -> String {
+    let slug = mode.slug();
+    format!("window.__SPECTRA_MODE__='{slug}';window.dispatchEvent(new CustomEvent('spectra-mode',{{detail:'{slug}'}}));")
 }
 
 pub(crate) fn show_main_window<R: Runtime>(
@@ -53,6 +65,7 @@ pub(crate) fn show_main_window<R: Runtime>(
         profile.height,
     )))?;
     window.set_always_on_top(profile.always_on_top)?;
+    window.eval(&mode_script(mode))?;
 
     if window.is_minimized()? {
         window.unminimize()?;
@@ -132,7 +145,20 @@ pub(crate) fn install<R: Runtime>(app: &mut App<R>) -> tauri::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{WindowMode, MENU_HIDE, MENU_OPEN_DASHBOARD, MENU_OPEN_MINI, MENU_QUIT};
+    use super::{mode_script, WindowMode, MENU_HIDE, MENU_OPEN_DASHBOARD, MENU_OPEN_MINI, MENU_QUIT};
+
+    #[test]
+    fn window_mode_slug_matches_frontend_contract() {
+        assert_eq!(WindowMode::Mini.slug(), "mini");
+        assert_eq!(WindowMode::Dashboard.slug(), "dashboard");
+    }
+
+    #[test]
+    fn mode_script_sets_global_and_dispatches_event() {
+        let script = mode_script(WindowMode::Dashboard);
+        assert!(script.contains("window.__SPECTRA_MODE__='dashboard'"));
+        assert!(script.contains("new CustomEvent('spectra-mode',{detail:'dashboard'})"));
+    }
 
     #[test]
     fn mini_profile_is_compact_and_pinned() {

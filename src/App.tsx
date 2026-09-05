@@ -25,6 +25,25 @@ function useIsMobile() {
   return isMobile;
 }
 
+type WindowMode = "mini" | "dashboard" | "browser";
+
+declare global {
+  interface Window { __SPECTRA_MODE__?: "mini" | "dashboard" }
+}
+
+function useWindowMode(): WindowMode {
+  const [mode, setMode] = useState<WindowMode>(() => window.__SPECTRA_MODE__ ?? (isTauriRuntime() ? "mini" : "browser"));
+  useEffect(() => {
+    const onMode = (event: Event) => {
+      const detail = (event as CustomEvent<string>).detail;
+      if (detail === "mini" || detail === "dashboard") setMode(detail);
+    };
+    window.addEventListener("spectra-mode", onMode);
+    return () => window.removeEventListener("spectra-mode", onMode);
+  }, []);
+  return mode;
+}
+
 const providerStyle = (color: string) => ({ "--provider": color } as CSSProperties);
 
 type ProviderActionFeedback = Readonly<{
@@ -512,8 +531,17 @@ const VariantCMobile = memo(function VariantCMobile({ view, onView, activeProvid
   </section></div></section></div>;
 });
 
+const MiniLayout = memo(function MiniLayout({ quotas, onRefresh, refreshing }: Readonly<{ quotas: QuotaRecord; onRefresh: () => void; refreshing: boolean }>) {
+  return <div className="product-shell mini-shell"><section className="app-surface mini-layout">
+    <NextActionStrip quotas={quotas} eyebrow="지금" />
+    <QuotaBoard quotas={quotas} />
+    <button type="button" className="primary-action mini-refresh" onClick={onRefresh} disabled={refreshing}><span>{refreshing ? "확인 중" : "지금 확인"}</span></button>
+  </section></div>;
+});
+
 export function App() {
   const isMobile = useIsMobile();
+  const windowMode = useWindowMode();
   const [view, setView] = useState<ProductView>("overview");
   const [activeProviderId, setActiveProviderId] = useState<ProviderId>("codex");
   const [metric, setMetric] = useState<Metric>("remaining");
@@ -685,5 +713,5 @@ export function App() {
     onTheme: () => setTheme(value => value === "dark" ? "light" : "dark")
   };
 
-  return <><div className={solid ? "solid-mode" : ""}>{isMobile ? <VariantCMobile {...sharedProps} /> : <VariantADesktop {...sharedProps} />}</div><OAuthDialog open={oauthOpen} provider={oauthProvider} quota={oauthQuota} startResult={actionFeedback} onClose={closeOAuth} onConnect={connectOAuth} onDisconnect={disconnectOAuth} /></>;
+  return <><div className={solid ? "solid-mode" : ""}>{windowMode === "mini" ? <MiniLayout quotas={quotas} onRefresh={refresh} refreshing={refreshing} /> : isMobile ? <VariantCMobile {...sharedProps} /> : <VariantADesktop {...sharedProps} />}</div><OAuthDialog open={oauthOpen} provider={oauthProvider} quota={oauthQuota} startResult={actionFeedback} onClose={closeOAuth} onConnect={connectOAuth} onDisconnect={disconnectOAuth} /></>;
 }
