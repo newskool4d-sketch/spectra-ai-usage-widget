@@ -14,7 +14,7 @@
 | 용량 | 제품 CSS가 제품에서 쓰지 않는 B 시안·시안 전환기 규칙을 포함하지 않는다 | `dist/*.css`에 `orbit-`·`prototype-switcher` 0건 |
 | 용량 | 글꼴 파일 수 4 → 3 이하, 합계 ≤ 810 KB | `dist/assets/*.woff2` 합산 |
 | 용량 | JS 번들 ≤ 240 KB(React 유지) 또는 ≤ 120 KB(Preact 전환 승인 시) | `verify:memory` 임계값 하향 |
-| 용량 | 기본 빌드 실행 파일이 `keyring`·`uuid`·`sha2`·`base64`를 링크하지 않는다(`reqwest`는 Claude 조회용으로 유지) | `cargo tree` + 실행 파일 크기 7.57 MB → 측정 후 목표 확정(예상 6.5 MB 내외) |
+| 용량 | 기본 빌드의 spectra-native 직접 의존(`cargo tree -e normal --depth 1`)에 `keyring`·`uuid`·`sha2`·`base64`가 없고, `keyring`은 의존 트리 전체에서 제거된다(`uuid`·`sha2`·`base64`는 tauri-utils·tauri-codegen·reqwest 경유 전이 의존으로 잔존 — 2026-09-08 정정). `reqwest`는 Claude 조회용으로 유지 | `cargo tree --depth 1`·`cargo tree -i keyring` + 실행 파일 크기 7,571,968 B(2026-08-23) → 5,809,664 B(2026-09-08, fat LTO) |
 | 용량 | 미니 창 표시 후 30분 idle 작업 집합(호스트 + WebView2 전체) 441 MB → ≤ 380 MB | `scripts/measure-memory.ps1` |
 | 용량 | (선택) 트레이 대기 모드에서 전체 작업 집합 ≤ 60 MB | 동일 스크립트 |
 
