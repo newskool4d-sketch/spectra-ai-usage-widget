@@ -1,6 +1,7 @@
 import type { ProviderId } from "../data/providers";
 import { providerCapabilities, type ProviderCapability } from "./provider-capabilities";
 import { isTauriRuntime, prepareNativeOAuth, removeNativeCredential } from "./tauri-native-bridge";
+import { describePrepareFailure } from "./oauth-messages";
 
 export type OAuthStartResult = Readonly<{
   status: "demo-only" | "authorize-ready" | "configuration-required" | "not-supported" | "not-available";
@@ -58,11 +59,8 @@ const createStart = (providerId: ProviderId) => async (): Promise<OAuthStartResu
       quotaEndpoint: result.quotaEndpoint ?? undefined,
       quotaEndpointStatus: result.quotaEndpointStatus
     };
-  } catch {
-    return {
-      status: "not-available",
-      message: "이 기기에서 네이티브 OAuth 준비를 완료하지 못했습니다."
-    };
+  } catch (error) {
+    return describePrepareFailure(error);
   }
 };
 
