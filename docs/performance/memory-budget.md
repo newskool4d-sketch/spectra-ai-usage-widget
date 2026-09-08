@@ -147,20 +147,30 @@ fat 채택분 해시(Task 5 재검증 일치): exe SHA-256 `883195EEA3FFF0137CC8
 
 구조 검사 항목: (기본) `providerId` 일치·`connectionState` 열거값·`windows` 배열·비-`error` / (확장) `runtimeAvailable` bool·`authState` 비어있지 않음·`source`가 공급자별 허용값(codex: `codex-app-server`, claude: `claude-usage-api`/`claude-statusline`)·`lastSyncedAt` nullable 숫자 타입·각 창의 `id` 존재·0~100 범위 사용률/잔여율·합계 100 근사(오차 ≤1)·`resetsAt`/`windowDurationMins` nullable 숫자 타입. 두 공급자 모두 `connected`로 조회되어 브리프 기준상 "연결 QA PASS"로 기록한다(signed-out/not-installed/waiting-for-usage였다면 구조 검사 통과로만 기록하고 PASS로 카운트하지 않았을 것). 참고: Task 1 착수 전 시점의 공급자별 창 수 기록이 없어 "연결 상실·창 소실" 전후 비교는 수행할 수 없다 — 이번 단일 관측 기준으로는 이상 없음.
 
-앱 새로고침·미니/대시보드 전환·트레이 숨김/재표시, OAuth 스텁의 실제 Tauri invoke 확인: **미검증**(아래 "사용자 확인 대기" 참조). feature on 회귀: 기존 게이트로만 확인(native-oauth release 빌드 성공 + 26 tests pass) — 실제 OAuth 인증 성공까지 검증한 것은 아니다.
+앱 새로고침·미니/대시보드 전환·트레이 숨김/재표시: 확인 완료(아래 "사용자 확인 결과" 참조, 이상 없음). OAuth 스텁의 실제 Tauri invoke 확인: **미검증**(UI 진입점 없음 — 동일 절 참조). feature on 회귀: 기존 게이트로만 확인(native-oauth release 빌드 성공 + 26 tests pass) — 실제 OAuth 인증 성공까지 검증한 것은 아니다.
 
-### 사용자 확인 대기 (Task 6 측정 시점)
+### 사용자 확인 결과 (2026-09-08)
 
-서브에이전트가 앱을 띄우지 않는다는 제약상 아래 항목은 자동 확인하지 못했다. Task 6 30분 측정 시점에 함께 확인 요청:
+fat 빌드(`spectra-native.exe`, SHA-256 `883195EE…`)로 사용자가 직접 확인했다. 네 항목 모두 결과가 확정됐다:
 
-- [ ] 최종 네이티브 앱에서 Codex·Claude 각각 새로고침 → 로딩 종료, 실제 source·사용량 창 정상 표시, 오류 메시지 없음
-- [ ] 미니 창 ↔ 대시보드 창 모드 전환 정상
-- [ ] 트레이 숨김 → 재표시 정상
-- [ ] 기본 feature 앱에서 OAuth 연결 시작 UI를 실제로 조작 → `oauth_prepare` invoke가 disabled marker로 실패하고 status의 `available`/`present`가 false로 보이는지 확인(Task 2 조사 결과 현재 UI에는 이 경로로 도달하는 진입점이 없는 것으로 확인됨 — 진입점을 찾지 못하면 "UI 진입점 없음, invoke 계약은 Rust 스텁 테스트로만 고정"으로 기록하고 UI PASS를 주장하지 않는다)
+- [x] 최종 네이티브 앱에서 Codex·Claude 각각 새로고침 → 로딩 종료, 실제 source·사용량 창 정상 표시, 오류 메시지 없음 — 확인 완료, 이상 없음
+- [x] 미니 창 ↔ 대시보드 창 모드 전환 정상 — 확인 완료, 이상 없음
+- [x] 트레이 숨김 → 재표시 정상 — 확인 완료, 이상 없음
+- [ ] 기본 feature 앱에서 OAuth 연결 시작 UI를 실제로 조작 → `oauth_prepare` invoke가 disabled marker로 실패하고 status의 `available`/`present`가 false로 보이는지 확인 — **UI 진입점 없음 — Rust 스텁 테스트로만 고정**(Task 2에서 확인된 대로 현재 UI에는 이 경로로 도달하는 진입점이 없다. UI PASS를 주장하지 않는다)
 
-### 2026-09-08 mini-idle-phase3 (Task 6 예정)
+### 2026-09-08 mini-idle-phase3 (Task 6 완료)
 
-| 시나리오 | 표본 | 평균 작업 집합 | 최대 작업 집합 | 평균 private | 프로세스 수 |
-|---|---|---|---|---|---|
-| mini-idle-phase3 (30분) | — | 측정 예정 | 측정 예정 | 측정 예정 | 측정 예정 |
+측정 조건: Task 5에서 해시를 고정한 fat LTO 릴리스 실행 파일(`spectra-native.exe`, 5,809,664 B, SHA-256 `883195EE…`, 기본 feature, HEAD `35f8016` 이후 — 4c3699d까지 코드 변경 없이 문서 커밋만 누적)을 대상으로, 사용자 UI 확인에 쓰던 기존 인스턴스를 PID로 종료한 뒤 새로 실행하고 60초 안정화 후 `measure-memory.ps1 -Samples 61 -IntervalSeconds 30`(RootPid 33704)으로 측정했다. 유효성: 61개 표본이 2026-09-08 17:36:55~18:07:37에 걸쳐 있어 공백 1,842초(≥1,800초 기준 충족), 표본 간 최대 간격 31초(기준 이내), 61개 표본 전 구간 processCount 7 유지, 호스트 프로세스가 측정 종료까지 생존(호스트 작업 집합 약 30.5 MB), SUMMARY 라인 수치(평균 422.6 / 최대 439.5 / private 205.9)가 CSV 재계산값과 일치했다. 환경: Windows 10.0.26200, WebView2 Evergreen 152.0.4191.66, rustc/cargo 1.96.0, `lto = "fat"`, feature 기본(`native-oauth` off), 미니 창, Codex App Server·Claude 상태선 두 공급자 모두 연결.
+
+| 시나리오 | 표본 | 평균 작업 집합 | 최대 작업 집합 | 최소 작업 집합 | 평균 private | 프로세스 수 | Phase 2 대비(관찰) |
+|---|---|---|---|---|---|---|---|
+| mini-idle-phase3 (최소 30분) | 61 | 422.6 MB | 439.5 MB | 416.3 MB | 205.9 MB | 7 | +11.8 MB(관찰값·비교 미검증) |
+
+추세: 첫 10개 표본 평균 433.6 MB → 마지막 10개 표본 평균 417.3 MB로 갈수록 안정화됐다(31~61번 표본은 416.3~419.5 MB 구간에서 평탄). 최댓값(439.5 MB)은 측정 시작 직후인 1번 표본에서만 관측됐다.
+
+해석: Phase 2 → Phase 3 비교는 **미검증**이다 — 2026-09-05 측정은 WebView2 버전이 기록되지 않았고 안정화 대기 없이 60표본을 측정한 반면, 이번은 60초 안정화 후 61표본을 측정했으며 측정일·시스템 상태도 다르다. 위 표의 Phase 2 대비 수치는 이 조건 차이를 통제하지 않은 **관찰값**으로만 보고한다. Phase 3의 변경(OAuth feature 게이트, fat LTO)이 상주 메모리를 악화시켰다는 근거는 없다 — 같은 날 측정한 Task 3의 thin 빌드 A/B 4회(60초 안정화 후 12표본×5초 간격, 평균 435.0/429.9/423.4/432.6 MB)의 범위 안에 이번 fat 30분(61표본×30초 간격) 결과(422.6 MB, 후반부는 ~417 MB로 안정화)가 들어오며, 호스트 자체의 상주 메모리도 변화가 없다(약 30.5 MB). 그렇다고 개선됐다고도 주장하지 않는다. 프로세스 수는 7로 유지됐다(렌더러 프로세스 수 제한은 미채택 — 위 Task 3 절 참조). 목표(평균 작업 집합 ≤ 380 MB)는 **미달**이며, 남은 격차는 WebView2 자체가 차지하는 비중이 커서 Phase 4(선택형 저메모리 대기 모드)의 과제로 남긴다.
+
+참고(선택): Phase 2 기준 빌드(커밋 `4e5f3c4`, 새 target 디렉터리)를 이번과 동일한 조건(60초 안정화·61표본)으로 재측정하면 단계 간 비교를 유효화할 수 있다 — 실행 여부는 사용자 판단에 맡긴다.
+
+목표 판정: 평균 작업 집합 422.6 MB > 380 MB — **미달**. 실행 파일 축소(위 "최종 산출물" 표 참조)는 별도 판정 항목이며 이번 상주 메모리 목표 결과와는 무관하게 판단한다.
 
