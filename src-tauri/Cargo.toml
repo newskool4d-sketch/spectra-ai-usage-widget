@@ -44,7 +44,7 @@ tauri-plugin-single-instance = { version = "2.4.3", features = ["deep-link"] }
 
 [profile.release]
 codegen-units = 1
-lto = "thin"
+lto = "fat"
 opt-level = "s"
 panic = "abort"
 strip = true
