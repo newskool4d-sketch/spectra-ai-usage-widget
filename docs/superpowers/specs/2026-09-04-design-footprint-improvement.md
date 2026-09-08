@@ -142,6 +142,8 @@
 
 성공 기준: 기본 빌드 `cargo tree`에 `keyring`·`sha2`·`base64` 없음, 실행 파일 크기 전후 수치 기록, 기존 Codex·Claude 연결 QA 재통과.
 
+- 검증 확정(2026-09-08): 전이 의존이 남는 크레이트는 전체 제거 대상으로 삼지 않으며, 기준은 "기본 feature에서 네 직접 의존 부재 + 정상 종료한 전체 normal 트리에서 keyring 부재 + 실행 파일 크기 전후 기록"으로 정정. 실제 전이 의존 경로는 검증 결과에 병기: `sha2`는 tauri-codegen 경유, `uuid`는 tauri-utils 경유, `base64`는 reqwest·plist 경유로 남음(기본 depth-1 직접 의존은 reqwest·serde·serde_json·tauri·tauri-plugin-deep-link·tauri-plugin-single-instance·url뿐이며 `cargo tree -i keyring`은 무매치). 이는 바이너리 링크 증명이 아니라 의존 그래프 기준 정정이다.
+
 ### Phase 4 — 선택형 저메모리 대기 모드 (승인 후, 1세션)
 
 - 동작: 창 닫기(트레이 숨김) 시 WebView 창을 `destroy`, 트레이 클릭 시 `WebviewWindowBuilder`로 재생성. 설정에서 "빠른 재표시(기본)" / "메모리 절약" 중 선택.

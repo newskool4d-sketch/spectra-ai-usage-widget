@@ -81,3 +81,86 @@ Phase 1은 GPU·컴포지팅 요소를 건드리지 않았으므로(그레인 �
 
 Phase 0(436.3 MB)·Phase 1b(422.7 MB) 대비 평균 작업 집합이 지속적으로 감소했고, 특히 **최대 작업 집합이 475.3 MB → 413.8 MB(−13.0%)**로 크게 줄었다 — 스펙 2-2절에서 지목한 배경 오브·중첩 `backdrop-filter`가 GPU 컴포지팅 메모리에 직접 반영된다는 진단과 일치한다. 평균 private도 203.7 MB → 187.8 MB(−7.8%)로 감소했다. 목표치(≤ 380 MB)에는 아직 미달이며, 남은 격차는 Phase 3(WebView2 `--renderer-process-limit=1`, 네이티브 실행 파일 슬림화)에서 다룬다.
 
+## 2026-09-08 Phase 3 결과 (네이티브 슬림화)
+
+변경: `native-oauth` cargo feature(기본 off, `default = []`)로 OAuth 모듈과 네 직접 의존(`keyring`·`uuid`·`sha2`·`base64`)을 제외하고, `oauth_prepare`·`credential_status`·`credential_remove` 3개 커맨드는 계약 안정성 목적으로 스텁 상태로 항상 등록 유지. 딥링크 스킴 설정·플러그인은 유지하되 `register_all()`과 콜백 소비는 `native-oauth` feature on에서만 실행. 렌더러 제한(`--renderer-process-limit=1`): 효과 미확인 → 미채택(되돌림). LTO: `lto = "fat"` 채택.
+
+### 의존 트리
+
+기본 feature `cargo tree -e normal --depth 1`(Task 1)에는 `reqwest`·`serde`·`serde_json`·`tauri`·`tauri-plugin-deep-link`·`tauri-plugin-single-instance`·`url`만 남고 `keyring`·`uuid`·`sha2`·`base64` 직접 의존이 사라졌다. `cargo tree -i keyring`은 "did not match any packages"로 트리 전체에서 완전히 제거됨을 확인. 단, `sha2`(tauri-codegen 경유)·`uuid`(tauri-utils 경유)·`base64`(reqwest·plist 경유)는 전이 의존으로 남아 있다 — 바이너리 링크 제거를 직접 증명한 결과는 아니며, 기준은 "직접 의존(depth 1) 부재 + `-i keyring` 무매치 + 실행 파일 크기 전후 기록"으로 정정됐다(아래 스펙 정정 주석 참조). `Cargo.lock` 변경 없음. 게이트: 기본 `cargo build`/`cargo test --lib` 0 경고·24 passed, `--features native-oauth` 0 경고·26 passed.
+
+### OAuth 스텁 범위 (Task 2)
+
+`src/integrations/oauth-messages.ts`의 `describePrepareFailure`는 스텁 오류 `native-oauth-disabled`를 "네이티브 OAuth 연결은 준비 중입니다. 지금은 Codex App Server와 Claude Code 공식 도구로 사용량을 확인합니다."로 매핑한다(테스트 3건). **범위 사실**: `oauth-adapter.ts`와 브리지의 `prepareNativeOAuth`/`getNativeCredentialStatus`/`removeNativeCredential`는 `src/main.tsx`에서 도달 가능한 소비처가 없다 — `src` 전체에서 `oauth-adapter|oauth-messages`를 참조하는 파일은 `oauth-adapter.ts` 자신뿐이고(Task 5 재확인), 빌드된 번들(`dist/assets/index-DWFLH-td.js`, 234,378 B)에 `native-oauth-disabled` 문자열이 0회 등장한다(Task 5 재확인). 따라서 "준비 중" 문구는 오늘 시점에는 사용자에게 노출되지 않는다. 3개 스텁 커맨드는 계약 안정성 목적으로 등록을 유지하며, Rust 테스트 `disabled_oauth_prepare_reports_marker`가 스텁 계약을 고정한다. **UI PASS를 주장하지 않는다.**
+
+### Task 3 — 렌더러 프로세스 제한 A/B (효과 미확인 → 미채택·되돌림)
+
+`--renderer-process-limit=1`을 4사이클(미적용→적용→적용→미적용, 각 60초 안정화 후 12표본×5초 간격)로 측정:
+
+| 사이클 | 설정 | 프로세스 수 | 렌더러 수 | 평균 작업 집합 | 최대 작업 집합 | 평균 private | 인자 확인 |
+|---|---|---:|---:|---:|---:|---:|---|
+| before-1 | 미적용 | 7 | 1 | 435.0 MB | 439.8 MB | 199.8 MB | n/a(미적용, 기대대로) |
+| after-1 | 적용 | 7 | 1 | 429.9 MB | 430.4 MB | 196.4 MB | 확인됨 |
+| after-2 | 적용(빌드 재사용) | 7 | 1 | 423.4 MB | 423.8 MB | 191.7 MB | 확인됨 |
+| before-2 | 미적용 | 7 | 1 | 432.6 MB | 437.5 MB | 192.5 MB | n/a(미적용, 기대대로) |
+
+판정: **NOT ADOPTED (효과 미확인 → 미채택·되돌림)** — 채택 규칙(두 전후 비교 모두에서 렌더러 또는 전체 프로세스 수 감소)을 충족하지 못했다. before-1→after-1, before-2→after-2 두 비교 모두 렌더러 1/1·전체 7/7로 동일했다(단일 창 앱이라 원래도 렌더러가 1개뿐이어서 제한할 대상이 없었음). 작업 집합은 적용 시 소폭 낮았으나(−1.2%, −2.1%, 12표본·5초 간격 측정의 잡음 범위) 판정 규칙이 요구하는 "수 감소 재현"에는 못 미친다. 설정 커밋 `a147b52`는 `git revert`로 `44c265e`에서 되돌렸다.
+
+### Task 4 — LTO fat/thin 비교 (fat 채택)
+
+신규 `--target-dir`마다 클린 빌드 4회(순서 thin→fat→fat→thin, `cargo build --release --bin spectra-native --no-default-features --locked --offline` — **트라이얼 경로**, 아래 "최종 산출물" 표의 `tauri build` 경로와 크기가 다름 § 참조):
+
+| 회차 | 구성 | 시간(초) | exe 바이트(트라이얼 경로) |
+|---|---|---:|---:|
+| 1 | thin | 386.6412297 | 5,313,024 |
+| 2 | fat | 397.4963121 | 4,898,816 |
+| 3 | fat | 390.5581568 | 4,898,816 |
+| 4 | thin | 322.1561986 | 5,313,024 |
+
+중앙값(2회 평균): thin 354.3987142초 / fat 394.0272345초
+
+채택 규칙 3항목: 크기(fat이 thin보다 ≥100,000 B 작은가) **PASS**(−414,208 B) · 시간(fat 중앙값 ≤ thin 중앙값의 2배) **PASS**(비율 1.11×) · 안정성(동일 구성 두 회차 시간차 ≤20%) **FAIL** — thin 자체 두 회차 시간차 **20.017%**(기준 20% 초과, 0.017%p·0.054초 차이).
+
+**컨트롤러 채택 판단**(원장 인용): 안정성 조항은 시간 비교의 신뢰성을 지키기 위한 것인데 관측값의 어떤 짝으로도 fat/thin ≤ 1.22×(기준 2×)이며 크기 기준은 회차 간 완전히 결정적(바이트 동일)이라 결론이 노이즈에 좌우되지 않는다고 재판단 → **fat 채택**, 0.017%p 초과분은 측정 잡음으로 처리. 채택 절차: `lto = "fat"` 설정(1줄 변경) → Task 1 게이트 재실행(기본/native-oauth 양쪽 release 빌드·테스트, 경고 0·24/26 passed) → 커밋 `35f8016`.
+
+### 최종 산출물 (`npm run desktop:build` = `tauri build` 경로, Task 5·6 고정 대상)
+
+| 항목 | Phase 2 (2026-09-05 19:11) | Phase 3 thin | Phase 3 fat(채택) |
+|---|---:|---:|---:|
+| 실행 파일 | 7,302,144 B | 6,223,872 B | 5,809,664 B |
+| NSIS 설치 파일 | 2,936,525 B | 2,663,082 B | 2,673,530 B |
+
+fat 채택분 해시(Task 5 재검증 일치): exe SHA-256 `883195EEA3FFF0137CC840728032CFDAE44DAFADC14AA62550DD148FCDE01A0F` · NSIS SHA-256 `7F89DC4CDDA732402E96680756C4D2376ADAF468C86CF812B4F86E9164A1C153`. NSIS는 thin(2,663,082 B) 대비 fat이 +10,448 B 크다 — fat LTO로 밀도가 높아진(인라인 강화) 코드가 압축 효율을 낮췄을 가능성이며 결정에는 미반영(스펙 기준은 실행 파일 크기). NSIS 자체에 빌드마다 ±수백 바이트의 비결정성이 있다 — exe 바이트는 동일 구성 재빌드에서 완전히 재현되며 해시만 상이(PE 메타데이터 비결정성).
+
+§ 트라이얼 경로 exe는 두 LTO 구성 모두에서 `tauri build` 경로보다 정확히 910,848 B 작다(thin 6,223,872−5,313,024, fat 5,809,664−4,898,816 = 각 910,848 B). `--bin --no-default-features` 단일 바이너리 빌드와 `tauri build`(lib의 staticlib+cdylib+rlib 전체+bin 빌드)의 경로 차이이며 LTO 설정과는 무관하다.
+
+측정 조건: HEAD `35f80167f8b24ee3c8546ec535c4f34e70a1f05d` · `Cargo.lock` SHA-256 `04752C4C553AC387E0D0ABE65E11AABB2A6D46CC6055E29E64048A488B46ACAD` · rustc/cargo 1.96.0(`ac68faa20`/`30a34c682`, 2026-05-25) · host `x86_64-pc-windows-msvc` · Windows `10.0.26200.0` · WebView2 Evergreen `152.0.4191.66` · feature 기본(`default = []`, native-oauth off) · `lto = "fat"` · 측정 일시 2026-09-08.
+
+### 연결 QA (Task 5 Step 1)
+
+고정된 fat 빌드(`spectra-native.exe`, 해시 위와 일치 확인 완료)로 `--provider-snapshot <provider>` 구조 검사를 실행:
+
+| 공급자 | 종료 코드 | connectionState | source | windowCount | 구조 검사(기본+확장) | 판정 |
+|---|---:|---|---|---:|---|---|
+| codex | 0 | connected | codex-app-server | 1 | 전부 통과 | **PASS** |
+| claude | 0 | connected | claude-statusline | 2 | 전부 통과 | **PASS** |
+
+구조 검사 항목: (기본) `providerId` 일치·`connectionState` 열거값·`windows` 배열·비-`error` / (확장) `runtimeAvailable` bool·`authState` 비어있지 않음·`source`가 공급자별 허용값(codex: `codex-app-server`, claude: `claude-usage-api`/`claude-statusline`)·`lastSyncedAt` nullable 숫자 타입·각 창의 `id` 존재·0~100 범위 사용률/잔여율·합계 100 근사(오차 ≤1)·`resetsAt`/`windowDurationMins` nullable 숫자 타입. 두 공급자 모두 `connected`로 조회되어 브리프 기준상 "연결 QA PASS"로 기록한다(signed-out/not-installed/waiting-for-usage였다면 구조 검사 통과로만 기록하고 PASS로 카운트하지 않았을 것). 참고: Task 1 착수 전 시점의 공급자별 창 수 기록이 없어 "연결 상실·창 소실" 전후 비교는 수행할 수 없다 — 이번 단일 관측 기준으로는 이상 없음.
+
+앱 새로고침·미니/대시보드 전환·트레이 숨김/재표시, OAuth 스텁의 실제 Tauri invoke 확인: **미검증**(아래 "사용자 확인 대기" 참조). feature on 회귀: 기존 게이트로만 확인(native-oauth release 빌드 성공 + 26 tests pass) — 실제 OAuth 인증 성공까지 검증한 것은 아니다.
+
+### 사용자 확인 대기 (Task 6 측정 시점)
+
+서브에이전트가 앱을 띄우지 않는다는 제약상 아래 항목은 자동 확인하지 못했다. Task 6 30분 측정 시점에 함께 확인 요청:
+
+- [ ] 최종 네이티브 앱에서 Codex·Claude 각각 새로고침 → 로딩 종료, 실제 source·사용량 창 정상 표시, 오류 메시지 없음
+- [ ] 미니 창 ↔ 대시보드 창 모드 전환 정상
+- [ ] 트레이 숨김 → 재표시 정상
+- [ ] 기본 feature 앱에서 OAuth 연결 시작 UI를 실제로 조작 → `oauth_prepare` invoke가 disabled marker로 실패하고 status의 `available`/`present`가 false로 보이는지 확인(Task 2 조사 결과 현재 UI에는 이 경로로 도달하는 진입점이 없는 것으로 확인됨 — 진입점을 찾지 못하면 "UI 진입점 없음, invoke 계약은 Rust 스텁 테스트로만 고정"으로 기록하고 UI PASS를 주장하지 않는다)
+
+### 2026-09-08 mini-idle-phase3 (Task 6 예정)
+
+| 시나리오 | 표본 | 평균 작업 집합 | 최대 작업 집합 | 평균 private | 프로세스 수 |
+|---|---|---|---|---|---|
+| mini-idle-phase3 (30분) | — | 측정 예정 | 측정 예정 | 측정 예정 | 측정 예정 |
+
