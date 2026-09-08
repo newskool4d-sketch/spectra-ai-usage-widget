@@ -1,6 +1,6 @@
 # SPECTRA 디자인·실행 용량 개선 계획
 
-> 작성: 2026-09-04 · 기준 커밋 `feabeed` · 상태: 승인(2026-09-04, 권장안 4개 채택) · Phase 0·1·2 완료(2026-09-05, 기준선 rev 3 · mini-idle 평균 410.8 MB/최대 413.8 MB, Phase 0 대비 최대 −13.0%) · Phase 3 완료(2026-09-08, 실행 파일 7,302,144 → 5,809,664 B(−20.4%, native-oauth 게이트 + fat LTO) · 프로세스 7 · mini-idle 평균 422.6 MB — Phase 2 대비 비교 미검증(조건 상이)) · Phase 4 승인 대기
+> 작성: 2026-09-04 · 기준 커밋 `feabeed` · 상태: 승인(2026-09-04, 권장안 4개 채택) · Phase 0·1·2 완료(2026-09-05, 기준선 rev 3 · mini-idle 평균 410.8 MB/최대 413.8 MB, Phase 0 대비 최대 −13.0%) · Phase 3 완료(2026-09-08, 실행 파일 7,302,144 → 5,809,664 B(−20.4%, native-oauth 게이트 + fat LTO) · 프로세스 7 · mini-idle 평균 422.6 MB — Phase 2 대비 비교 미검증(조건 상이) · 메모리 목표 FAIL(≤380 MB 미달) · 전체 스펙 목표 PARTIAL(메모리 목표 미달, OAuth 스텁 invoke는 Rust 단위 테스트로만 확인)) · Phase 4 승인 대기
 > 목표: "한눈에 봐도 좋은 디자인"과 "트레이 상주 앱다운 작은 실행 용량"을 동시에 달성한다. 두 목표가 충돌하는 지점은 디자인 원칙(`docs/design-baseline/README.md`)을 기준으로 판정한다.
 
 ## 1. 성공 기준 (체크 가능 형식)
@@ -143,6 +143,7 @@
 성공 기준: 기본 빌드 `cargo tree`에 `keyring`·`sha2`·`base64` 없음, 실행 파일 크기 전후 수치 기록, 기존 Codex·Claude 연결 QA 재통과.
 
 - 검증 확정(2026-09-08): 전이 의존이 남는 크레이트는 전체 제거 대상으로 삼지 않으며, 기준은 "기본 feature에서 네 직접 의존 부재 + 정상 종료한 전체 normal 트리에서 keyring 부재 + 실행 파일 크기 전후 기록"으로 정정. 실제 전이 의존 경로는 검증 결과에 병기: `sha2`는 tauri-codegen 경유, `uuid`는 tauri-utils 경유, `base64`는 reqwest·plist 경유로 남음(기본 depth-1 직접 의존은 reqwest·serde·serde_json·tauri·tauri-plugin-deep-link·tauri-plugin-single-instance·url뿐이며 `cargo tree -i keyring`은 무매치). 이는 바이너리 링크 증명이 아니라 의존 그래프 기준 정정이다.
+- 검증 확정(2026-09-08): WebView2 `--renderer-process-limit=1`은 A/B 4사이클(미적용→적용→적용→미적용, 60초 안정화 후 12표본)에서 렌더러 1/1·전체 프로세스 7/7로 수 감소가 없어 미채택·되돌림(커밋 a147b52 → revert 44c265e; 단일 창 앱이라 제한할 렌더러가 없음). 릴리스 프로필은 thin/fat 비교 후 `lto = "fat"` 채택(35f8016, exe 6,223,872 → 5,809,664 B; 채택 규칙의 중대성 예외는 계획서 Task 4에 기록). 30분 mini-idle 평균 422.6 MB로 메모리 목표(≤380 MB)는 미달 — Phase 4 대상.
 
 ### Phase 4 — 선택형 저메모리 대기 모드 (승인 후, 1세션)
 

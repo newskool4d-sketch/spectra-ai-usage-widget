@@ -3,6 +3,7 @@ export type OAuthPrepareFailure = Readonly<{
   message: string;
 }>;
 
+// Must match the Err string of the disabled oauth_prepare stub in src-tauri/src/lib.rs.
 const disabledMarker = "native-oauth-disabled";
 
 export function describePrepareFailure(error: unknown): OAuthPrepareFailure {

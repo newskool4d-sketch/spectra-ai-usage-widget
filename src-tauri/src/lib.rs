@@ -149,6 +149,7 @@ fn oauth_prepare(
 #[tauri::command]
 fn oauth_prepare(provider_id: String) -> Result<serde_json::Value, String> {
     let _ = provider_id;
+    // Marker consumed by src/integrations/oauth-messages.ts (describePrepareFailure).
     Err("native-oauth-disabled".to_string())
 }
 

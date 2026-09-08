@@ -6,12 +6,12 @@ describe("describePrepareFailure", () => {
   it("maps the disabled-feature stub to a preparing message", () => {
     const result = describePrepareFailure("native-oauth-disabled");
     assert.equal(result.status, "not-available");
-    assert.match(result.message, /준비 중입니다/);
+    assert.equal(result.message, "네이티브 OAuth 연결은 준비 중입니다. 지금은 Codex App Server와 Claude Code 공식 도구로 사용량을 확인합니다.");
   });
 
   it("recognises the stub code inside an Error object", () => {
     const result = describePrepareFailure(new Error("invoke failed: native-oauth-disabled"));
-    assert.match(result.message, /^네이티브 OAuth 연결은 준비 중입니다/);
+    assert.ok(result.message.startsWith("네이티브 OAuth 연결은 준비 중입니다."));
   });
 
   it("keeps the generic failure message for other errors", () => {
