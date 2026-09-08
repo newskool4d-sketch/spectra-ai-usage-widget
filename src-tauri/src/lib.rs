@@ -1,21 +1,32 @@
+#[cfg(feature = "native-oauth")]
 mod credential_vault;
 mod desktop_shell;
+#[cfg(feature = "native-oauth")]
 mod oauth_callback;
+#[cfg(feature = "native-oauth")]
 mod provider_connection;
 mod provider_usage;
 
+#[cfg(feature = "native-oauth")]
 use std::io::{Read, Write};
+#[cfg(feature = "native-oauth")]
 use std::net::TcpListener;
+#[cfg(feature = "native-oauth")]
 use std::sync::Mutex;
 
 use serde::Serialize;
+#[cfg(feature = "native-oauth")]
 use tauri::{AppHandle, Emitter, Manager, Runtime, State};
+#[cfg(feature = "native-oauth")]
 use tauri_plugin_deep_link::DeepLinkExt;
+#[cfg(feature = "native-oauth")]
 use url::Url;
 
 #[derive(Default)]
 pub struct AppState {
+    #[cfg(feature = "native-oauth")]
     pending_oauth: Mutex<Option<oauth_callback::PendingOAuth>>,
+    #[cfg(feature = "native-oauth")]
     loopback_listener: Mutex<Option<TcpListener>>,
 }
 
@@ -27,6 +38,7 @@ struct CredentialStatus {
     present: bool,
 }
 
+#[cfg(feature = "native-oauth")]
 fn process_callback_urls<R: Runtime + 'static>(app: &AppHandle<R>, urls: Vec<url::Url>) {
     for url in urls {
         let result = {
@@ -65,6 +77,7 @@ fn process_callback_urls<R: Runtime + 'static>(app: &AppHandle<R>, urls: Vec<url
     }
 }
 
+#[cfg(feature = "native-oauth")]
 fn spawn_loopback_listener<R: Runtime + 'static>(app: AppHandle<R>, listener: TcpListener) {
     let _ = std::thread::Builder::new()
         .name("spectra-oauth-loopback".to_string())
@@ -110,6 +123,7 @@ fn spawn_loopback_listener<R: Runtime + 'static>(app: AppHandle<R>, listener: Tc
         });
 }
 
+#[cfg(feature = "native-oauth")]
 #[tauri::command]
 fn oauth_prepare(
     app: AppHandle,
@@ -131,6 +145,14 @@ fn oauth_prepare(
     Ok(result)
 }
 
+#[cfg(not(feature = "native-oauth"))]
+#[tauri::command]
+fn oauth_prepare(provider_id: String) -> Result<serde_json::Value, String> {
+    let _ = provider_id;
+    Err("native-oauth-disabled".to_string())
+}
+
+#[cfg(feature = "native-oauth")]
 #[tauri::command]
 fn credential_status(provider_id: String) -> Result<CredentialStatus, String> {
     match credential_vault::exists(&provider_id) {
@@ -148,11 +170,24 @@ fn credential_status(provider_id: String) -> Result<CredentialStatus, String> {
     }
 }
 
+#[cfg(not(feature = "native-oauth"))]
+#[tauri::command]
+fn credential_status(provider_id: String) -> Result<CredentialStatus, String> {
+    Ok(CredentialStatus { provider_id, available: false, present: false })
+}
+
+#[cfg(feature = "native-oauth")]
 #[tauri::command]
 fn credential_remove(provider_id: String) -> Result<(), String> {
     credential_vault::remove(&provider_id).map_err(|_| "credential removal failed".to_string())
 }
 
+#[cfg(not(feature = "native-oauth"))]
+#[tauri::command]
+fn credential_remove(provider_id: String) -> Result<(), String> {
+    let _ = provider_id;
+    Ok(())
+}
 #[tauri::command]
 async fn provider_usage_snapshot(
     provider_id: String,
@@ -210,18 +245,21 @@ pub fn run() {
         .setup(|app| {
             desktop_shell::install(app)?;
 
-            #[cfg(any(target_os = "windows", target_os = "linux"))]
-            app.deep_link().register_all()?;
+            #[cfg(feature = "native-oauth")]
+            {
+                #[cfg(any(target_os = "windows", target_os = "linux"))]
+                app.deep_link().register_all()?;
 
-            let app_handle = app.handle().clone();
-            if let Some(urls) = app.deep_link().get_current()? {
-                process_callback_urls(&app_handle, urls);
+                let app_handle = app.handle().clone();
+                if let Some(urls) = app.deep_link().get_current()? {
+                    process_callback_urls(&app_handle, urls);
+                }
+
+                let event_app = app.handle().clone();
+                app.deep_link().on_open_url(move |event| {
+                    process_callback_urls(&event_app, event.urls());
+                });
             }
-
-            let event_app = app.handle().clone();
-            app.deep_link().on_open_url(move |event| {
-                process_callback_urls(&event_app, event.urls());
-            });
 
             Ok(())
         })
@@ -231,4 +269,29 @@ pub fn run() {
 
 pub fn run_cli_mode() -> bool {
     provider_usage::run_statusline_bridge() || provider_usage::run_provider_snapshot_cli()
+}
+
+#[cfg(all(test, not(feature = "native-oauth")))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn disabled_oauth_prepare_reports_marker() {
+        assert_eq!(oauth_prepare("codex".to_string()).unwrap_err(), "native-oauth-disabled");
+    }
+
+    #[cfg(not(feature = "native-oauth"))]
+    #[test]
+    fn disabled_credential_status_reports_unavailable() {
+        let status = credential_status("codex".to_string()).expect("stub never fails");
+        assert_eq!(status.provider_id, "codex");
+        assert!(!status.available);
+        assert!(!status.present);
+    }
+
+    #[cfg(not(feature = "native-oauth"))]
+    #[test]
+    fn disabled_credential_remove_is_a_noop() {
+        assert!(credential_remove("claude".to_string()).is_ok());
+    }
 }
