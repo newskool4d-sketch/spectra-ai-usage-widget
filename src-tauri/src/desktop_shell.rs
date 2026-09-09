@@ -9,21 +9,22 @@ const MENU_OPEN_DASHBOARD: &str = "open-dashboard";
 const MENU_HIDE: &str = "hide";
 const MENU_QUIT: &str = "quit";
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) enum WindowMode {
+    #[default]
     Mini,
     Dashboard,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-struct WindowProfile {
-    width: f64,
-    height: f64,
-    always_on_top: bool,
+pub(crate) struct WindowProfile {
+    pub(crate) width: f64,
+    pub(crate) height: f64,
+    pub(crate) always_on_top: bool,
 }
 
 impl WindowMode {
-    fn profile(self) -> WindowProfile {
+    pub(crate) fn profile(self) -> WindowProfile {
         match self {
             Self::Mini => WindowProfile {
                 width: 430.0,

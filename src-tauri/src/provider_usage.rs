@@ -505,7 +505,7 @@ struct ClaudeBridgeConfig {
     previous_command: Option<String>,
 }
 
-fn app_data_dir() -> Option<PathBuf> {
+pub(crate) fn app_data_dir() -> Option<PathBuf> {
     if let Some(path) = env::var_os("SPECTRA_DATA_DIR") {
         return Some(PathBuf::from(path));
     }

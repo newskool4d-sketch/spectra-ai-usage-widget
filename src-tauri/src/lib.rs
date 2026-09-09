@@ -6,6 +6,7 @@ mod oauth_callback;
 #[cfg(feature = "native-oauth")]
 mod provider_connection;
 mod provider_usage;
+mod standby;
 
 #[cfg(feature = "native-oauth")]
 use std::io::{Read, Write};
