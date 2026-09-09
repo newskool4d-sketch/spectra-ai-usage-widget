@@ -251,23 +251,25 @@ fn get_ui_prefs(state: State<'_, AppState>) -> Result<standby::UiPrefs, String> 
 #[tauri::command]
 fn set_ui_prefs(theme: String, solid: bool, state: State<'_, AppState>) -> Result<standby::UiPrefs, String> {
     let updated = {
-        let mut prefs = locked_prefs(&state)?;
-        prefs.theme = standby::normalize_theme(&theme).to_string();
-        prefs.solid = solid;
-        prefs.clone()
+        let mut next = locked_prefs(&state)?.clone();
+        next.theme = standby::normalize_theme(&theme).to_string();
+        next.solid = solid;
+        next
     };
     standby::save_prefs(&updated).map_err(|error| error.to_string())?;
+    *locked_prefs(&state)? = updated.clone();
     Ok(updated)
 }
 
 #[tauri::command]
 fn set_standby(enabled: bool, state: State<'_, AppState>) -> Result<standby::UiPrefs, String> {
     let updated = {
-        let mut prefs = locked_prefs(&state)?;
-        prefs.standby = enabled;
-        prefs.clone()
+        let mut next = locked_prefs(&state)?.clone();
+        next.standby = enabled;
+        next
     };
     standby::save_prefs(&updated).map_err(|error| error.to_string())?;
+    *locked_prefs(&state)? = updated.clone();
     Ok(updated)
 }
 
@@ -348,6 +350,58 @@ pub fn run() {
 
 pub fn run_cli_mode() -> bool {
     provider_usage::run_statusline_bridge() || provider_usage::run_provider_snapshot_cli()
+}
+
+#[cfg(test)]
+mod app_state_tests {
+    use super::*;
+
+    fn make_snapshot(provider_id: &str, message: &str) -> provider_usage::ProviderUsageSnapshot {
+        provider_usage::ProviderUsageSnapshot {
+            provider_id: provider_id.to_string(),
+            runtime_available: true,
+            auth_state: "authenticated".to_string(),
+            connection_state: "connected".to_string(),
+            auth_method: Some("oauth".to_string()),
+            plan_type: Some("pro".to_string()),
+            source: Some("bridge".to_string()),
+            last_synced_at: Some(0),
+            bridge_installed: true,
+            windows: Vec::new(),
+            message: message.to_string(),
+        }
+    }
+
+    #[test]
+    fn remember_snapshot_replaces_same_provider_with_newer_payload() {
+        let state = AppState::default();
+        state.remember_snapshot(&make_snapshot("codex", "first sync"));
+        state.remember_snapshot(&make_snapshot("codex", "second sync"));
+
+        let snapshots = state.last_snapshots.lock().unwrap();
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].message, "second sync");
+    }
+
+    #[test]
+    fn boot_state_carries_mode_prefs_and_snapshots() {
+        let state = AppState::default();
+        *state.ui.lock().unwrap() = standby::UiPrefs {
+            theme: "light".to_string(),
+            solid: true,
+            standby: true,
+        };
+        state.remember_snapshot(&make_snapshot("codex", "codex snapshot"));
+
+        let boot = state.boot_state(desktop_shell::WindowMode::Dashboard);
+
+        assert_eq!(boot.mode, "dashboard");
+        assert_eq!(boot.theme, "light");
+        assert!(boot.solid);
+        assert!(boot.standby);
+        assert_eq!(boot.snapshots.len(), 1);
+        assert_eq!(boot.snapshots[0].provider_id, "codex");
+    }
 }
 
 #[cfg(all(test, not(feature = "native-oauth")))]
