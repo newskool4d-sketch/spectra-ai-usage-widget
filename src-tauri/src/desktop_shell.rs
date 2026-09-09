@@ -1,6 +1,6 @@
 use tauri::menu::MenuBuilder;
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{App, AppHandle, LogicalSize, Manager, Runtime, Size};
+use tauri::{App, AppHandle, LogicalSize, Manager, Runtime, Size, WebviewWindow};
 
 pub(crate) const MAIN_WINDOW_LABEL: &str = "main";
 
@@ -39,7 +39,7 @@ impl WindowMode {
         }
     }
 
-    fn slug(self) -> &'static str {
+    pub(crate) fn slug(self) -> &'static str {
         match self {
             Self::Mini => "mini",
             Self::Dashboard => "dashboard",
@@ -52,19 +52,43 @@ fn mode_script(mode: WindowMode) -> String {
     format!("window.__SPECTRA_MODE__='{slug}';window.dispatchEvent(new CustomEvent('spectra-mode',{{detail:'{slug}'}}));")
 }
 
+fn stored_mode<R: Runtime>(app: &AppHandle<R>) -> WindowMode {
+    app.state::<crate::AppState>().window_mode.lock().map(|mode| *mode).unwrap_or_default()
+}
+
+fn store_mode<R: Runtime>(app: &AppHandle<R>, mode: WindowMode) {
+    if let Ok(mut slot) = app.state::<crate::AppState>().window_mode.lock() {
+        *slot = mode;
+    }
+}
+
+fn standby_enabled<R: Runtime>(app: &AppHandle<R>) -> bool {
+    app.state::<crate::AppState>().ui.lock().map(|prefs| prefs.standby).unwrap_or(false)
+}
+
+pub(crate) fn dismiss<R: Runtime>(window: &WebviewWindow<R>, standby: bool) -> tauri::Result<()> {
+    match crate::standby::close_action(standby) {
+        crate::standby::CloseAction::Hide => window.hide(),
+        crate::standby::CloseAction::Destroy => window.destroy(),
+    }
+}
+
 pub(crate) fn show_main_window<R: Runtime>(
     app: &AppHandle<R>,
     mode: WindowMode,
 ) -> tauri::Result<()> {
-    let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) else {
-        return Ok(());
+    store_mode(app, mode);
+    let started = std::time::Instant::now();
+    let window = match app.get_webview_window(MAIN_WINDOW_LABEL) {
+        Some(window) => window,
+        None => {
+            let boot = app.state::<crate::AppState>().boot_state(mode);
+            crate::standby::create_main_window(app, mode, &boot)?
+        }
     };
 
     let profile = mode.profile();
-    window.set_size(Size::Logical(LogicalSize::new(
-        profile.width,
-        profile.height,
-    )))?;
+    window.set_size(Size::Logical(LogicalSize::new(profile.width, profile.height)))?;
     window.set_always_on_top(profile.always_on_top)?;
 
     if window.is_minimized()? {
@@ -75,26 +99,26 @@ pub(crate) fn show_main_window<R: Runtime>(
     window.show()?;
     window.set_focus()?;
     window.eval(&mode_script(mode))?;
+    crate::standby::log_timing("show_main_window", started.elapsed());
     Ok(())
 }
 
 fn hide_main_window<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
-        window.hide()?;
+        dismiss(&window, standby_enabled(app))?;
     }
     Ok(())
 }
 
 fn toggle_main_window<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) else {
-        return Ok(());
+        return show_main_window(app, stored_mode(app));
     };
 
     if window.is_visible()? && !window.is_minimized()? {
-        window.hide()?;
-        Ok(())
+        dismiss(&window, standby_enabled(app))
     } else {
-        show_main_window(app, WindowMode::Mini)
+        show_main_window(app, stored_mode(app))
     }
 }
 
@@ -152,6 +176,11 @@ mod tests {
     fn window_mode_slug_matches_frontend_contract() {
         assert_eq!(WindowMode::Mini.slug(), "mini");
         assert_eq!(WindowMode::Dashboard.slug(), "dashboard");
+    }
+
+    #[test]
+    fn window_mode_defaults_to_mini() {
+        assert_eq!(WindowMode::default(), WindowMode::Mini);
     }
 
     #[test]

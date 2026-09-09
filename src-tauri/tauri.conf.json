@@ -11,18 +11,7 @@
   },
   "app": {
     "withGlobalTauri": true,
-    "windows": [
-      {
-        "label": "main",
-        "title": "SPECTRA AI 사용 현황",
-        "width": 430,
-        "height": 720,
-        "minWidth": 380,
-        "minHeight": 600,
-        "center": true,
-        "resizable": true
-      }
-    ]
+    "windows": []
   },
   "bundle": {
     "active": true,

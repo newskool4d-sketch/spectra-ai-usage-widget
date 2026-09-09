@@ -1,6 +1,3 @@
-// temporary: removed in Task 2 once lib.rs wires this module
-#![allow(dead_code)]
-
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};

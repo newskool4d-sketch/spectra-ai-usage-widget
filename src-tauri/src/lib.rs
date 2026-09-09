@@ -12,12 +12,12 @@ mod standby;
 use std::io::{Read, Write};
 #[cfg(feature = "native-oauth")]
 use std::net::TcpListener;
-#[cfg(feature = "native-oauth")]
 use std::sync::Mutex;
 
 use serde::Serialize;
+use tauri::{AppHandle, Manager, State};
 #[cfg(feature = "native-oauth")]
-use tauri::{AppHandle, Emitter, Manager, Runtime, State};
+use tauri::{Emitter, Runtime};
 #[cfg(feature = "native-oauth")]
 use tauri_plugin_deep_link::DeepLinkExt;
 #[cfg(feature = "native-oauth")]
@@ -29,6 +29,28 @@ pub struct AppState {
     pending_oauth: Mutex<Option<oauth_callback::PendingOAuth>>,
     #[cfg(feature = "native-oauth")]
     loopback_listener: Mutex<Option<TcpListener>>,
+    pub(crate) ui: Mutex<standby::UiPrefs>,
+    pub(crate) window_mode: Mutex<desktop_shell::WindowMode>,
+    pub(crate) last_snapshots: Mutex<Vec<provider_usage::ProviderUsageSnapshot>>,
+}
+
+impl AppState {
+    fn with_prefs(prefs: standby::UiPrefs) -> Self {
+        Self { ui: Mutex::new(prefs), ..Self::default() }
+    }
+
+    pub(crate) fn boot_state(&self, mode: desktop_shell::WindowMode) -> standby::BootState {
+        let prefs = self.ui.lock().map(|p| p.clone()).unwrap_or_default();
+        let snapshots = self.last_snapshots.lock().map(|s| s.clone()).unwrap_or_default();
+        standby::BootState { theme: prefs.theme, solid: prefs.solid, standby: prefs.standby, mode: mode.slug(), snapshots }
+    }
+
+    pub(crate) fn remember_snapshot(&self, snapshot: &provider_usage::ProviderUsageSnapshot) {
+        if let Ok(mut list) = self.last_snapshots.lock() {
+            list.retain(|s| s.provider_id != snapshot.provider_id);
+            list.push(snapshot.clone());
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -192,11 +214,14 @@ fn credential_remove(provider_id: String) -> Result<(), String> {
 }
 #[tauri::command]
 async fn provider_usage_snapshot(
+    app: AppHandle,
     provider_id: String,
 ) -> Result<provider_usage::ProviderUsageSnapshot, String> {
-    tauri::async_runtime::spawn_blocking(move || provider_usage::snapshot(&provider_id))
+    let snapshot = tauri::async_runtime::spawn_blocking(move || provider_usage::snapshot(&provider_id))
         .await
-        .map_err(|_| "provider usage worker failed".to_string())
+        .map_err(|_| "provider usage worker failed".to_string())?;
+    app.state::<AppState>().remember_snapshot(&snapshot);
+    Ok(snapshot)
 }
 
 #[tauri::command]
@@ -214,6 +239,38 @@ fn provider_remove_bridge(provider_id: String) -> provider_usage::ProviderAction
     provider_usage::remove_bridge(&provider_id)
 }
 
+fn locked_prefs<'a>(state: &'a State<'_, AppState>) -> Result<std::sync::MutexGuard<'a, standby::UiPrefs>, String> {
+    state.ui.lock().map_err(|_| "ui preferences unavailable".to_string())
+}
+
+#[tauri::command]
+fn get_ui_prefs(state: State<'_, AppState>) -> Result<standby::UiPrefs, String> {
+    locked_prefs(&state).map(|prefs| prefs.clone())
+}
+
+#[tauri::command]
+fn set_ui_prefs(theme: String, solid: bool, state: State<'_, AppState>) -> Result<standby::UiPrefs, String> {
+    let updated = {
+        let mut prefs = locked_prefs(&state)?;
+        prefs.theme = standby::normalize_theme(&theme).to_string();
+        prefs.solid = solid;
+        prefs.clone()
+    };
+    standby::save_prefs(&updated).map_err(|error| error.to_string())?;
+    Ok(updated)
+}
+
+#[tauri::command]
+fn set_standby(enabled: bool, state: State<'_, AppState>) -> Result<standby::UiPrefs, String> {
+    let updated = {
+        let mut prefs = locked_prefs(&state)?;
+        prefs.standby = enabled;
+        prefs.clone()
+    };
+    standby::save_prefs(&updated).map_err(|error| error.to_string())?;
+    Ok(updated)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let mut builder = tauri::Builder::default().plugin(tauri_plugin_deep_link::init());
@@ -225,16 +282,26 @@ pub fn run() {
         }));
     }
 
-    builder
+    let app = builder
         .on_window_event(|window, event| {
-            if window.label() == desktop_shell::MAIN_WINDOW_LABEL {
-                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                    api.prevent_close();
-                    let _ = window.hide();
+            if window.label() != desktop_shell::MAIN_WINDOW_LABEL {
+                return;
+            }
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let standby = window
+                    .app_handle()
+                    .state::<AppState>()
+                    .ui
+                    .lock()
+                    .map(|prefs| prefs.standby)
+                    .unwrap_or(false);
+                if let Some(webview) = window.app_handle().get_webview_window(desktop_shell::MAIN_WINDOW_LABEL) {
+                    let _ = desktop_shell::dismiss(&webview, standby);
                 }
             }
         })
-        .manage(AppState::default())
+        .manage(AppState::with_prefs(standby::load_prefs()))
         .invoke_handler(tauri::generate_handler![
             oauth_prepare,
             credential_status,
@@ -242,10 +309,14 @@ pub fn run() {
             provider_usage_snapshot,
             provider_start_login,
             provider_install_bridge,
-            provider_remove_bridge
+            provider_remove_bridge,
+            get_ui_prefs,
+            set_ui_prefs,
+            set_standby
         ])
         .setup(|app| {
             desktop_shell::install(app)?;
+            desktop_shell::show_main_window(app.handle(), desktop_shell::WindowMode::Mini)?;
 
             #[cfg(feature = "native-oauth")]
             {
@@ -265,8 +336,14 @@ pub fn run() {
 
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running SPECTRA native shell");
+        .build(tauri::generate_context!())
+        .expect("error while building SPECTRA native shell");
+
+    app.run(|_app, event| {
+        if let tauri::RunEvent::ExitRequested { api, code: None, .. } = event {
+            api.prevent_exit();
+        }
+    });
 }
 
 pub fn run_cli_mode() -> bool {
