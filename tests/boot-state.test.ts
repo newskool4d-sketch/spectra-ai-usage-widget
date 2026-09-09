@@ -30,6 +30,12 @@ describe("parseBootState", () => {
     assert.deepEqual(boot.snapshots.map(s => s.providerId), ["codex"]);
   });
 
+  it("drops snapshots whose windows are malformed but keeps the rest", () => {
+    const boot = parseBootState({ theme: "dark", solid: false, standby: false, mode: "mini", snapshots: [{ ...snapshot, providerId: "claude", windows: [null] }, snapshot] });
+    assert.ok(boot);
+    assert.deepEqual(boot.snapshots.map(s => s.providerId), ["codex"]);
+  });
+
   it("returns null for non-objects and missing fields", () => {
     assert.equal(parseBootState(undefined), null);
     assert.equal(parseBootState("dark"), null);

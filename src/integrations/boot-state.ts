@@ -6,8 +6,12 @@ export type NativeBootState = NativeUiPrefs & Readonly<{ mode: "mini" | "dashboa
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null;
 const knownProviders = new Set(["codex", "claude"]);
 
+function isWindow(value: unknown): boolean {
+  return isRecord(value) && typeof value.id === "string" && typeof value.label === "string" && typeof value.usedPercent === "number" && typeof value.remainingPercent === "number";
+}
+
 function isSnapshot(value: unknown): value is NativeProviderUsageSnapshot {
-  return isRecord(value) && typeof value.providerId === "string" && typeof value.connectionState === "string" && Array.isArray(value.windows);
+  return isRecord(value) && typeof value.providerId === "string" && typeof value.connectionState === "string" && Array.isArray(value.windows) && value.windows.every(isWindow);
 }
 
 export function parseBootState(raw: unknown): NativeBootState | null {

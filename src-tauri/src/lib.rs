@@ -248,29 +248,34 @@ fn get_ui_prefs(state: State<'_, AppState>) -> Result<standby::UiPrefs, String> 
     locked_prefs(&state).map(|prefs| prefs.clone())
 }
 
-#[tauri::command]
-fn set_ui_prefs(theme: String, solid: bool, state: State<'_, AppState>) -> Result<standby::UiPrefs, String> {
+fn apply_prefs(
+    state: &State<'_, AppState>,
+    update: impl FnOnce(&mut standby::UiPrefs),
+) -> Result<standby::UiPrefs, String> {
     let updated = {
-        let mut next = locked_prefs(&state)?.clone();
-        next.theme = standby::normalize_theme(&theme).to_string();
-        next.solid = solid;
-        next
+        let mut prefs = locked_prefs(state)?;
+        update(&mut prefs);
+        prefs.clone()
     };
-    standby::save_prefs(&updated).map_err(|error| error.to_string())?;
-    *locked_prefs(&state)? = updated.clone();
+    // The change takes effect immediately; persistence is best-effort so a disk
+    // error never blocks theme or standby for the running session.
+    if let Err(error) = standby::save_prefs(&updated) {
+        eprintln!("spectra: ui preferences were not saved: {error}");
+    }
     Ok(updated)
 }
 
 #[tauri::command]
+fn set_ui_prefs(theme: String, solid: bool, state: State<'_, AppState>) -> Result<standby::UiPrefs, String> {
+    apply_prefs(&state, |prefs| {
+        prefs.theme = standby::normalize_theme(&theme).to_string();
+        prefs.solid = solid;
+    })
+}
+
+#[tauri::command]
 fn set_standby(enabled: bool, state: State<'_, AppState>) -> Result<standby::UiPrefs, String> {
-    let updated = {
-        let mut next = locked_prefs(&state)?.clone();
-        next.standby = enabled;
-        next
-    };
-    standby::save_prefs(&updated).map_err(|error| error.to_string())?;
-    *locked_prefs(&state)? = updated.clone();
-    Ok(updated)
+    apply_prefs(&state, |prefs| prefs.standby = enabled)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
