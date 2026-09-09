@@ -154,7 +154,7 @@
 
 성공 기준: 대기 모드 30분 작업 집합 ≤ 60 MB, 재표시 후 테마·모드가 유지됨, 기본값은 현행 동작.
 
-- 검증 확정(2026-09-09): 대기 모드 30분 작업 집합 평균 31.5 MB/최대 31.7 MB(프로세스 1, 61표본) → ≤ 60 MB PASS · 재표시 지연 중앙값 620 ms(콜드 재생성 5회 692 ms, 예상 300~600 ms 소폭 상회) · 재생성 후 테마·모드·스냅샷 유지, 기본값 현행(사용자 확인) · 실행 파일 5,836,800 B(+27,136 B). 상태 전달은 URL 쿼리 대신 `initialization_script`(`window.__SPECTRA_BOOT__`), 트레이 숫자는 `png` 인코더 대신 RGBA `Image::new_owned`(`png`는 build-dependency 전용) — 구현 커밋 77a0f08..3eab6e9, 수치 상세는 `docs/performance/memory-budget.md`.
+- 검증 확정(2026-09-09): 대기 모드 30분 작업 집합 평균 31.5 MB/최대 31.7 MB(프로세스 1, 61표본) → ≤ 60 MB PASS · 재표시 지연 중앙값 620 ms(콜드 재생성 5회 692 ms, 예상 300~600 ms 소폭 상회) · 재생성 후 테마·모드·스냅샷 유지, 기본값 현행(사용자 확인) · 실행 파일 5,836,800 B(+27,136 B). 상태 전달은 URL 쿼리 대신 `initialization_script`(`window.__SPECTRA_BOOT__`), 트레이 숫자는 `png` 인코더 대신 RGBA `Image::new_owned`(`png`는 build-dependency 전용) — 구현 커밋 77a0f08~3eab6e9(양끝 포함 6커밋, git 범위 `ceebe1e..3eab6e9`), 수치 상세는 `docs/performance/memory-budget.md`.
 
 ## 5. 검토 대상 선택지 (착수 전 결정)
 

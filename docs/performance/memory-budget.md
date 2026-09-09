@@ -176,7 +176,7 @@ fat 빌드(`spectra-native.exe`, SHA-256 `883195EE…`)로 사용자가 직접 �
 
 ## 2026-09-09 Phase 4 결과 (선택형 저메모리 대기 모드)
 
-변경: 설정 "메모리 절약 대기"(기본 off). 켜면 창 닫기 시 WebView 창을 `destroy`하고 트레이만 남기며, 트레이 클릭 시 `WebviewWindowBuilder`로 재생성해 테마·창 모드·마지막 스냅샷을 `initialization_script`(`window.__SPECTRA_BOOT__`)로 복원한다. 선호는 Rust가 `<앱 데이터 폴더>/ui-prefs.json`에 저장(`localStorage` 미사용). 트레이 아이콘에 연결된 공급자의 최소 잔여율을 표시(시작·수동 새로고침 시에만 갱신). 구현 커밋 77a0f08..3eab6e9, 릴리스 빌드는 3eab6e9 기준(빌드 5분 28초).
+변경: 설정 "메모리 절약 대기"(기본 off). 켜면 창 닫기 시 WebView 창을 `destroy`하고 트레이만 남기며, 트레이 클릭 시 `WebviewWindowBuilder`로 재생성해 테마·창 모드·마지막 스냅샷을 `initialization_script`(`window.__SPECTRA_BOOT__`)로 복원한다. 선호는 Rust가 `<앱 데이터 폴더>/ui-prefs.json`에 저장(`localStorage` 미사용). 트레이 아이콘에 연결된 공급자의 최소 잔여율을 표시(시작·수동 새로고침 시에만 갱신). 구현 커밋 77a0f08~3eab6e9(양끝 포함 6커밋, git 범위 `ceebe1e..3eab6e9`), 릴리스 빌드는 3eab6e9 기준(빌드 5분 28초).
 
 | 시나리오 | 표본 | 평균 작업 집합 | 최대 작업 집합 | 평균 private | 프로세스 수 | 목표(≤ 60 MB) |
 |---|---|---|---|---|---|---|
