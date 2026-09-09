@@ -7,6 +7,7 @@ mod oauth_callback;
 mod provider_connection;
 mod provider_usage;
 mod standby;
+mod tray_badge;
 
 #[cfg(feature = "native-oauth")]
 use std::io::{Read, Write};
@@ -221,6 +222,7 @@ async fn provider_usage_snapshot(
         .await
         .map_err(|_| "provider usage worker failed".to_string())?;
     app.state::<AppState>().remember_snapshot(&snapshot);
+    desktop_shell::update_tray_badge(&app);
     Ok(snapshot)
 }
 

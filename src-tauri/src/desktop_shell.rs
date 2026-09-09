@@ -1,6 +1,7 @@
 use tauri::menu::MenuBuilder;
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{App, AppHandle, LogicalSize, Manager, Runtime, Size, WebviewWindow};
+use tauri::image::Image;
 
 pub(crate) const MAIN_WINDOW_LABEL: &str = "main";
 
@@ -132,10 +133,10 @@ pub(crate) fn install<R: Runtime>(app: &mut App<R>) -> tauri::Result<()> {
         .text(MENU_QUIT, "SPECTRA 종료")
         .build()?;
 
-    let mut tray = TrayIconBuilder::with_id("spectra-main")
+    let mut tray = TrayIconBuilder::with_id(TRAY_ID)
         .menu(&menu)
         .show_menu_on_left_click(false)
-        .tooltip("SPECTRA · 개인 요금제 사용 현황")
+        .tooltip(TRAY_TOOLTIP)
         .on_menu_event(|app, event| match event.id().as_ref() {
             MENU_OPEN_MINI => {
                 let _ = show_main_window(app, WindowMode::Mini);
@@ -166,6 +167,30 @@ pub(crate) fn install<R: Runtime>(app: &mut App<R>) -> tauri::Result<()> {
 
     let _ = tray.build(app)?;
     Ok(())
+}
+
+const TRAY_ID: &str = "spectra-main";
+const TRAY_TOOLTIP: &str = "SPECTRA · 개인 요금제 사용 현황";
+
+pub(crate) fn update_tray_badge<R: Runtime>(app: &AppHandle<R>) {
+    let Some(tray) = app.tray_by_id(TRAY_ID) else { return };
+    let snapshots = app
+        .state::<crate::AppState>()
+        .last_snapshots
+        .lock()
+        .map(|list| list.clone())
+        .unwrap_or_default();
+    match crate::tray_badge::min_remaining_percent(&snapshots) {
+        Some((provider_id, percent)) => {
+            let image = Image::new_owned(crate::tray_badge::render(percent), crate::tray_badge::BADGE_SIZE, crate::tray_badge::BADGE_SIZE);
+            let _ = tray.set_icon(Some(image));
+            let _ = tray.set_tooltip(Some(format!("{TRAY_TOOLTIP} · 최소 잔여 {percent}% ({provider_id})")));
+        }
+        None => {
+            let _ = tray.set_icon(app.default_window_icon().cloned());
+            let _ = tray.set_tooltip(Some(TRAY_TOOLTIP));
+        }
+    }
 }
 
 #[cfg(test)]
