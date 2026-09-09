@@ -1,4 +1,5 @@
 import type { ProviderId } from "../data/providers";
+import { parseBootState, type NativeBootState, type NativeUiPrefs } from "./boot-state";
 
 type TauriUnlisten = () => void | Promise<void>;
 type TauriInvoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
@@ -13,6 +14,7 @@ type TauriGlobal = Readonly<{
 declare global {
   interface Window {
     __TAURI__?: TauriGlobal;
+    __SPECTRA_BOOT__?: unknown;
   }
 }
 
@@ -82,6 +84,29 @@ const nativeGlobal = (): TauriGlobal | undefined =>
 const invoke = (): TauriInvoke | undefined => nativeGlobal()?.core?.invoke;
 
 export const isTauriRuntime = () => typeof invoke() === "function";
+
+export function readBootState(): NativeBootState | null {
+  if (typeof window === "undefined") return null;
+  return parseBootState(window.__SPECTRA_BOOT__);
+}
+
+export async function getNativeUiPrefs(): Promise<NativeUiPrefs | null> {
+  const command = invoke();
+  if (!command) return null;
+  return command<NativeUiPrefs>("get_ui_prefs");
+}
+
+export async function setNativeUiPrefs(prefs: Readonly<{ theme: "dark" | "light"; solid: boolean }>): Promise<NativeUiPrefs | null> {
+  const command = invoke();
+  if (!command) return null;
+  return command<NativeUiPrefs>("set_ui_prefs", { theme: prefs.theme, solid: prefs.solid });
+}
+
+export async function setNativeStandby(enabled: boolean): Promise<NativeUiPrefs | null> {
+  const command = invoke();
+  if (!command) return null;
+  return command<NativeUiPrefs>("set_standby", { enabled });
+}
 
 export async function prepareNativeOAuth(providerId: ProviderId): Promise<NativeOAuthPrepareResult | null> {
   const command = invoke();

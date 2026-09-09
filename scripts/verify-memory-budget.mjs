@@ -9,7 +9,9 @@ const sourceFiles = [
   "src/components/Icon.tsx",
   "src/components/Sparkline.tsx",
   "src/data/providers.ts",
-  "src/data/next-action.ts"
+  "src/data/next-action.ts",
+  "src/integrations/tauri-native-bridge.ts",
+  "src/integrations/boot-state.ts"
 ];
 const source = sourceFiles.map(file => readFileSync(join(root, file), "utf8")).join("\n");
 const failures = [];

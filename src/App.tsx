@@ -5,7 +5,7 @@ import { computeNextAction, computeTimeProgress, hasVerifiedUsage, paceLabel } f
 import { createRefreshSequencer } from "./data/refresh-sequence";
 import { metricLabels, planQuotas, providers, rangeLabels, type AuthMethod, type Metric, type PlanQuota, type Provider, type ProviderId, type QuotaWindow, type QuotaWindowId, type UsageRange } from "./data/providers";
 import { providerCapabilities, type ProviderCapability } from "./integrations/provider-capabilities";
-import { getNativeProviderUsage, installNativeProviderBridge, isTauriRuntime, removeNativeProviderBridge, startNativeProviderLogin, type NativeProviderActionResult, type NativeProviderUsageSnapshot } from "./integrations/tauri-native-bridge";
+import { getNativeProviderUsage, installNativeProviderBridge, isTauriRuntime, readBootState, removeNativeProviderBridge, setNativeStandby, setNativeUiPrefs, startNativeProviderLogin, type NativeProviderActionResult, type NativeProviderUsageSnapshot } from "./integrations/tauri-native-bridge";
 
 const mobileBreakpoint = "(max-width: 820px)";
 const mobileClockFormatter = new Intl.DateTimeFormat("ko-KR", { hour: "2-digit", minute: "2-digit", hour12: false });
@@ -155,11 +155,14 @@ function nativePendingQuota(fallback: PlanQuota): PlanQuota {
   };
 }
 
-function initialQuotaRecord(): QuotaRecord {
+function initialQuotaRecord(snapshots: readonly NativeProviderUsageSnapshot[] = []): QuotaRecord {
   if (!isTauriRuntime()) return planQuotas;
+  const restored = new Map(snapshots.map(snapshot => [snapshot.providerId, snapshot] as const));
+  const codex = restored.get("codex");
+  const claude = restored.get("claude");
   return {
-    codex: nativePendingQuota(planQuotas.codex),
-    claude: nativePendingQuota(planQuotas.claude)
+    codex: codex ? quotaFromSnapshot(codex, planQuotas.codex) : nativePendingQuota(planQuotas.codex),
+    claude: claude ? quotaFromSnapshot(claude, planQuotas.claude) : nativePendingQuota(planQuotas.claude)
   };
 }
 
@@ -438,9 +441,11 @@ type LayoutActions = Readonly<{
   refreshing: boolean;
   solid: boolean;
   theme: ThemeMode;
+  standby: boolean;
   onRefresh: () => void;
   onSolid: () => void;
   onTheme: () => void;
+  onStandby: () => void;
 }>;
 
 type SharedViewProps = LayoutActions & Readonly<{
@@ -468,7 +473,7 @@ function viewCopy(view: ProductView) {
 
 type ViewPanelProps = Omit<SharedViewProps, "onView">;
 
-const DesktopViewPanel = memo(function DesktopViewPanel({ view, activeProvider, activeProviderId, activeQuota, quotas, metric, range, onProvider, onMetric, onRange, onOpenOAuth, refreshedAt, refreshing, solid, theme, onRefresh, onSolid, onTheme }: ViewPanelProps) {
+const DesktopViewPanel = memo(function DesktopViewPanel({ view, activeProvider, activeProviderId, activeQuota, quotas, metric, range, onProvider, onMetric, onRange, onOpenOAuth, refreshedAt, refreshing, solid, theme, standby, onRefresh, onSolid, onTheme, onStandby }: ViewPanelProps) {
   if (view === "services") {
     return <div className="view-stack"><article className="glass-card providers-card"><div className="card-heading"><div><span className="eyebrow">서비스</span><h3>서비스별 잔여량</h3></div><span className="live-pill"><i />공식 조회</span></div><div className="provider-list">{providers.map(provider => <ProviderRow key={provider.id} provider={provider} quota={quotas[provider.id]} active={provider.id === activeProviderId} onSelect={onProvider} />)}</div></article><OAuthConnectCard provider={activeProvider} quota={activeQuota} onOpen={onOpenOAuth} /></div>;
   }
@@ -478,7 +483,7 @@ const DesktopViewPanel = memo(function DesktopViewPanel({ view, activeProvider, 
   if (view === "alerts") {
     return <div className="view-stack"><article className="glass-card alert-panel"><div className="card-heading"><div><span className="eyebrow">알림</span><h3>지금 확인할 항목</h3></div><span className="live-pill"><i />현재 상태</span></div>{providers.map(provider => <div className="alert-row" key={provider.id} style={providerStyle(provider.color)}><ProviderLogo provider={provider} size="sm" /><div><strong>{connectionLabel(quotas[provider.id])}</strong><span>{quotas[provider.id].statusMessage}</span></div><b>{displayPercent(quotas[provider.id])}</b></div>)}</article></div>;
   }
-  return <div className="view-stack"><article className="glass-card settings-panel"><div className="card-heading"><div><span className="eyebrow">설정</span><h3>사용 환경</h3></div><span className="live-pill"><i />기기 안에서만 처리</span></div><div className="settings-row"><div><strong>화면 테마</strong><span>{theme === "dark" ? "짙은 배경과 선명한 대비를 사용합니다." : "밝은 배경과 부드러운 대비를 사용합니다."}</span></div><button type="button" className="secondary-action" onClick={onTheme}>{theme === "dark" ? "일반 모드" : "다크 모드"}</button></div><div className="settings-row"><div><strong>가독성용 불투명 모드</strong><span>{solid ? "현재 불투명 카드를 사용합니다." : "현재 반투명 카드를 사용합니다."}</span></div><button type="button" className="secondary-action" onClick={onSolid}>{solid ? "유리 모드" : "불투명 모드"}</button></div><div className="settings-row"><div><strong>공식 사용량 새로고침</strong><span>Codex App Server와 Claude status line 캐시를 다시 확인합니다.</span></div><button type="button" className="primary-action" onClick={onRefresh} disabled={refreshing}>{refreshing ? "확인 중" : "지금 확인"}</button></div><div className="settings-note"><Icon name="shield" size={15} /><span>토큰·이메일·세션 원문은 SPECTRA에 복제하지 않습니다. 마지막 확인 · {refreshedAt}</span></div></article></div>;
+  return <div className="view-stack"><article className="glass-card settings-panel"><div className="card-heading"><div><span className="eyebrow">설정</span><h3>사용 환경</h3></div><span className="live-pill"><i />기기 안에서만 처리</span></div><div className="settings-row"><div><strong>화면 테마</strong><span>{theme === "dark" ? "짙은 배경과 선명한 대비를 사용합니다." : "밝은 배경과 부드러운 대비를 사용합니다."}</span></div><button type="button" className="secondary-action" onClick={onTheme}>{theme === "dark" ? "일반 모드" : "다크 모드"}</button></div><div className="settings-row"><div><strong>가독성용 불투명 모드</strong><span>{solid ? "현재 불투명 카드를 사용합니다." : "현재 반투명 카드를 사용합니다."}</span></div><button type="button" className="secondary-action" onClick={onSolid}>{solid ? "유리 모드" : "불투명 모드"}</button></div><div className="settings-row"><div><strong>메모리 절약 대기</strong><span>{standby ? "창을 닫으면 WebView를 종료하고 트레이만 남깁니다. 다시 열 때 약 0.5초 걸립니다." : "창을 닫으면 숨기기만 해 즉시 다시 표시됩니다(기본)."}</span></div><button type="button" className="secondary-action" onClick={onStandby}>{standby ? "빠른 재표시" : "메모리 절약"}</button></div><div className="settings-row"><div><strong>공식 사용량 새로고침</strong><span>Codex App Server와 Claude status line 캐시를 다시 확인합니다.</span></div><button type="button" className="primary-action" onClick={onRefresh} disabled={refreshing}>{refreshing ? "확인 중" : "지금 확인"}</button></div><div className="settings-note"><Icon name="shield" size={15} /><span>토큰·이메일·세션 원문은 SPECTRA에 복제하지 않습니다. 마지막 확인 · {refreshedAt}</span></div></article></div>;
 });
 
 const VariantADesktop = memo(function VariantADesktop({ view, onView, activeProvider, activeProviderId, activeQuota, quotas, metric, range, onProvider, onMetric, onRange, onOpenOAuth, ...actions }: SharedViewProps) {
@@ -543,21 +548,23 @@ const MiniLayout = memo(function MiniLayout({ quotas, onRefresh, refreshing }: R
 
 export function App() {
   const isMobile = useIsMobile();
+  const boot = useRef(readBootState()).current;
   const windowMode = useWindowMode();
   const [view, setView] = useState<ProductView>("overview");
   const [activeProviderId, setActiveProviderId] = useState<ProviderId>("codex");
   const [metric, setMetric] = useState<Metric>("remaining");
   const [range, setRange] = useState<UsageRange>("7D");
-  const [solid, setSolid] = useState(false);
-  const [theme, setTheme] = useState<ThemeMode>("dark");
-  const [refreshedAt, setRefreshedAt] = useState("방금 전");
+  const [solid, setSolid] = useState(boot?.solid ?? false);
+  const [theme, setTheme] = useState<ThemeMode>(boot?.theme ?? "dark");
+  const [standby, setStandby] = useState(boot?.standby ?? false);
+  const [refreshedAt, setRefreshedAt] = useState(boot && boot.snapshots.length > 0 ? "이전 표시 복원" : "방금 전");
   const [refreshing, setRefreshing] = useState(false);
-  const [quotas, setQuotas] = useState<QuotaRecord>(initialQuotaRecord);
+  const [quotas, setQuotas] = useState<QuotaRecord>(() => initialQuotaRecord(boot?.snapshots ?? []));
   const [oauthProviderId, setOauthProviderId] = useState<ProviderId>("codex");
   const [oauthOpen, setOauthOpen] = useState(false);
   const [actionFeedback, setActionFeedback] = useState<ProviderActionFeedback | null>(null);
   const [loginPollingProviderId, setLoginPollingProviderId] = useState<ProviderId | null>(null);
-  const initialRefreshStarted = useRef(false);
+  const initialRefreshStarted = useRef(Boolean(boot && boot.snapshots.length > 0));
   const refreshSequence = useRef(createRefreshSequencer<ProviderId>()).current;
   const activeProvider = useMemo(() => providers.find(provider => provider.id === activeProviderId) ?? providers[0], [activeProviderId]);
   const activeQuota = quotas[activeProviderId];
@@ -567,6 +574,28 @@ export function App() {
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
   }, [theme]);
+
+  const prefsSyncArmed = useRef(false);
+  useEffect(() => {
+    if (!isTauriRuntime()) return;
+    if (!prefsSyncArmed.current) {
+      prefsSyncArmed.current = true;
+      return;
+    }
+    void setNativeUiPrefs({ theme, solid });
+  }, [theme, solid]);
+
+  const toggleStandby = useCallback(async () => {
+    const next = !standby;
+    setStandby(next);
+    if (!isTauriRuntime()) return;
+    try {
+      const saved = await setNativeStandby(next);
+      if (saved) setStandby(saved.standby);
+    } catch {
+      setStandby(!next);
+    }
+  }, [standby]);
 
   const refreshProvider = useCallback(async (id: ProviderId) => {
     const ticket = refreshSequence.begin(id);
@@ -710,9 +739,11 @@ export function App() {
     refreshing,
     solid,
     theme,
+    standby,
     onRefresh: refresh,
     onSolid: () => setSolid(value => !value),
-    onTheme: () => setTheme(value => value === "dark" ? "light" : "dark")
+    onTheme: () => setTheme(value => value === "dark" ? "light" : "dark"),
+    onStandby: () => void toggleStandby()
   };
 
   return <><div className={solid ? "solid-mode" : ""}>{windowMode === "mini" ? <MiniLayout quotas={quotas} onRefresh={refresh} refreshing={refreshing} /> : isMobile ? <VariantCMobile {...sharedProps} /> : <VariantADesktop {...sharedProps} />}</div><OAuthDialog open={oauthOpen} provider={oauthProvider} quota={oauthQuota} startResult={actionFeedback} onClose={closeOAuth} onConnect={connectOAuth} onDisconnect={disconnectOAuth} /></>;
