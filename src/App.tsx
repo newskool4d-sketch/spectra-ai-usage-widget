@@ -583,7 +583,7 @@ export function App() {
       prefsSyncArmed.current = true;
       return;
     }
-    void setNativeUiPrefs({ theme, solid });
+    void setNativeUiPrefs({ theme, solid }).catch((error: unknown) => console.warn("SPECTRA: ui preferences were not synced", error));
   }, [theme, solid]);
 
   const toggleStandby = useCallback(async () => {
