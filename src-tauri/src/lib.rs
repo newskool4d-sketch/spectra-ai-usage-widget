@@ -33,6 +33,7 @@ pub struct AppState {
     pub(crate) ui: Mutex<standby::UiPrefs>,
     pub(crate) window_mode: Mutex<desktop_shell::WindowMode>,
     pub(crate) last_snapshots: Mutex<Vec<provider_usage::ProviderUsageSnapshot>>,
+    pub(crate) recreating: std::sync::atomic::AtomicBool,
 }
 
 impl AppState {

@@ -119,7 +119,7 @@ pub fn log_timing(label: &str, elapsed: Duration) {
     }
     let epoch_ms = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
     if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(dir.join(TIMING_LOG_FILE)) {
-        let _ = writeln!(file, "{epoch_ms},{label},{}", elapsed.as_millis());
+        let _ = file.write_all(format!("{epoch_ms},{label},{}\n", elapsed.as_millis()).as_bytes());
     }
 }
 

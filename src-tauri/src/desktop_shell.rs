@@ -1,6 +1,7 @@
 use tauri::menu::MenuBuilder;
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{App, AppHandle, LogicalSize, Manager, Runtime, Size, WebviewWindow};
+use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::image::Image;
 
 pub(crate) const MAIN_WINDOW_LABEL: &str = "main";
@@ -105,6 +106,20 @@ pub(crate) fn create_initial_window<R: Runtime>(app: &AppHandle<R>, mode: Window
     recreate_and_present(app, mode)
 }
 
+/// Claims the single recreation slot; `false` means a recreation is already in flight.
+fn try_begin_recreate(flag: &AtomicBool) -> bool {
+    flag.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_ok()
+}
+
+/// Releases the recreation slot when dropped, on every exit path of the worker.
+struct RecreateGuard<'a>(&'a AtomicBool);
+
+impl Drop for RecreateGuard<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
+
 pub(crate) fn show_main_window<R: Runtime>(
     app: &AppHandle<R>,
     mode: WindowMode,
@@ -120,14 +135,35 @@ pub(crate) fn show_main_window<R: Runtime>(
     // On Windows, building a webview inside a synchronous event handler (tray click, tray
     // menu, single-instance callback) can deadlock — a documented `WebviewWindowBuilder`
     // known issue — so the recreation runs on a worker thread and this callback returns first.
-    let app = app.clone();
-    std::thread::Builder::new()
+    // Only one recreation may be in flight: Tauri checks the label in `prepare_window` but
+    // registers the window only after it is built, so two concurrent builders would both
+    // succeed and leave an unreachable duplicate window behind.
+    if !try_begin_recreate(&app.state::<crate::AppState>().recreating) {
+        return Ok(());
+    }
+    let worker = app.clone();
+    let spawned = std::thread::Builder::new()
         .name("spectra-window-recreate".to_string())
         .spawn(move || {
-            if let Err(error) = recreate_and_present(&app, mode) {
+            let state = worker.state::<crate::AppState>();
+            let _release = RecreateGuard(&state.recreating);
+            let mode = stored_mode(&worker);
+            let result = match worker.get_webview_window(MAIN_WINDOW_LABEL) {
+                Some(window) => {
+                    let started = std::time::Instant::now();
+                    present(&window, mode)
+                        .map(|()| crate::standby::log_timing("show_main_window", started.elapsed()))
+                }
+                None => recreate_and_present(&worker, mode),
+            };
+            if let Err(error) = result {
                 eprintln!("spectra: main window could not be recreated: {error}");
             }
-        })?;
+        });
+    if let Err(error) = spawned {
+        app.state::<crate::AppState>().recreating.store(false, Ordering::Release);
+        return Err(error.into());
+    }
     Ok(())
 }
 
@@ -222,7 +258,8 @@ pub(crate) fn update_tray_badge<R: Runtime>(app: &AppHandle<R>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{mode_script, WindowMode, MENU_HIDE, MENU_OPEN_DASHBOARD, MENU_OPEN_MINI, MENU_QUIT};
+    use super::{mode_script, try_begin_recreate, RecreateGuard, WindowMode, MENU_HIDE, MENU_OPEN_DASHBOARD, MENU_OPEN_MINI, MENU_QUIT};
+    use std::sync::atomic::AtomicBool;
 
     #[test]
     fn window_mode_slug_matches_frontend_contract() {
@@ -263,5 +300,14 @@ mod tests {
             [MENU_OPEN_MINI, MENU_OPEN_DASHBOARD, MENU_HIDE, MENU_QUIT],
             ["open-mini", "open-dashboard", "hide", "quit"]
         );
+    }
+
+    #[test]
+    fn recreate_slot_is_exclusive_until_the_guard_drops() {
+        let flag = AtomicBool::new(false);
+        assert!(try_begin_recreate(&flag));
+        assert!(!try_begin_recreate(&flag));
+        drop(RecreateGuard(&flag));
+        assert!(try_begin_recreate(&flag));
     }
 }
