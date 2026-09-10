@@ -74,20 +74,7 @@ pub(crate) fn dismiss<R: Runtime>(window: &WebviewWindow<R>, standby: bool) -> t
     }
 }
 
-pub(crate) fn show_main_window<R: Runtime>(
-    app: &AppHandle<R>,
-    mode: WindowMode,
-) -> tauri::Result<()> {
-    store_mode(app, mode);
-    let started = std::time::Instant::now();
-    let window = match app.get_webview_window(MAIN_WINDOW_LABEL) {
-        Some(window) => window,
-        None => {
-            let boot = app.state::<crate::AppState>().boot_state(mode);
-            crate::standby::create_main_window(app, mode, &boot)?
-        }
-    };
-
+fn present<R: Runtime>(window: &WebviewWindow<R>, mode: WindowMode) -> tauri::Result<()> {
     let profile = mode.profile();
     window.set_size(Size::Logical(LogicalSize::new(profile.width, profile.height)))?;
     window.set_always_on_top(profile.always_on_top)?;
@@ -99,8 +86,48 @@ pub(crate) fn show_main_window<R: Runtime>(
     window.center()?;
     window.show()?;
     window.set_focus()?;
-    window.eval(&mode_script(mode))?;
+    window.eval(&mode_script(mode))
+}
+
+fn recreate_and_present<R: Runtime>(app: &AppHandle<R>, mode: WindowMode) -> tauri::Result<()> {
+    let started = std::time::Instant::now();
+    let boot = app.state::<crate::AppState>().boot_state(mode);
+    let window = crate::standby::create_main_window(app, mode, &boot)?;
+    present(&window, mode)?;
     crate::standby::log_timing("show_main_window", started.elapsed());
+    Ok(())
+}
+
+/// Creates and shows the main window synchronously. Only for the `setup` hook, which runs
+/// before the event loop; event callbacks must use `show_main_window`, which defers creation.
+pub(crate) fn create_initial_window<R: Runtime>(app: &AppHandle<R>, mode: WindowMode) -> tauri::Result<()> {
+    store_mode(app, mode);
+    recreate_and_present(app, mode)
+}
+
+pub(crate) fn show_main_window<R: Runtime>(
+    app: &AppHandle<R>,
+    mode: WindowMode,
+) -> tauri::Result<()> {
+    store_mode(app, mode);
+    if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
+        let started = std::time::Instant::now();
+        present(&window, mode)?;
+        crate::standby::log_timing("show_main_window", started.elapsed());
+        return Ok(());
+    }
+
+    // On Windows, building a webview inside a synchronous event handler (tray click, tray
+    // menu, single-instance callback) can deadlock — a documented `WebviewWindowBuilder`
+    // known issue — so the recreation runs on a worker thread and this callback returns first.
+    let app = app.clone();
+    std::thread::Builder::new()
+        .name("spectra-window-recreate".to_string())
+        .spawn(move || {
+            if let Err(error) = recreate_and_present(&app, mode) {
+                eprintln!("spectra: main window could not be recreated: {error}");
+            }
+        })?;
     Ok(())
 }
 

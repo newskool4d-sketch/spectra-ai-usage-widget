@@ -325,7 +325,7 @@ pub fn run() {
         ])
         .setup(|app| {
             desktop_shell::install(app)?;
-            if let Err(error) = desktop_shell::show_main_window(app.handle(), desktop_shell::WindowMode::Mini) {
+            if let Err(error) = desktop_shell::create_initial_window(app.handle(), desktop_shell::WindowMode::Mini) {
                 // The tray is already installed, so a failed first show must not abort
                 // startup; the user can reopen the window from the tray.
                 eprintln!("spectra: main window could not be shown at startup: {error}");
