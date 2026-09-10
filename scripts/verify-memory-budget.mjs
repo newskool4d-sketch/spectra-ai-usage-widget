@@ -56,7 +56,7 @@ if (existsSync(distAssets)) {
   }
 }
 
-const maxJsBytes = 500_000;
+const maxJsBytes = 240_000; // spec §1: JS bundle ≤ 240 KB while React stays
 const maxCssBytes = 34_000;
 const maxFontBytes = 820_000;
 const maxFontFiles = 3;
