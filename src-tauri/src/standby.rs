@@ -199,6 +199,10 @@ mod tests {
         let prefs = UiPrefs { theme: "light".into(), solid: true, standby: true };
         save_prefs_to(&path, &prefs).unwrap();
         assert_eq!(load_prefs_from(&path), prefs);
+        // A second save must replace the existing file (rename over an existing destination).
+        let updated = UiPrefs { theme: "dark".into(), solid: false, standby: false };
+        save_prefs_to(&path, &updated).unwrap();
+        assert_eq!(load_prefs_from(&path), updated);
     }
 
     #[test]
