@@ -35,22 +35,60 @@ pub fn prefs_path() -> Option<PathBuf> {
     app_data_dir().map(|dir| dir.join(PREFS_FILE))
 }
 
-pub fn load_prefs_from(path: &Path) -> UiPrefs {
-    fs::read(path)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<UiPrefs>(&bytes).ok())
-        .map(|mut prefs| {
-            prefs.theme = normalize_theme(&prefs.theme).to_string();
-            prefs
-        })
-        .unwrap_or_default()
+#[derive(Debug)]
+pub enum PrefsReadError {
+    Missing,
+    Unreadable(std::io::Error),
+    Corrupt(serde_json::Error),
 }
 
+impl std::fmt::Display for PrefsReadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Missing => write!(f, "file is missing"),
+            Self::Unreadable(error) => write!(f, "file could not be read: {error}"),
+            Self::Corrupt(error) => write!(f, "file is not valid JSON: {error}"),
+        }
+    }
+}
+
+pub fn read_prefs(path: &Path) -> Result<UiPrefs, PrefsReadError> {
+    let bytes = match fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Err(PrefsReadError::Missing),
+        Err(error) => return Err(PrefsReadError::Unreadable(error)),
+    };
+    let mut prefs = serde_json::from_slice::<UiPrefs>(&bytes).map_err(PrefsReadError::Corrupt)?;
+    prefs.theme = normalize_theme(&prefs.theme).to_string();
+    Ok(prefs)
+}
+
+pub fn load_prefs_from(path: &Path) -> UiPrefs {
+    match read_prefs(path) {
+        Ok(prefs) => prefs,
+        Err(PrefsReadError::Missing) => UiPrefs::default(),
+        Err(error) => {
+            eprintln!("spectra: ui preferences at {} were ignored: {error}", path.display());
+            UiPrefs::default()
+        }
+    }
+}
+
+fn staging_path(path: &Path) -> PathBuf {
+    let mut name = path.file_name().map(|name| name.to_os_string()).unwrap_or_default();
+    name.push(".tmp");
+    path.with_file_name(name)
+}
+
+/// Writes the preferences through a staging file and renames it into place, so an interrupted
+/// save never leaves a truncated `ui-prefs.json` behind.
 pub fn save_prefs_to(path: &Path, prefs: &UiPrefs) -> std::io::Result<()> {
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir)?;
     }
-    fs::write(path, serde_json::to_vec_pretty(prefs)?)
+    let staging = staging_path(path);
+    fs::write(&staging, serde_json::to_vec_pretty(prefs)?)?;
+    fs::rename(&staging, path)
 }
 
 pub fn load_prefs() -> UiPrefs {
@@ -170,6 +208,28 @@ mod tests {
         let corrupt = temp_prefs_path("corrupt");
         std::fs::write(&corrupt, b"{not json").unwrap();
         assert_eq!(load_prefs_from(&corrupt), UiPrefs::default());
+    }
+
+    #[test]
+    fn read_prefs_distinguishes_missing_from_corrupt() {
+        let missing = temp_prefs_path("read-missing");
+        assert!(matches!(read_prefs(&missing), Err(PrefsReadError::Missing)));
+        let corrupt = temp_prefs_path("read-corrupt");
+        std::fs::write(&corrupt, b"{not json").unwrap();
+        assert!(matches!(read_prefs(&corrupt), Err(PrefsReadError::Corrupt(_))));
+        let valid = temp_prefs_path("read-valid");
+        save_prefs_to(&valid, &UiPrefs { theme: "light".into(), solid: true, standby: false }).unwrap();
+        assert_eq!(read_prefs(&valid).unwrap().theme, "light");
+    }
+
+    #[test]
+    fn failed_save_keeps_the_previous_prefs_file_intact() {
+        let path = temp_prefs_path("keep");
+        save_prefs_to(&path, &UiPrefs { theme: "light".into(), solid: false, standby: true }).unwrap();
+        // A directory squatting on the staging path makes the next save fail before the rename.
+        std::fs::create_dir_all(staging_path(&path)).unwrap();
+        assert!(save_prefs_to(&path, &UiPrefs::default()).is_err());
+        assert_eq!(load_prefs_from(&path), UiPrefs { theme: "light".into(), solid: false, standby: true });
     }
 
     #[test]
