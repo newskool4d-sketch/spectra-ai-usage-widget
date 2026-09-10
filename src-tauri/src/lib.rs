@@ -34,6 +34,7 @@ pub struct AppState {
     pub(crate) window_mode: Mutex<desktop_shell::WindowMode>,
     pub(crate) last_snapshots: Mutex<Vec<provider_usage::ProviderUsageSnapshot>>,
     pub(crate) recreating: std::sync::atomic::AtomicBool,
+    pub(crate) snapshot_requests: Mutex<std::collections::HashMap<String, u64>>,
 }
 
 impl AppState {
@@ -52,6 +53,25 @@ impl AppState {
             list.retain(|s| s.provider_id != snapshot.provider_id);
             list.push(snapshot.clone());
         }
+    }
+
+    /// Numbers a snapshot request for one provider; only the newest number stays current.
+    pub(crate) fn begin_snapshot_request(&self, provider_id: &str) -> u64 {
+        match self.snapshot_requests.lock() {
+            Ok(mut requests) => {
+                let ticket = requests.get(provider_id).copied().unwrap_or(0) + 1;
+                requests.insert(provider_id.to_string(), ticket);
+                ticket
+            }
+            Err(_) => 0,
+        }
+    }
+
+    pub(crate) fn snapshot_request_is_current(&self, provider_id: &str, ticket: u64) -> bool {
+        self.snapshot_requests
+            .lock()
+            .map(|requests| requests.get(provider_id).copied() == Some(ticket))
+            .unwrap_or(true)
     }
 }
 
@@ -219,11 +239,18 @@ async fn provider_usage_snapshot(
     app: AppHandle,
     provider_id: String,
 ) -> Result<provider_usage::ProviderUsageSnapshot, String> {
-    let snapshot = tauri::async_runtime::spawn_blocking(move || provider_usage::snapshot(&provider_id))
+    let ticket = app.state::<AppState>().begin_snapshot_request(&provider_id);
+    let worker_provider_id = provider_id.clone();
+    let snapshot = tauri::async_runtime::spawn_blocking(move || provider_usage::snapshot(&worker_provider_id))
         .await
         .map_err(|_| "provider usage worker failed".to_string())?;
-    app.state::<AppState>().remember_snapshot(&snapshot);
-    desktop_shell::update_tray_badge(&app);
+    // A newer request for the same provider may have finished first; the standby cache and the
+    // tray badge follow the newest request only, mirroring the frontend's refresh sequencing.
+    let state = app.state::<AppState>();
+    if state.snapshot_request_is_current(&provider_id, ticket) {
+        state.remember_snapshot(&snapshot);
+        desktop_shell::update_tray_badge(&app);
+    }
     Ok(snapshot)
 }
 
@@ -413,6 +440,24 @@ mod app_state_tests {
         assert!(boot.standby);
         assert_eq!(boot.snapshots.len(), 1);
         assert_eq!(boot.snapshots[0].provider_id, "codex");
+    }
+
+    #[test]
+    fn snapshot_requests_are_numbered_per_provider() {
+        let state = AppState::default();
+        assert_eq!(state.begin_snapshot_request("codex"), 1);
+        assert_eq!(state.begin_snapshot_request("codex"), 2);
+        assert_eq!(state.begin_snapshot_request("claude"), 1);
+    }
+
+    #[test]
+    fn superseded_snapshot_request_is_not_current() {
+        let state = AppState::default();
+        let first = state.begin_snapshot_request("codex");
+        let second = state.begin_snapshot_request("codex");
+        assert!(!state.snapshot_request_is_current("codex", first));
+        assert!(state.snapshot_request_is_current("codex", second));
+        assert!(!state.snapshot_request_is_current("claude", 1));
     }
 }
 
