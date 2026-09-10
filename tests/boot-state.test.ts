@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { parseBootState } from "../src/integrations/boot-state.ts";
+import { parseBootState, providersMissingFromBoot } from "../src/integrations/boot-state.ts";
 
 const snapshot = {
   providerId: "codex", runtimeAvailable: true, authState: "signed-in", connectionState: "connected",
@@ -40,5 +40,23 @@ describe("parseBootState", () => {
     assert.equal(parseBootState(undefined), null);
     assert.equal(parseBootState("dark"), null);
     assert.equal(parseBootState({ theme: "dark" }), null);
+  });
+});
+
+describe("providersMissingFromBoot", () => {
+  const all = ["codex", "claude"] as const;
+
+  it("lists every provider when there is no boot state", () => {
+    assert.deepEqual(providersMissingFromBoot(null, all), ["codex", "claude"]);
+  });
+
+  it("lists only the providers absent from the boot snapshots", () => {
+    const boot = parseBootState({ theme: "dark", solid: false, standby: true, mode: "mini", snapshots: [snapshot] });
+    assert.deepEqual(providersMissingFromBoot(boot, all), ["claude"]);
+  });
+
+  it("lists nothing when every provider was restored", () => {
+    const boot = parseBootState({ theme: "dark", solid: false, standby: true, mode: "mini", snapshots: [snapshot, { ...snapshot, providerId: "claude" }] });
+    assert.deepEqual(providersMissingFromBoot(boot, all), []);
   });
 });

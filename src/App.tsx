@@ -4,6 +4,7 @@ import { Sparkline } from "./components/Sparkline";
 import { computeNextAction, computeTimeProgress, hasVerifiedUsage, paceLabel } from "./data/next-action";
 import { createRefreshSequencer } from "./data/refresh-sequence";
 import { metricLabels, planQuotas, providers, rangeLabels, type AuthMethod, type Metric, type PlanQuota, type Provider, type ProviderId, type QuotaWindow, type QuotaWindowId, type UsageRange } from "./data/providers";
+import { providersMissingFromBoot } from "./integrations/boot-state";
 import { providerCapabilities, type ProviderCapability } from "./integrations/provider-capabilities";
 import { getNativeProviderUsage, installNativeProviderBridge, isTauriRuntime, readBootState, removeNativeProviderBridge, setNativeStandby, setNativeUiPrefs, startNativeProviderLogin, type NativeProviderActionResult, type NativeProviderUsageSnapshot } from "./integrations/tauri-native-bridge";
 
@@ -564,7 +565,7 @@ export function App() {
   const [oauthOpen, setOauthOpen] = useState(false);
   const [actionFeedback, setActionFeedback] = useState<ProviderActionFeedback | null>(null);
   const [loginPollingProviderId, setLoginPollingProviderId] = useState<ProviderId | null>(null);
-  const initialRefreshStarted = useRef(Boolean(boot && boot.snapshots.length > 0));
+  const initialRefreshStarted = useRef(false);
   const refreshSequence = useRef(createRefreshSequencer<ProviderId>()).current;
   const activeProvider = useMemo(() => providers.find(provider => provider.id === activeProviderId) ?? providers[0], [activeProviderId]);
   const activeQuota = quotas[activeProviderId];
@@ -643,8 +644,15 @@ export function App() {
   useEffect(() => {
     if (!isTauriRuntime() || initialRefreshStarted.current) return;
     initialRefreshStarted.current = true;
-    void refresh();
-  }, [refresh]);
+    const pending = providersMissingFromBoot(boot, providers.map(provider => provider.id));
+    if (pending.length === providers.length) {
+      void refresh();
+      return;
+    }
+    // A standby reopen restored some providers from the boot cache; fetch only the rest so the
+    // Codex App Server is not relaunched for data that is already on screen.
+    for (const id of pending) void refreshProvider(id);
+  }, [boot, refresh, refreshProvider]);
 
   useEffect(() => {
     if (!loginPollingProviderId || !isTauriRuntime()) return;

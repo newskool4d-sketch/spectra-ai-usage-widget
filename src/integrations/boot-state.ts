@@ -28,3 +28,10 @@ export function parseBootState(raw: unknown): NativeBootState | null {
     snapshots: snapshots.filter(isSnapshot).filter(snapshot => knownProviders.has(snapshot.providerId))
   };
 }
+
+/** Providers whose snapshot was not restored from the boot payload and still need an initial refresh. */
+export function providersMissingFromBoot<T extends string>(boot: NativeBootState | null, all: readonly T[]): T[] {
+  if (!boot) return [...all];
+  const restored = new Set<string>(boot.snapshots.map(snapshot => snapshot.providerId));
+  return all.filter(id => !restored.has(id));
+}
