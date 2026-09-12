@@ -19,11 +19,12 @@ pub struct UiPrefs {
     pub theme: String,
     pub solid: bool,
     pub standby: bool,
+    pub strip: bool,
 }
 
 impl Default for UiPrefs {
     fn default() -> Self {
-        Self { theme: "dark".to_string(), solid: false, standby: false }
+        Self { theme: "dark".to_string(), solid: false, standby: false, strip: false }
     }
 }
 
@@ -108,6 +109,7 @@ pub struct BootState {
     pub theme: String,
     pub solid: bool,
     pub standby: bool,
+    pub strip: bool,
     pub mode: &'static str,
     pub snapshots: Vec<ProviderUsageSnapshot>,
 }
@@ -196,13 +198,36 @@ mod tests {
     #[test]
     fn prefs_round_trip_through_file() {
         let path = temp_prefs_path("roundtrip");
-        let prefs = UiPrefs { theme: "light".into(), solid: true, standby: true };
+        let prefs = UiPrefs { theme: "light".into(), solid: true, standby: true, strip: false };
         save_prefs_to(&path, &prefs).unwrap();
         assert_eq!(load_prefs_from(&path), prefs);
         // A second save must replace the existing file (rename over an existing destination).
-        let updated = UiPrefs { theme: "dark".into(), solid: false, standby: false };
+        let updated = UiPrefs { theme: "dark".into(), solid: false, standby: false, strip: false };
         save_prefs_to(&path, &updated).unwrap();
         assert_eq!(load_prefs_from(&path), updated);
+    }
+
+    #[test]
+    fn strip_defaults_to_off_and_round_trips() {
+        assert!(!UiPrefs::default().strip);
+        let path = temp_prefs_path("strip");
+        let mut prefs = UiPrefs { theme: "light".into(), solid: true, standby: true, strip: true };
+        save_prefs_to(&path, &prefs).unwrap();
+        assert_eq!(read_prefs(&path).unwrap(), prefs);
+        prefs.strip = false;
+        save_prefs_to(&path, &prefs).unwrap();
+        assert_eq!(read_prefs(&path).unwrap(), prefs);
+    }
+
+    #[test]
+    fn prefs_written_before_the_strip_field_still_load() {
+        let path = temp_prefs_path("strip-legacy");
+        std::fs::write(&path, br#"{"theme":"light","solid":true,"standby":true}"#).unwrap();
+        let loaded = read_prefs(&path).unwrap();
+        assert_eq!(loaded.theme, "light");
+        assert!(loaded.solid);
+        assert!(loaded.standby);
+        assert!(!loaded.strip);
     }
 
     #[test]
@@ -222,23 +247,23 @@ mod tests {
         std::fs::write(&corrupt, b"{not json").unwrap();
         assert!(matches!(read_prefs(&corrupt), Err(PrefsReadError::Corrupt(_))));
         let valid = temp_prefs_path("read-valid");
-        save_prefs_to(&valid, &UiPrefs { theme: "light".into(), solid: true, standby: false }).unwrap();
+        save_prefs_to(&valid, &UiPrefs { theme: "light".into(), solid: true, standby: false, strip: false }).unwrap();
         assert_eq!(read_prefs(&valid).unwrap().theme, "light");
     }
 
     #[test]
     fn failed_save_keeps_the_previous_prefs_file_intact() {
         let path = temp_prefs_path("keep");
-        save_prefs_to(&path, &UiPrefs { theme: "light".into(), solid: false, standby: true }).unwrap();
+        save_prefs_to(&path, &UiPrefs { theme: "light".into(), solid: false, standby: true, strip: false }).unwrap();
         // A directory squatting on the staging path makes the next save fail before the rename.
         std::fs::create_dir_all(staging_path(&path)).unwrap();
         assert!(save_prefs_to(&path, &UiPrefs::default()).is_err());
-        assert_eq!(load_prefs_from(&path), UiPrefs { theme: "light".into(), solid: false, standby: true });
+        assert_eq!(load_prefs_from(&path), UiPrefs { theme: "light".into(), solid: false, standby: true, strip: false });
     }
 
     #[test]
     fn boot_script_embeds_json_and_mode() {
-        let boot = BootState { theme: "light".into(), solid: false, standby: true, mode: "dashboard", snapshots: Vec::<ProviderUsageSnapshot>::new() };
+        let boot = BootState { theme: "light".into(), solid: false, standby: true, strip: true, mode: "dashboard", snapshots: Vec::<ProviderUsageSnapshot>::new() };
         let script = boot_script(&boot);
         assert!(script.starts_with("window.__SPECTRA_BOOT__={"));
         assert!(script.ends_with("window.__SPECTRA_MODE__='dashboard';"));
@@ -246,6 +271,7 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(json_part).unwrap();
         assert_eq!(parsed["theme"], "light");
         assert_eq!(parsed["standby"], true);
+        assert_eq!(parsed["strip"], true);
         assert_eq!(parsed["mode"], "dashboard");
         assert!(parsed["snapshots"].as_array().unwrap().is_empty());
     }

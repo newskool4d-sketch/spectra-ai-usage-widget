@@ -256,6 +256,39 @@ pub(crate) fn update_tray_badge<R: Runtime>(app: &AppHandle<R>) {
     }
 }
 
+/// Uses only the latest cached snapshots. Closing the WebView leaves this native window alive.
+#[cfg(target_os = "windows")]
+pub(crate) fn update_taskbar_strip<R: Runtime>(app: &AppHandle<R>) {
+    let state = app.state::<crate::AppState>();
+    // Serialize reconciliation before reading preferences: an older snapshot callback must
+    // not recreate a strip after a newer toggle has disabled it.
+    let Ok(mut slot) = state.strip.lock() else { return };
+    let enabled = state.ui.lock().map(|prefs| prefs.strip).unwrap_or(false);
+    if !enabled {
+        if let Some(handle) = slot.take() {
+            handle.shutdown();
+        }
+        return;
+    }
+    let snapshots = state.last_snapshots.lock().map(|list| list.clone()).unwrap_or_default();
+    let model = crate::taskbar_strip::build_model(&snapshots, crate::taskbar_window::current_theme());
+    if let Some(handle) = slot.as_ref() {
+        // None hides a running strip when both providers become unavailable.
+        handle.update(model);
+    } else if let Some(model) = model {
+        let click_app = app.clone();
+        match crate::taskbar_window::spawn(model, Box::new(move || {
+            let _ = toggle_main_window(&click_app);
+        })) {
+            Ok(handle) => *slot = Some(handle),
+            Err(error) => eprintln!("spectra: taskbar strip is unavailable: {error}"),
+        }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub(crate) fn update_taskbar_strip<R: Runtime>(_app: &AppHandle<R>) {}
+
 #[cfg(test)]
 mod tests {
     use super::{mode_script, try_begin_recreate, RecreateGuard, WindowMode, MENU_HIDE, MENU_OPEN_DASHBOARD, MENU_OPEN_MINI, MENU_QUIT};

@@ -1,6 +1,6 @@
 import type { NativeProviderUsageSnapshot } from "./tauri-native-bridge";
 
-export type NativeUiPrefs = Readonly<{ theme: "dark" | "light"; solid: boolean; standby: boolean }>;
+export type NativeUiPrefs = Readonly<{ theme: "dark" | "light"; solid: boolean; standby: boolean; strip: boolean }>;
 export type NativeBootState = NativeUiPrefs & Readonly<{ mode: "mini" | "dashboard"; snapshots: readonly NativeProviderUsageSnapshot[] }>;
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null;
@@ -16,7 +16,7 @@ function isSnapshot(value: unknown): value is NativeProviderUsageSnapshot {
 
 export function parseBootState(raw: unknown): NativeBootState | null {
   if (!isRecord(raw)) return null;
-  const { theme, solid, standby, mode, snapshots } = raw;
+  const { theme, solid, standby, strip, mode, snapshots } = raw;
   if (theme !== "dark" && theme !== "light") return null;
   if (mode !== "mini" && mode !== "dashboard") return null;
   if (typeof solid !== "boolean" || typeof standby !== "boolean" || !Array.isArray(snapshots)) return null;
@@ -24,6 +24,7 @@ export function parseBootState(raw: unknown): NativeBootState | null {
     theme,
     solid,
     standby,
+    strip: typeof strip === "boolean" ? strip : false,
     mode,
     snapshots: snapshots.filter(isSnapshot).filter(snapshot => knownProviders.has(snapshot.providerId))
   };

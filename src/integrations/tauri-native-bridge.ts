@@ -108,6 +108,12 @@ export async function setNativeStandby(enabled: boolean): Promise<NativeUiPrefs 
   return command<NativeUiPrefs>("set_standby", { enabled });
 }
 
+export async function setNativeStrip(enabled: boolean): Promise<NativeUiPrefs | null> {
+  const command = invoke();
+  if (!command) return null;
+  return command<NativeUiPrefs>("set_strip", { enabled });
+}
+
 export async function prepareNativeOAuth(providerId: ProviderId): Promise<NativeOAuthPrepareResult | null> {
   const command = invoke();
   if (!command) return null;

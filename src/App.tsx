@@ -6,7 +6,7 @@ import { createRefreshSequencer } from "./data/refresh-sequence";
 import { metricLabels, planQuotas, providers, rangeLabels, type AuthMethod, type Metric, type PlanQuota, type Provider, type ProviderId, type QuotaWindow, type QuotaWindowId, type UsageRange } from "./data/providers";
 import { providersMissingFromBoot } from "./integrations/boot-state";
 import { providerCapabilities, type ProviderCapability } from "./integrations/provider-capabilities";
-import { getNativeProviderUsage, installNativeProviderBridge, isTauriRuntime, readBootState, removeNativeProviderBridge, setNativeStandby, setNativeUiPrefs, startNativeProviderLogin, type NativeProviderActionResult, type NativeProviderUsageSnapshot } from "./integrations/tauri-native-bridge";
+import { getNativeProviderUsage, installNativeProviderBridge, isTauriRuntime, readBootState, removeNativeProviderBridge, setNativeStandby, setNativeStrip, setNativeUiPrefs, startNativeProviderLogin, type NativeProviderActionResult, type NativeProviderUsageSnapshot } from "./integrations/tauri-native-bridge";
 
 const mobileBreakpoint = "(max-width: 820px)";
 const mobileClockFormatter = new Intl.DateTimeFormat("ko-KR", { hour: "2-digit", minute: "2-digit", hour12: false });
@@ -443,10 +443,13 @@ type LayoutActions = Readonly<{
   solid: boolean;
   theme: ThemeMode;
   standby: boolean;
+  strip: boolean;
+  stripPending: boolean;
   onRefresh: () => void;
   onSolid: () => void;
   onTheme: () => void;
   onStandby: () => void;
+  onStrip: () => void;
 }>;
 
 type SharedViewProps = LayoutActions & Readonly<{
@@ -474,7 +477,7 @@ function viewCopy(view: ProductView) {
 
 type ViewPanelProps = Omit<SharedViewProps, "onView">;
 
-const DesktopViewPanel = memo(function DesktopViewPanel({ view, activeProvider, activeProviderId, activeQuota, quotas, metric, range, onProvider, onMetric, onRange, onOpenOAuth, refreshedAt, refreshing, solid, theme, standby, onRefresh, onSolid, onTheme, onStandby }: ViewPanelProps) {
+const DesktopViewPanel = memo(function DesktopViewPanel({ view, activeProvider, activeProviderId, activeQuota, quotas, metric, range, onProvider, onMetric, onRange, onOpenOAuth, refreshedAt, refreshing, solid, theme, standby, strip, stripPending, onRefresh, onSolid, onTheme, onStandby, onStrip }: ViewPanelProps) {
   if (view === "services") {
     return <div className="view-stack"><article className="glass-card providers-card"><div className="card-heading"><div><span className="eyebrow">서비스</span><h3>서비스별 잔여량</h3></div><span className="live-pill"><i />공식 조회</span></div><div className="provider-list">{providers.map(provider => <ProviderRow key={provider.id} provider={provider} quota={quotas[provider.id]} active={provider.id === activeProviderId} onSelect={onProvider} />)}</div></article><OAuthConnectCard provider={activeProvider} quota={activeQuota} onOpen={onOpenOAuth} /></div>;
   }
@@ -484,7 +487,7 @@ const DesktopViewPanel = memo(function DesktopViewPanel({ view, activeProvider, 
   if (view === "alerts") {
     return <div className="view-stack"><article className="glass-card alert-panel"><div className="card-heading"><div><span className="eyebrow">알림</span><h3>지금 확인할 항목</h3></div><span className="live-pill"><i />현재 상태</span></div>{providers.map(provider => <div className="alert-row" key={provider.id} style={providerStyle(provider.color)}><ProviderLogo provider={provider} size="sm" /><div><strong>{connectionLabel(quotas[provider.id])}</strong><span>{quotas[provider.id].statusMessage}</span></div><b>{displayPercent(quotas[provider.id])}</b></div>)}</article></div>;
   }
-  return <div className="view-stack"><article className="glass-card settings-panel"><div className="card-heading"><div><span className="eyebrow">설정</span><h3>사용 환경</h3></div><span className="live-pill"><i />기기 안에서만 처리</span></div><div className="settings-row"><div><strong>화면 테마</strong><span>{theme === "dark" ? "짙은 배경과 선명한 대비를 사용합니다." : "밝은 배경과 부드러운 대비를 사용합니다."}</span></div><button type="button" className="secondary-action" onClick={onTheme}>{theme === "dark" ? "일반 모드" : "다크 모드"}</button></div><div className="settings-row"><div><strong>가독성용 불투명 모드</strong><span>{solid ? "현재 불투명 카드를 사용합니다." : "현재 반투명 카드를 사용합니다."}</span></div><button type="button" className="secondary-action" onClick={onSolid}>{solid ? "유리 모드" : "불투명 모드"}</button></div><div className="settings-row"><div><strong>메모리 절약 대기</strong><span>{standby ? "창을 닫으면 WebView를 종료하고 트레이만 남깁니다. 다시 열 때 약 0.5초 걸립니다." : "창을 닫으면 숨기기만 해 즉시 다시 표시됩니다(기본)."}</span></div><button type="button" className="secondary-action" onClick={onStandby}>{standby ? "빠른 재표시" : "메모리 절약"}</button></div><div className="settings-row"><div><strong>공식 사용량 새로고침</strong><span>Codex App Server와 Claude status line 캐시를 다시 확인합니다.</span></div><button type="button" className="primary-action" onClick={onRefresh} disabled={refreshing}>{refreshing ? "확인 중" : "지금 확인"}</button></div><div className="settings-note"><Icon name="shield" size={15} /><span>토큰·이메일·세션 원문은 SPECTRA에 복제하지 않습니다. 마지막 확인 · {refreshedAt}</span></div></article></div>;
+  return <div className="view-stack"><article className="glass-card settings-panel"><div className="card-heading"><div><span className="eyebrow">설정</span><h3>사용 환경</h3></div><span className="live-pill"><i />기기 안에서만 처리</span></div><div className="settings-row"><div><strong>화면 테마</strong><span>{theme === "dark" ? "짙은 배경과 선명한 대비를 사용합니다." : "밝은 배경과 부드러운 대비를 사용합니다."}</span></div><button type="button" className="secondary-action" onClick={onTheme}>{theme === "dark" ? "일반 모드" : "다크 모드"}</button></div><div className="settings-row"><div><strong>가독성용 불투명 모드</strong><span>{solid ? "현재 불투명 카드를 사용합니다." : "현재 반투명 카드를 사용합니다."}</span></div><button type="button" className="secondary-action" onClick={onSolid}>{solid ? "유리 모드" : "불투명 모드"}</button></div><div className="settings-row"><div><strong>메모리 절약 대기</strong><span>{standby ? "창을 닫으면 WebView를 종료하고 트레이만 남깁니다. 다시 열 때 약 0.5초 걸립니다." : "창을 닫으면 숨기기만 해 즉시 다시 표시됩니다(기본)."}</span></div><button type="button" className="secondary-action" onClick={onStandby}>{standby ? "빠른 재표시" : "메모리 절약"}</button></div><div className="settings-row"><div><strong>작업표시줄 표시</strong><span>{strip ? "작업표시줄 알림 영역 왼쪽에 마지막 확인 잔여량을 표시합니다." : "작업표시줄에 표시하지 않습니다(기본)."}</span></div><button type="button" className="secondary-action" onClick={onStrip} aria-pressed={strip} disabled={stripPending}>{strip ? "표시 끄기" : "표시 켜기"}</button></div><div className="settings-row"><div><strong>공식 사용량 새로고침</strong><span>Codex App Server와 Claude status line 캐시를 다시 확인합니다.</span></div><button type="button" className="primary-action" onClick={onRefresh} disabled={refreshing}>{refreshing ? "확인 중" : "지금 확인"}</button></div><div className="settings-note"><Icon name="shield" size={15} /><span>토큰·이메일·세션 원문은 SPECTRA에 복제하지 않습니다. 마지막 확인 · {refreshedAt}</span></div></article></div>;
 });
 
 const VariantADesktop = memo(function VariantADesktop({ view, onView, activeProvider, activeProviderId, activeQuota, quotas, metric, range, onProvider, onMetric, onRange, onOpenOAuth, ...actions }: SharedViewProps) {
@@ -558,6 +561,9 @@ export function App() {
   const [solid, setSolid] = useState(boot?.solid ?? false);
   const [theme, setTheme] = useState<ThemeMode>(boot?.theme ?? "dark");
   const [standby, setStandby] = useState(boot?.standby ?? false);
+  const [strip, setStrip] = useState(boot?.strip ?? false);
+  const [stripPending, setStripPending] = useState(false);
+  const stripToggleInFlight = useRef(false);
   const [refreshedAt, setRefreshedAt] = useState(boot && boot.snapshots.length > 0 ? "이전 표시 복원" : "방금 전");
   const [refreshing, setRefreshing] = useState(false);
   const [quotas, setQuotas] = useState<QuotaRecord>(() => initialQuotaRecord(boot?.snapshots ?? []));
@@ -597,6 +603,24 @@ export function App() {
       setStandby(!next);
     }
   }, [standby]);
+
+  const toggleStrip = useCallback(async () => {
+    if (stripToggleInFlight.current) return;
+    const next = !strip;
+    setStrip(next);
+    if (!isTauriRuntime()) return;
+    stripToggleInFlight.current = true;
+    setStripPending(true);
+    try {
+      const saved = await setNativeStrip(next);
+      setStrip(saved?.strip ?? !next);
+    } catch {
+      setStrip(!next);
+    } finally {
+      stripToggleInFlight.current = false;
+      setStripPending(false);
+    }
+  }, [strip]);
 
   const refreshProvider = useCallback(async (id: ProviderId) => {
     const ticket = refreshSequence.begin(id);
@@ -748,10 +772,13 @@ export function App() {
     solid,
     theme,
     standby,
+    strip,
+    stripPending,
     onRefresh: refresh,
     onSolid: () => setSolid(value => !value),
     onTheme: () => setTheme(value => value === "dark" ? "light" : "dark"),
-    onStandby: () => void toggleStandby()
+    onStandby: () => void toggleStandby(),
+    onStrip: () => void toggleStrip()
   };
 
   return <><div className={solid ? "solid-mode" : ""}>{windowMode === "mini" ? <MiniLayout quotas={quotas} onRefresh={refresh} refreshing={refreshing} /> : isMobile ? <VariantCMobile {...sharedProps} /> : <VariantADesktop {...sharedProps} />}</div><OAuthDialog open={oauthOpen} provider={oauthProvider} quota={oauthQuota} startResult={actionFeedback} onClose={closeOAuth} onConnect={connectOAuth} onDisconnect={disconnectOAuth} /></>;
