@@ -7,6 +7,8 @@ mod oauth_callback;
 mod provider_connection;
 mod provider_usage;
 mod standby;
+#[allow(dead_code)] // Task 4에서 배선
+mod taskbar_strip;
 mod tray_badge;
 
 #[cfg(feature = "native-oauth")]
