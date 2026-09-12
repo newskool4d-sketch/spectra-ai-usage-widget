@@ -10,6 +10,26 @@ const snapshot = {
 };
 
 describe("parseBootState", () => {
+  it("defaults strip to false for absent or non-boolean values", () => {
+    for (const strip of [undefined, null, "true", 1]) {
+      const boot = parseBootState({ theme: "dark", solid: false, standby: true, strip, mode: "mini", snapshots: [snapshot] });
+      assert.equal(boot?.strip, false);
+      assert.equal(boot?.standby, true);
+      assert.equal(boot?.snapshots.length, 1);
+    }
+  });
+
+  it("restores an explicit strip preference in either window mode", () => {
+    for (const mode of ["mini", "dashboard"]) {
+      for (const strip of [false, true]) {
+        const boot = parseBootState({ theme: "light", solid: true, standby: true, strip, mode, snapshots: [snapshot] });
+        assert.equal(boot?.strip, strip);
+        assert.equal(boot?.mode, mode);
+        assert.deepEqual(boot?.snapshots, [snapshot]);
+      }
+    }
+  });
+
   it("accepts a well-formed boot payload", () => {
     const boot = parseBootState({ theme: "light", solid: true, standby: true, mode: "dashboard", snapshots: [snapshot] });
     assert.ok(boot);

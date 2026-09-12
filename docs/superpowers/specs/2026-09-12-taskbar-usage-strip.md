@@ -1,6 +1,6 @@
 # SPECTRA 작업표시줄 사용량 스트립 (B안) 설계
 
-> 작성: 2026-09-12 · 기준 커밋 `e623254` · 상태: 착수 전(사용자 승인 2026-09-12 — `windows-sys` 직접 의존 추가 승인)
+> 작성: 2026-09-12 · 기준 커밋 `e623254` · 상태: Task 1~6 구현·검증 완료(미커밋; Task 6 대기 스트립 평균 33.6 MB, 프로세스 1개 PASS)
 > 목표: 창을 열지 않고도 Codex·Claude 잔여량을 **작업표시줄에서 상시** 확인한다. Phase 4에서 확보한 대기 상태 31.5 MB를 훼손하지 않는다.
 
 ## 0. 왜 트레이 아이콘으로는 안 되는가
@@ -13,7 +13,7 @@
 
 | 축 | 기준 | 측정 방법 |
 |---|---|---|
-| 표시 | 스트립 켬 상태에서 작업표시줄 알림 영역 왼쪽에 `Codex NN% · Claude NN%`가 창 없이 보인다 | 스크린샷 |
+| 표시 | 스트립 켬 상태에서 작업표시줄 알림 영역 왼쪽에 `[Codex CI] NN% · [Claude CI] NN%`가 창 없이 보인다 | 스크린샷 또는 사용자 육안 확인 |
 | 위치 | 스트립 오른쪽 끝이 `TrayNotifyWnd.left`에 접하고, 셸 요소와 겹치는 픽셀이 0이다 | 스크린샷 + `SPECTRA_TIMING_LOG=1` 좌표 로그 |
 | 메모리 | 대기(standby) 상태 총 작업 집합 ≤ **35 MB** (Phase 4 기준 31.5 MB + 스트립) | `scripts/measure-memory.ps1 -Scenario standby-strip` |
 | 메모리 | 대기 상태 프로세스 수가 **1**로 유지된다(WebView2 0개) | 동일 스크립트 `processCount` 열 |
@@ -21,8 +21,12 @@
 | 테마 | 작업표시줄 라이트↔다크 전환 시 10초 안에 스트립 색이 따라간다 | 수동 전환 + 스크린샷 2장 |
 | 기본값 | `UiPrefs.strip == false`(기본)에서 스트립 창이 생성되지 않고 현행 동작과 동일하다 | `ui-prefs.json` 없는 상태로 기동 + 창 목록 확인 |
 | 복원 | explorer.exe 재시작 후 10초 안에 스트립이 같은 위치로 돌아온다 | 수동 재시작 + 스크린샷 |
-| 의존성 | `Cargo.lock`이 바이트 동일하게 유지된다 | 추가 전후 SHA-256 대조 |
+| 의존성 | `Cargo.lock` 변경이 `spectra-native` 의존 목록의 `"windows-sys 0.61.2",` 엣지 한 줄뿐이다 — 새 `[[package]]` 0개, 버전 변경 0개 | `git diff -- Cargo.lock` 육안 + `grep -c '^+\[\[package\]\]'` = 0 |
 | 회귀 | 기본·`native-oauth` 두 구성 모두 경고 0, 기존 테스트 전수 통과 | `cargo build --release` · `cargo test --lib` |
+
+### 1-1. 최종 판정 (2026-09-12)
+
+표시·위치·테마·기본값·Explorer 재시작·전체화면/자동숨김 전환은 Task 2~5 자동 검사와 사용자 육안 확인으로 PASS했다. 대기 상태 메모리는 Task 6에서 61개 표본 평균 33.6 MB, 최대 34.1 MB, 프로세스 수 1개로 PASS했다. 데이터 목적 폴링은 없고 `Cargo.lock`의 새 package는 없다. 별도 D3D 전체화면, 물리 다중 모니터, 30분 가려짐 관찰은 이 판정에 포함하지 않았다.
 
 ## 2. 실측 근거 (2026-09-12, windows-main)
 
@@ -80,8 +84,11 @@ Shell_SecondaryTrayWnd 없음(단일 작업표시줄)
 
 ### 3-4. 라벨·색
 
-- 라벨은 `Codex`·`Claude` 전체 이름. 실측상 폭 여유가 충분하므로 `Cx`·`Cl` 축약을 쓰지 않는다.
-- 글꼴은 `SPI_GETNONCLIENTMETRICS`의 `lfStatusFont`를 사용한다. Segoe UI 하드코딩은 한국어 폴백을 깨뜨린다.
+- 2026-09-12 사용자 승인으로 전체 이름을 **16 DIP CI 로고**로 대체한다. 표시 순서는 Codex → Claude이며 잔여율·구분점은 유지한다. `StripModel`의 공급자 이름과 툴팁은 전체 이름을 유지한다.
+- 위치는 기존 `TrayNotifyWnd.left`, 즉 `^` 왼쪽을 유지한다. 와이파이 아이콘 앞으로 이동하지 않는다.
+- CI 원본·출처·재생성 절차는 `src-tauri/assets/provider-ci/README.md`를 따른다. 64×64 알파 마스크 2개를 내장하며, 런타임 의존성·네트워크 조회를 추가하지 않는다.
+- CI는 GDI 텍스트의 알파 복원 **이후** premultiplied BGRA로 합성해 검정 로고와 반투명 가장자리를 보존한다. 텍스트의 순색 알파 복원을 CI에 다시 적용하지 않는다.
+- 글꼴은 `SystemParametersInfoForDpi(SPI_GETNONCLIENTMETRICS)`의 `lfStatusFont`를 사용한다. Segoe UI 하드코딩은 한국어 폴백을 깨뜨린다.
 - 값 색은 기존 임계(≥50 / ≥20 / 그 외)를 따르되, **작업표시줄 배경에 맞는 두 벌**을 둔다. `tray_badge`의 색은 어두운 배지 위 기준이라 라이트 작업표시줄에서 대비가 부족하다.
 
 | 역할 | 라이트 | 다크 |
@@ -89,7 +96,9 @@ Shell_SecondaryTrayWnd 없음(단일 작업표시줄)
 | 값 ≥50% | `#1F7F78` | `#56B7B0` |
 | 값 ≥20% | `#9A6B00` | `#C7A852` |
 | 값 <20% | `#B4472B` | `#D88463` |
-| 라벨 | `#5F5F5F` | `#A0A0A0` |
+| Codex CI | `#000000` | `#FFFFFF` |
+| Claude CI | `#D97757` | `#D97757` |
+| 미연결 값 `—`·알 수 없는 공급자 이름 | `#5F5F5F` | `#A0A0A0` |
 | 구분점 `·` | `#9A9A9A` | `#6B6B6B` |
 
 ### 3-5. 테마 출처
@@ -123,7 +132,7 @@ windows-sys v0.61.2 ← dirs-sys ← dirs ← tauri ← spectra-native
 windows     v0.61.3 ← tao ← tauri-runtime-wry ← tauri
 ```
 
-해석된 버전에 고정하므로 **새 크레이트 0개**이고 `Cargo.lock`은 바뀌지 않는다(features는 lock에 기록되지 않는다). 필요한 feature: `Win32_Foundation`, `Win32_UI_WindowsAndMessaging`, `Win32_UI_Shell`, `Win32_UI_HiDpi`, `Win32_Graphics_Gdi`, `Win32_System_LibraryLoader`, `Win32_System_Registry`.
+해석된 버전에 고정하므로 **새 크레이트 0개**이다. `Cargo.lock`에는 `spectra-native` 자신의 의존 목록에 `"windows-sys 0.61.2",` 엣지 한 줄이 추가될 뿐이며(직접 의존 추가는 크레이트가 이미 트리에 있어도 이 한 줄을 반드시 남긴다 — 2026-09-12 실측 정정), 새 `[[package]]` 블록과 버전 변경은 없다(features는 lock에 기록되지 않는다). 필요한 feature: `Win32_Foundation`, `Win32_UI_WindowsAndMessaging`, `Win32_UI_Shell`, `Win32_UI_HiDpi`, `Win32_Graphics_Gdi`, `Win32_System_LibraryLoader`, `Win32_System_Registry`.
 
 Windows 전용이므로 `[target.'cfg(target_os = "windows")'.dependencies]`에 넣는다.
 

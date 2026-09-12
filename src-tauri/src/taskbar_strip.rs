@@ -70,6 +70,18 @@ pub struct StripSegment { pub label: String, pub value: String, pub value_color:
 #[derive(Clone, Debug, PartialEq)]
 pub struct StripModel { pub segments: Vec<StripSegment>, pub tooltip: String }
 
+/// 조회 없이 캐시된 표시 값에 현재 작업표시줄 팔레트를 적용한다.
+pub fn retheme_model(model: &mut StripModel, theme: StripTheme) {
+    let colors = palette(theme);
+    for segment in &mut model.segments {
+        segment.value_color = segment.value.strip_suffix('%')
+            .and_then(|value| value.parse::<u8>().ok())
+            .filter(|percent| *percent <= 100)
+            .map(|percent| value_color(percent, colors))
+            .unwrap_or(colors.label);
+    }
+}
+
 pub fn build_model(snapshots: &[ProviderUsageSnapshot], theme: StripTheme) -> Option<StripModel> {
     let colors = palette(theme);
     let mut segments = Vec::with_capacity(PROVIDERS.len());
@@ -135,6 +147,26 @@ pub fn place_strip(taskbar: Rect, edge: TaskbarEdge, tray_left: i32, size: (i32,
 mod tests {
     use super::*;
     use crate::provider_usage::{ProviderQuotaWindow, ProviderUsageSnapshot};
+
+    #[test]
+    fn theme_changes_recolor_cached_values_without_changing_text_or_tooltip() {
+        let mut model = StripModel {
+            segments: ["0%", "19%", "20%", "49%", "50%", "100%", "—"].into_iter()
+                .map(|value| StripSegment { label: "Codex".into(), value: value.into(), value_color: [0; 3] })
+                .collect(),
+            tooltip: "SPECTRA · 캐시된 실제 잔여량".into(),
+        };
+        let text = model.segments.iter().map(|s| (s.label.clone(), s.value.clone())).collect::<Vec<_>>();
+        let tooltip = model.tooltip.clone();
+        for theme in [StripTheme::Light, StripTheme::Dark, StripTheme::Light] {
+            retheme_model(&mut model, theme);
+            let colors = palette(theme);
+            assert_eq!(model.segments.iter().map(|s| s.value_color).collect::<Vec<_>>(),
+                [colors.low, colors.low, colors.mid, colors.mid, colors.high, colors.high, colors.label]);
+            assert_eq!(model.segments.iter().map(|s| (s.label.clone(), s.value.clone())).collect::<Vec<_>>(), text);
+            assert_eq!(model.tooltip, tooltip);
+        }
+    }
 
     fn window(id: &str, remaining: f64) -> ProviderQuotaWindow {
         ProviderQuotaWindow {

@@ -7,8 +7,10 @@ mod oauth_callback;
 mod provider_connection;
 mod provider_usage;
 mod standby;
-#[allow(dead_code)] // Task 4에서 배선
+#[cfg(any(target_os = "windows", test))]
 mod taskbar_strip;
+#[cfg(target_os = "windows")]
+mod taskbar_window;
 mod tray_badge;
 
 #[cfg(feature = "native-oauth")]
@@ -37,6 +39,8 @@ pub struct AppState {
     pub(crate) last_snapshots: Mutex<Vec<provider_usage::ProviderUsageSnapshot>>,
     pub(crate) recreating: std::sync::atomic::AtomicBool,
     pub(crate) snapshot_requests: Mutex<std::collections::HashMap<String, u64>>,
+    #[cfg(target_os = "windows")]
+    pub(crate) strip: Mutex<Option<taskbar_window::StripHandle>>,
 }
 
 impl AppState {
@@ -47,7 +51,7 @@ impl AppState {
     pub(crate) fn boot_state(&self, mode: desktop_shell::WindowMode) -> standby::BootState {
         let prefs = self.ui.lock().map(|p| p.clone()).unwrap_or_default();
         let snapshots = self.last_snapshots.lock().map(|s| s.clone()).unwrap_or_default();
-        standby::BootState { theme: prefs.theme, solid: prefs.solid, standby: prefs.standby, mode: mode.slug(), snapshots }
+        standby::BootState { theme: prefs.theme, solid: prefs.solid, standby: prefs.standby, strip: prefs.strip, mode: mode.slug(), snapshots }
     }
 
     pub(crate) fn remember_snapshot(&self, snapshot: &provider_usage::ProviderUsageSnapshot) {
@@ -252,6 +256,7 @@ async fn provider_usage_snapshot(
     if state.snapshot_request_is_current(&provider_id, ticket) {
         state.remember_snapshot(&snapshot);
         desktop_shell::update_tray_badge(&app);
+        desktop_shell::update_taskbar_strip(&app);
     }
     Ok(snapshot)
 }
@@ -310,6 +315,13 @@ fn set_standby(enabled: bool, state: State<'_, AppState>) -> Result<standby::UiP
     apply_prefs(&state, |prefs| prefs.standby = enabled)
 }
 
+#[tauri::command]
+fn set_strip(enabled: bool, app: AppHandle, state: State<'_, AppState>) -> Result<standby::UiPrefs, String> {
+    let prefs = apply_prefs(&state, |prefs| prefs.strip = enabled)?;
+    desktop_shell::update_taskbar_strip(&app);
+    Ok(prefs)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let mut builder = tauri::Builder::default().plugin(tauri_plugin_deep_link::init());
@@ -351,7 +363,8 @@ pub fn run() {
             provider_remove_bridge,
             get_ui_prefs,
             set_ui_prefs,
-            set_standby
+            set_standby,
+            set_strip
         ])
         .setup(|app| {
             desktop_shell::install(app)?;
@@ -360,6 +373,7 @@ pub fn run() {
                 // startup; the user can reopen the window from the tray.
                 eprintln!("spectra: main window could not be shown at startup: {error}");
             }
+            desktop_shell::update_taskbar_strip(app.handle());
 
             #[cfg(feature = "native-oauth")]
             {
@@ -383,8 +397,16 @@ pub fn run() {
         .expect("error while building SPECTRA native shell");
 
     app.run(|_app, event| {
-        if let tauri::RunEvent::ExitRequested { api, code: None, .. } = event {
+        if let tauri::RunEvent::ExitRequested { ref api, code: None, .. } = event {
             api.prevent_exit();
+        }
+        #[cfg(target_os = "windows")]
+        if let tauri::RunEvent::Exit = event {
+            if let Ok(mut slot) = _app.state::<AppState>().strip.lock() {
+                if let Some(handle) = slot.take() {
+                    handle.shutdown();
+                }
+            }
         }
     });
 }
@@ -431,6 +453,7 @@ mod app_state_tests {
             theme: "light".to_string(),
             solid: true,
             standby: true,
+            strip: true,
         };
         state.remember_snapshot(&make_snapshot("codex", "codex snapshot"));
 
@@ -440,6 +463,7 @@ mod app_state_tests {
         assert_eq!(boot.theme, "light");
         assert!(boot.solid);
         assert!(boot.standby);
+        assert!(boot.strip);
         assert_eq!(boot.snapshots.len(), 1);
         assert_eq!(boot.snapshots[0].provider_id, "codex");
     }

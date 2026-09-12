@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 설정에서 "작업표시줄 표시"를 켜면 Windows 작업표시줄 알림 영역 왼쪽에 `Codex NN% · Claude NN%`를 창 없이 상시 표시하고, 대기(standby) 상태 총 작업 집합을 35 MB 이하·프로세스 1개로 유지한다. 기본값은 꺼짐이다.
+**Goal:** 설정에서 "작업표시줄 표시"를 켜면 Windows 작업표시줄 알림 영역 왼쪽에 `[Codex CI] NN% · [Claude CI] NN%`를 창 없이 상시 표시하고, 대기(standby) 상태 총 작업 집합을 35 MB 이하·프로세스 1개로 유지한다. 기본값은 꺼짐이다.
 
 **Architecture:** 두 번째 WebView 창을 만들지 않는다 — WebView2 프로세스가 대기 상태에서도 살아남아 Phase 4의 31.5 MB가 무너지기 때문이다. 대신 `windows-sys`로 `WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TOPMOST` 창 1개를 전용 스레드에서 만들고 `UpdateLayeredWindow`로 GDI 렌더 결과를 올린다. 순수 계산(공급자별 최소 잔여율 선택·색·배치 산술)은 `taskbar_strip.rs`에 Win32 없이 두어 전부 단위 테스트하고, Win32는 `taskbar_window.rs`에 격리한다. 값 갱신은 기존 `update_tray_badge` 호출 지점에 얹어 폴링 없이 스냅샷 완료 시점에만 일어난다.
 
@@ -12,18 +12,20 @@
 
 ## Global Constraints
 
-- **의존성**: `windows-sys = { version = "0.61.2", ... }`를 `[target.'cfg(target_os = "windows")'.dependencies]`에만 추가한다. 다른 신규 크레이트 금지. 추가 후 `Cargo.lock`이 **바이트 동일**해야 한다(features는 lock에 기록되지 않음) — Task 2에서 SHA-256으로 검증
+- **의존성**: `windows-sys = { version = "0.61.2", ... }`를 `[target.'cfg(target_os = "windows")'.dependencies]`에만 추가한다. 다른 신규 크레이트 금지. `Cargo.lock`의 허용 변경은 **`[[package]] name = "spectra-native"`의 의존 목록에 `"windows-sys 0.61.2",` 한 줄이 추가되는 것뿐**이다 — 새 `[[package]]` 블록 0개, 버전 변경 0개(features는 lock에 기록되지 않음). Task 2에서 `git diff -- Cargo.lock`으로 검증. (2026-09-12 정정: 직접 의존을 추가하면 이 엣지 한 줄은 크레이트가 이미 트리에 있어도 반드시 생기므로 초안의 "바이트 동일"은 달성 불가능한 문구였다)
 - **기본값은 현행 동작**: `UiPrefs::default().strip == false` → 스트립 창을 아예 만들지 않는다
-- **폴링 금지**: 데이터 목적 `SetTimer`/스레드 sleep 루프 0개. 값 갱신은 `provider_usage_snapshot` 완료 시점에만. 셸 이벤트(`WM_SETTINGCHANGE`·`WM_DISPLAYCHANGE`·`TaskbarCreated`)로만 위치·테마를 재확인
+- **폴링 금지**: 데이터 목적 `SetTimer`/스레드 sleep 루프 0개. 값 갱신은 `provider_usage_snapshot` 완료 시점에만. 셸 메시지(`WM_SETTINGCHANGE`·`WM_DISPLAYCHANGE`·`WM_DPICHANGED`·`TaskbarCreated`)와 Task 5의 WinEvent(전경 창·창 위치 변화)로 위치·테마·전체화면 상태를 재확인한다. WinEvent에서 공급자 조회를 호출하지 않는다.
 - **테마 출처**: 스트립은 `HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize\SystemUsesLightTheme`를 따른다. `UiPrefs.theme`와 **연결 금지**
-- **좌표계**: 프로세스가 DPI-aware이므로 `GetWindowRect`·`SHAppBarMessage` 모두 물리 픽셀이다. 논리 픽셀을 가정한 상수를 두지 않는다
+- **좌표계**: 스트립 전용 스레드가 창 생성 전에 `SetThreadDpiAwarenessContext(PER_MONITOR_AWARE_V2)`를 설정한다. Tauri 초기화를 건너뛰는 프로브도 동일한 물리 좌표계를 사용한다. 프로세스 기본 DPI 설정을 추정하지 않으며, 논리 픽셀을 가정한 상수를 두지 않는다.
 - **범위**: 주 작업표시줄·가로(TOP/BOTTOM)만. `Shell_SecondaryTrayWnd`·세로 작업표시줄은 스트립을 띄우지 않고 조용히 건너뛴다
 - **프론트 금지 패턴 유지**: `localStorage`·`sessionStorage`·`setInterval`·`requestAnimationFrame` 금지. 선호 영속은 Rust `ui-prefs.json`만
 - **테스트 기준선(2026-09-12 실측)**: `cargo test --lib` 기본 **44 passed** · `npm test` **32 passed**. 각 Task의 Expected는 이 수에 신규분을 더해 적는다
 - **두 feature 구성 모두 통과해야 커밋**: `cargo build --release`(기본)·`--features native-oauth`, `cargo test --lib` 양쪽. 경고 0
+- **실제 앱 실행용 빌드(2026-09-12 Task 4 정정)**: 일반 `cargo build --release`는 컴파일 게이트다. 이 저장소에서는 Tauri의 `custom-protocol`을 활성화하지 않아 `devUrl`을 참조하므로, 실제 앱 확인에는 `node node_modules/@tauri-apps/cli/tauri.js build --no-bundle -- --offline --locked`로 프론트엔드를 내장한 EXE를 사용한다. Task 2·3의 `--probe-strip`은 Tauri를 건너뛰므로 해당 프로브 결과는 유효하다. 설치 패키지가 필요할 때만 기존 `npm run desktop:build`를 사용한다.
 - **프론트 게이트(프론트 변경 시)**: `npm run build` · `npm run verify:tokens` · `npm run verify:memory` · `npm run verify:baseline` · `npm test`
 - **Rust 테스트는 `SPECTRA_DATA_DIR`를 변경하지 않는다**(병렬 실행 오염). 파일 IO는 경로를 인자로 받는 형태로 두고 임시 디렉터리로 테스트
 - **Win32 단위 테스트를 가장하지 않는다**: 창 생성·GDI·셸 조회는 단위 테스트 대상이 아니다. 해당 Task의 게이트는 명시된 **육안 검증(스크린샷)**이며, 통과 전 완료 선언 금지(CLAUDE.md "완료 선언 전 실물 검증 필수")
+- **2026-09-12 보완 검사**: `taskbar_window::tests`의 명시 실행용 `#[ignore]` 검사 2개는 실제 Windows API로 DPI 초기화와 DIB 생성 실패 경로를 확인한다. 모의 Win32 테스트나 육안 게이트 대체물이 아니다. 기본 테스트 수는 유지되고 ignored 2개가 추가된다. 실행: `cargo test --manifest-path src-tauri/Cargo.toml --lib --offline --locked taskbar_window::tests -- --ignored --test-threads=1`.
 - dev server·watch·30분 측정은 실행자가 직접 띄우지 않는다(명령 제시 + 사용자 협조). 릴리스 빌드·`cargo test`·릴리스 exe 1회 실행(사용자 고지 후)은 허용
 - 파일 삭제 금지(빌드 산출물 제외)
 - 커밋 메시지 말미: `Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>`
@@ -470,15 +472,17 @@ windows-sys = { version = "0.61.2", features = [
 ] }
 ```
 
-- [ ] **Step 3: `Cargo.lock`이 바뀌지 않았는지 확인**
+- [ ] **Step 3: `Cargo.lock` 변경이 엣지 한 줄뿐인지 확인**
 
 Run:
 ```bash
-cd src-tauri && cargo metadata --offline --format-version 1 > /dev/null && sha256sum Cargo.lock
+cd src-tauri && cargo metadata --offline --format-version 1 > /dev/null && git diff -- Cargo.lock && git diff -- Cargo.lock | grep -c '^+\[\[package\]\]'
 ```
-Expected: Step 1과 **동일한 해시**. 달라지면 버전 지정이 트리의 해석 버전과 어긋난 것이므로, `cargo tree -i windows-sys@0.61.2`로 실제 버전을 다시 확인하고 `Cargo.toml`을 맞춘 뒤 `git checkout Cargo.lock`으로 되돌린다.
+Expected: diff에 `+ "windows-sys 0.61.2",` **한 줄만** 추가되어 있고(`spectra-native` 패키지의 `dependencies` 목록), 마지막 `grep -c`가 `0`(새 `[[package]]` 블록 없음). Step 1의 해시는 당연히 달라진다 — 직접 의존 추가는 이 엣지 한 줄을 반드시 남긴다. 다른 줄이 더 바뀌었다면(새 패키지·버전 변경) 지정 버전이 트리의 해석 버전과 어긋난 것이므로, `cargo tree -i windows-sys@0.61.2`로 실제 버전을 다시 확인하고 `Cargo.toml`을 맞춘 뒤 `git checkout -- Cargo.lock`으로 되돌리고 재실행한다. 확인이 끝난 `Cargo.lock`은 Step 8 커밋에 **포함**한다.
 
 - [ ] **Step 4: `taskbar_window.rs` 작성**
+
+> **2026-09-12 재개 주의:** 아래는 최초 골격이다. 현재 `src-tauri/src/taskbar_window.rs`에는 창 생성 전 스레드 DPI 설정, `DibSurface`의 부분 생성 실패 정리, `redraw -> Result<(), String>` 및 최초 그리기 오류 전달이 추가돼 있다. 기존 파일을 아래 코드로 덮어쓰지 말고 이 수정과 명시 실행용 검사를 유지한다. Task 3·5의 모든 redraw 호출도 오류 시 숨김·기록 처리를 유지한다.
 
 ```rust
 #![cfg(target_os = "windows")]
@@ -833,10 +837,14 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 **Files:**
 - Modify: `src-tauri/src/taskbar_window.rs`
+- Add: `src-tauri/assets/provider-ci/` (SVG 원본·64×64 알파 마스크·출처·라이선스)
+- Add: `scripts/generate-provider-ci-masks.py` (개발 시 자산 재생성)
+
+**2026-09-12 사용자 변경 승인:** 전체 이름을 16 DIP CI로 바꾸고 잔여율·표시 순서·`^` 왼쪽 위치를 유지한다. 현재 `taskbar_window.rs`의 `RunContent::Ci`·`ProviderCi`·`draw_ci` 구현을 기준으로 재개한다. 아래 텍스트 전용 의사코드로 현재 CI 합성을 덮어쓰지 않는다. `StripModel` 이름·툴팁과 Task 1의 데이터 계약은 유지한다.
 
 **Interfaces:**
 - Consumes: Task 1의 `StripModel`·`Palette`, Task 2의 `redraw`·`current_theme`·`StripState`
-- Produces: `redraw`가 실제 텍스트를 그린다. 창 크기가 `STRIP_WIDTH`/`STRIP_HEIGHT` 상수가 아니라 **측정된 텍스트 크기**가 되고(두 상수는 삭제), `StripState`가 `font: HFONT`·`font_dpi: u32`를 소유한다.
+- Produces: `redraw`가 실제 텍스트를 그린다. 창 크기가 `STRIP_WIDTH`/`STRIP_HEIGHT` 상수가 아니라 **측정된 텍스트 크기**가 되고(두 상수는 삭제), `StripState`가 `font: Cell<HFONT>`·`font_dpi: Cell<u32>`를 소유한다. `*const StripState` 접근과 `redraw -> Result<(), String>` 계약을 유지한다.
 
 - [ ] **Step 1: 셸 글꼴 획득 함수 추가 (DPI 반영 + 안티앨리어싱 끄기)**
 
@@ -876,34 +884,49 @@ fn shell_font(dpi: u32) -> HFONT {
 
 > import 경로는 windows-sys 0.61.2에서 실측 확인됨(2026-09-12): `GetDpiForWindow`·`SystemParametersInfoForDpi` 모두 `src/Windows/Win32/UI/HiDpi/mod.rs`(feature `Win32_UI_HiDpi`), `NONANTIALIASED_QUALITY`는 `Graphics/Gdi`에 `FONT_QUALITY = 3u8`로 정의돼 있어 `lfQuality`(u8)에 캐스트 없이 그대로 대입한다. `SystemParametersInfoForDpi`는 `BOOL`(i32)을 돌려주므로 `ok != 0`으로 판정한다.
 
-**HFONT 수명**: `redraw`마다 `CreateFontIndirectW`를 부르면 GDI 핸들이 샌다 — `WM_SETTINGCHANGE`는 테마 외에도 자주 브로드캐스트되므로 누적이 빠르다. `StripState`에 `font: HFONT`와 `font_dpi: u32`를 두고, `redraw` 진입 시 `GetDpiForWindow(hwnd)`가 `font_dpi`와 다를 때만 이전 핸들을 `DeleteObject`하고 새로 만든다. `WM_DESTROY`에서도 `DeleteObject`한다.
+**HFONT 수명·재진입**: `std::cell::Cell`을 사용해 `StripState`에 `font: Cell<HFONT>`와 `font_dpi: Cell<u32>`를 둔다(ledger 판정 A). `*const StripState`를 `&mut`로 바꾸지 않는다. 캐시가 비었거나 DPI가 달라졌을 때 새 글꼴을 만들고, 성공한 경우 이전 핸들을 교체·해제한다. `WM_SETTINGCHANGE`에서도 캐시를 무효화해 같은 DPI의 시스템 글꼴 변경을 반영한다. 선택 중인 글꼴은 삭제하지 않으며, 두 패스 모두 셸 글꼴 선택을 원래 객체로 복원한 뒤 창 관련 API를 호출해 동기 재진입 중 캐시 교체와 충돌하지 않게 한다. 그리기 DC와 비트맵 자체는 `UpdateLayeredWindow`가 끝날 때까지 유지한다. `WM_DESTROY`에서도 남은 글꼴을 해제한다. 생성 실패는 기존 `redraw` 오류 경로로 전달한다.
 
 - [ ] **Step 2: 텍스트 폭 측정 + 그리기로 `redraw` 교체**
 
-`redraw`의 "확인용 반투명 채움" 블록을 아래로 바꾼다. 세그먼트를 `라벨 값 · 라벨 값` 순서로 이어 그리고, 각 조각의 색을 따로 준다.
+`redraw`의 "확인용 반투명 채움" 블록을 실제 렌더링으로 바꾼다. 세그먼트는 `CI 값 · CI 값` 순서이며, CI 폭·높이는 16 DIP를 실제 DPI로 환산한다. 값·공백·구분점은 아래처럼 같은 셸 글꼴로 측정·그린다. 알 수 없는 공급자 이름만 텍스트로 표시한다.
 
 ```rust
-/// 한 조각을 그리고 오른쪽 끝 x를 돌려준다. measure_only면 그리지 않고 폭만 잰다.
-/// 호출 전에 반드시 글꼴이 dc에 SelectObject 되어 있어야 한다 — 안 그러면 GDI 기본
-/// System 글꼴로 그려져 작업표시줄과 이질적으로 보인다.
-unsafe fn draw_run(dc: HDC, text: &str, color: [u8; 3], x: i32, height: i32, measure_only: bool) -> i32 {
-    let mut wide_text = wide(text);
-    let mut rc = RECT { left: x, top: 0, right: x + 4096, bottom: height };
-    let flags = DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | if measure_only { DT_CALCRECT } else { 0 };
+/// 두 함수 모두 호출 전에 같은 셸 글꼴을 DC에 SelectObject 해야 한다.
+unsafe fn measure_run(dc: HDC, text: &str) -> Result<(i32, i32), String> {
+    if text.is_empty() { return Ok((0, 0)); }
+    let wide_text = wide(text);
+    let mut rc = RECT { left: 0, top: 0, right: 4096, bottom: 0 };
+    if DrawTextW(dc, wide_text.as_ptr(), -1, &mut rc, DT_SINGLELINE | DT_NOPREFIX | DT_CALCRECT) == 0 {
+        return Err(win32_error("DrawTextW measurement"));
+    }
+    Ok((rc.right - rc.left, rc.bottom - rc.top))
+}
+
+/// 측정한 폭으로 그린다. 다음 x는 호출자가 같은 폭을 더해 계산한다.
+unsafe fn draw_run(dc: HDC, text: &str, color: [u8; 3], x: i32, width: i32, height: i32) -> Result<(), String> {
+    if text.is_empty() { return Ok(()); }
+    let wide_text = wide(text);
+    let mut rc = RECT { left: x, top: 0, right: x + width, bottom: height };
     SetTextColor(dc, (color[0] as u32) | ((color[1] as u32) << 8) | ((color[2] as u32) << 16));
     SetBkMode(dc, TRANSPARENT as i32);
-    DrawTextW(dc, wide_text.as_mut_ptr(), -1, &mut rc, flags);
-    rc.right
+    if DrawTextW(dc, wide_text.as_ptr(), -1, &mut rc, DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX) == 0 {
+        return Err(win32_error("DrawTextW drawing"));
+    }
+    Ok(())
 }
 ```
 
 `redraw`는 **2패스**로 동작한다.
 
-① **측정 패스** — 1×1 DIB로 메모리 DC를 만들고 `SelectObject(dc, font)` 한 뒤, 모든 조각을 `measure_only = true`로 훑어 **전체 폭과 높이**를 얻는다. `DT_CALCRECT`가 돌려주는 `rc.bottom`이 글자 높이이므로, 여기에 상하 여백(각 4px × DPI/96)을 더해 **창 높이를 정한다**. `STRIP_HEIGHT`·`STRIP_WIDTH` 상수는 96-DPI 값이라 125%·150% 기기에서 어긋나므로 이 패스의 결과로 대체하고 상수는 삭제한다.
+① **측정 패스** — 1×1 DIB로 메모리 DC를 만들고 `SelectObject(dc, font)` 한 뒤, 텍스트 조각(값·공백·구분점)을 `measure_run`으로 측정한다. CI 조각은 16 DIP의 정사각형 크기를 쓴다. 전체 폭은 모든 조각의 폭 합이며, 높이는 글자·CI 높이 중 최댓값에 상하 여백(각 4px × DPI/96)을 더한다. `RunContent`로 텍스트와 CI를 구분하고 색·폭을 저장한다. `STRIP_HEIGHT`·`STRIP_WIDTH` 상수는 삭제하며 폭·높이·버퍼 길이는 양수 및 checked 연산으로 확인한다.
 
-② **그리기 패스** — 측정된 크기로 DIB를 만들고 같은 글꼴을 `SelectObject` 한 뒤 `measure_only = false`로 실제로 그린다.
+② **그리기 패스** — 측정된 크기로 DIB를 만들고 BGRA 버퍼 전체를 0으로 초기화한 뒤 가변 슬라이스의 사용을 끝낸다. 같은 글꼴을 `SelectObject`하고 저장한 폭으로 텍스트를 그린다. CI는 이 단계에서 빈 자리로 남기되, **모든 조각의 폭을 `x`에 누적**한다. 마지막 `x`는 측정 패스의 전체 폭과 일치해야 한다. 그리기 모드에서 `rc.right`를 실제 문자열 끝으로 해석하지 않는다. `DT_CALCRECT` 없이 그리면 초기 사각형 폭이 측정값으로 바뀌지 않는다([DrawTextW 규약](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-drawtextw)).
 
-두 패스 모두 끝에 `SelectObject(dc, old_font)`로 원래 객체를 되돌린 뒤 `DeleteDC` 한다(글꼴 자체는 `StripState`가 소유하므로 여기서 `DeleteObject` 하지 않는다).
+두 패스 모두 끝에 `SelectObject(dc, old_font)`로 원래 객체를 되돌린다. 실패 시에도 원래 글꼴 복원이 실행되도록 작은 수명 가드로 보호하고, `DibSurface`가 DC·비트맵을 해제한다(글꼴 자체는 `StripState` 소유). Task 2에서 추가한 생성·표시 실패 검사와 자원 정리를 유지한다.
+
+그리기 뒤에는 `GdiFlush()` 성공을 확인하고 나서 픽셀 버퍼를 빌려 알파를 복원한다. GDI가 DIB에 쓰는 동안 Rust의 가변 슬라이스를 유지하지 않는다([CreateDIBSection 동기화 규약](https://learn.microsoft.com/en-us/windows/win32/api/wingdi/nf-wingdi-createdibsection)).
+
+텍스트 알파 복원이 끝난 뒤 `draw_ci`로 CI 영역을 채운다. 내장한 64×64 알파 마스크를 표시 크기로 보간하고 채널마다 `RGB × alpha / 255`를 적용한 premultiplied BGRA를 쓴다. 검정 Codex CI도 RGB가 0인 채 알파를 가질 수 있으므로 아래 텍스트용 복원을 **CI 합성 뒤에 다시 실행하면 안 된다**. 별도 HFONT/HICON·SVG 런타임·새 Cargo 의존성은 추가하지 않는다.
 
 > **GDI 알파 처리**: `DrawTextW`는 알파 채널을 0으로 남긴다. `UpdateLayeredWindow`의 `AC_SRC_ALPHA`는 premultiplied BGRA를 요구하므로 그린 뒤 **버퍼를 훑어 알파를 복원**해야 글자가 보인다. Step 1에서 `NONANTIALIASED_QUALITY`를 켰기 때문에 글자 픽셀은 정확히 `SetTextColor` 값이고 나머지는 0이다 — 따라서 다음 복원이 **정확하다**(회색 경계가 없으므로 후광이 생기지 않는다):
 >
@@ -932,11 +955,12 @@ Expected: `57 passed; 0 failed`
 Run: `cargo build --release --offline && ./target/release/spectra-native.exe --probe-strip`
 
 Expected — 사용자에게 스크린샷 요청. 확인 항목:
-1. `Codex 55% · Claude 59%` 형태의 텍스트가 읽힌다(값은 임시 모델 값)
+1. `[Codex CI] 55% · [Claude CI] 59%`가 읽히고 전체 이름을 쓴 버전보다 폭이 줄어든다(값은 임시 모델 값)
 2. 글꼴이 작업표시줄 시계와 **같은 계열**로 보인다
-3. 값 색이 팔레트대로다(라이트 테마에서 청록/황갈/적갈)
+3. 값 색이 팔레트대로다(라이트 테마에서 청록/황갈/적갈). Codex CI는 라이트 검정·다크 흰색, Claude CI는 `#D97757`이다.
 4. 텍스트가 잘리거나 넘치지 않고, 막대 폭이 텍스트에 맞다
 5. 배경이 작업표시줄과 자연스럽게 섞인다(불투명 사각형이 보이지 않는다)
+6. 조각별 측정 폭의 합과 최종 그리기 x가 같고, 두 CI·값·구분점이 모두 보인다. `0%`·`100%`·`—`에서도 같은 조건을 확인한다. 실제 GDI 출력 검사에 라이트·다크 × 96·120·144 DPI × 값 조합 4개를 포함한다.
 
 - [ ] **Step 6: 커밋**
 
@@ -974,7 +998,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
   export async function setNativeStrip(enabled: boolean): Promise<NativeUiPrefs | null>;
   ```
 
-- [ ] **Step 1: 실패하는 테스트 작성 (Rust + 프론트)**
+- [x] **Step 1: 실패하는 테스트 작성 (Rust + 프론트)**
 
 `src-tauri/src/standby.rs`의 테스트 모듈에 추가:
 
@@ -1012,7 +1036,7 @@ test("boot state carries an explicit strip flag", () => {
 });
 ```
 
-- [ ] **Step 2: 테스트가 실패하는지 확인**
+- [x] **Step 2: 테스트가 실패하는지 확인**
 
 Run: `cd src-tauri && cargo test --lib --offline standby 2>&1 | tail -5`
 Expected: 컴파일 실패 — `struct UiPrefs has no field named strip`
@@ -1020,7 +1044,7 @@ Expected: 컴파일 실패 — `struct UiPrefs has no field named strip`
 Run: `npm test 2>&1 | tail -5`
 Expected: `fail 2` — `parsed?.strip`이 `undefined`
 
-- [ ] **Step 3: 구현**
+- [x] **Step 3: 구현**
 
 `standby.rs` — `UiPrefs`에 필드 추가(`#[serde(default)]`가 구조체 수준에 이미 있으므로 누락된 필드는 `false`가 된다):
 
@@ -1123,7 +1147,7 @@ export async function setNativeStrip(enabled: boolean): Promise<NativeUiPrefs | 
 <div className="settings-row"><div><strong>작업표시줄 표시</strong><span>{strip ? "작업표시줄 알림 영역 왼쪽에 잔여량을 상시 표시합니다." : "작업표시줄에 표시하지 않습니다(기본)."}</span></div><button type="button" className="secondary-action" onClick={onStrip}>{strip ? "표시 끄기" : "표시 켜기"}</button></div>
 ```
 
-- [ ] **Step 4: 테스트 통과 확인**
+- [x] **Step 4: 테스트 통과 확인**
 
 Run: `cd src-tauri && cargo test --lib --offline 2>&1 | tail -3`
 Expected: `59 passed; 0 failed` (57 + 신규 2)
@@ -1131,7 +1155,7 @@ Expected: `59 passed; 0 failed` (57 + 신규 2)
 Run: `npm test 2>&1 | tail -5`
 Expected: `pass 34` (32 + 신규 2)
 
-- [ ] **Step 5: `#[allow(dead_code)]` 제거 + 전체 게이트**
+- [x] **Step 5: `#[allow(dead_code)]` 제거 + 전체 게이트**
 
 Task 1·2에서 임시로 붙인 `#[allow(dead_code)]`를 모두 제거한다. 이제 실제로 배선됐으므로 경고가 나지 않아야 한다.
 
@@ -1155,19 +1179,31 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 ---
 
+**2026-09-12 Task 4 실행 기록:** 기본 OFF·기존 설정 호환·ON/OFF 저장·BootState 복원,
+`set_strip`·실제 스냅샷 완료·앱 기동/종료·설정 행을 연결했다. 기존 UiPrefs 리터럴 6곳도 수정했다.
+실제 구현은 핸들 잠금을 먼저 얻은 뒤 최신 설정·스냅샷을 읽어 OFF 이후 이전 콜백의 재생성을 막는다.
+저장 중 프론트 중복 토글을 막고 실패하면 이전 값으로 복원한다.
+Rust 기본 59 passed / native-oauth 61 passed(각 ignored 4), 프론트 34 passed.
+두 release 빌드 경고 0, 프론트 빌드·3종 게이트·브라우저 모의 IPC 10항목 PASS.
+15:53 KST 실행본은 사용자가 "페이지 연결 안됨"을 보고했다. 일반 Cargo release가 개발 서버를 참조하는 빌드인 것이 원인이었다. 사용자 중단 요청 후 "재빌드 실행" 승인으로 Tauri standalone 빌드를 재개해 2분 02초·경고 0으로 완료했다. `custom-protocol=true`를 확인하고 16:02 KST 새 EXE를 실행했다. 사용자는 페이지와 CI 실제 잔여량 표시에 "확인 완료 이상 없음"이라고 답했고, 남은 끄기·켜기·클릭·대기/재시작 복원에도 "이상 없음"이라고 추가 확인했다. **Task 4 구현·검증은 PASS**다. Step 6 커밋은 실행하지 않았다.
+정확한 검증 범위: `.superpowers/sdd/2026-09-12-taskbar-usage-strip/task-4-report.md`.
 ### Task 5: 셸 변화 대응 + 임시 진입점 제거
 
 explorer 재시작·테마 전환·해상도 변경·자동숨김·전체화면에서 스트립이 올바르게 행동하게 한다. 여기까지 끝나야 "상시 표시"가 참이 된다.
 
+**2026-09-12 완료:** 셸/WinEvent 처리·숨김 조건·임시 프로브 제거를 구현했다. 기본/기능 빌드는 경고 0, Rust 기본 62개·native-oauth 64개와 명시 실행 Win32/GDI 7개가 통과했다. 프론트 내장 standalone 빌드도 경고 0으로 통과했다. 새 EXE의 F11/일반 최대화·Alt+Tab·테마/배율·탐색기 재시작·자동숨김 5항목에 사용자 `이상 없음` 응답을 받아 Task 5 구현·검증을 PASS로 기록했다. 추가 환경·30분 관찰과 Task 6은 미실시이며 커밋은 하지 않았다. 세부 증거는 `.superpowers/sdd/2026-09-12-taskbar-usage-strip/task-5-report.md`와 `task-5-verification/`에 기록한다.
+
 **Files:**
 - Modify: `src-tauri/src/taskbar_window.rs`
+- Modify: `src-tauri/src/taskbar_strip.rs` — 캐시된 문자열·툴팁을 보존하는 `retheme_model`과 팔레트 회귀 검사
 - Modify: `src-tauri/src/main.rs`, `src-tauri/src/lib.rs` — Task 2의 `--probe-strip` 임시 진입점과 헬퍼 제거
+- Modify: `src-tauri/Cargo.toml` — 기존 `windows-sys`에 `Win32_UI_Accessibility` feature 추가(WinEvent hook용). 새 크레이트·버전 변경 없이 기존 lock 엣지 한 줄 기준을 유지한다.
 
 **Interfaces:**
 - Consumes: Task 2·3의 `wnd_proc`·`redraw`
 - Produces: 없음(내부 동작만 보강)
 
-- [ ] **Step 1: `TaskbarCreated` 등록 + 메시지 처리 추가**
+- [x] **Step 1: `TaskbarCreated`·셸 메시지 + 전체화면 전환 이벤트 등록**
 
 창 생성 직후 등록한다:
 
@@ -1182,10 +1218,16 @@ let taskbar_created = unsafe { RegisterWindowMessageW(wide("TaskbarCreated").as_
 
 `wnd_proc`에 분기를 더한다:
 
+> 실제 구현은 `WM_THEMECHANGED`도 수신한다. 셸 메시지와 `TaskbarCreated`는 아래 의사코드처럼 동기적으로 중첩 렌더링하지 않고 `WM_STRIP_SHELL_CHANGED` 하나로 합쳐 다음 메시지 처리에서 그린다. 위치 변경 중 재진입하는 `WM_DPICHANGED`가 렌더링을 중첩하지 않게 하기 위함이다.
+
 ```rust
 WM_SETTINGCHANGE | WM_DISPLAYCHANGE | WM_DPICHANGED => {
-    // 테마·글꼴·작업표시줄 위치가 모두 여기서 바뀔 수 있다. 값은 캐시된 모델을 그대로 쓴다.
-    redraw(hwnd);
+    // WM_SETTINGCHANGE에서는 글꼴 캐시도 무효화한다.
+    // 캐시된 숫자는 유지하되 값·미연결 표기의 색은 현재 작업표시줄 테마로 다시 계산한다.
+    if let Err(error) = redraw(hwnd) {
+        ShowWindow(hwnd, SW_HIDE);
+        eprintln!("spectra: strip redraw failed: {error}");
+    }
     0
 }
 ```
@@ -1198,7 +1240,10 @@ _ => {
     if let Some(state) = ptr.as_ref() {
         if msg == state.taskbar_created {
             // explorer가 재시작됐다. 작업표시줄 HWND가 새로 생겼으므로 위치를 다시 계산한다.
-            redraw(hwnd);
+            if let Err(error) = redraw(hwnd) {
+                ShowWindow(hwnd, SW_HIDE);
+                eprintln!("spectra: strip redraw failed: {error}");
+            }
             return 0;
         }
     }
@@ -1206,13 +1251,22 @@ _ => {
 }
 ```
 
-- [ ] **Step 2: 자동숨김·전체화면에서 숨기기**
+**전체화면 감지 이벤트는 별도로 구현한다.** `SHQueryUserNotificationState`는 현재 상태 조회 함수이며 전체화면 시작·종료 알림을 보내지 않는다. 설정 메시지만 기다리면 사용량 새로고침이 없는 동안 숨김·복귀가 멈춘다([Microsoft 설명](https://learn.microsoft.com/en-us/windows/win32/api/shellapi/nf-shellapi-shqueryusernotificationstate)).
+
+- 스트립 메시지 루프 스레드에서 `SetWinEventHook`을 두 번 호출한다. 범위는 각각 `EVENT_SYSTEM_FOREGROUND` 하나와 `EVENT_OBJECT_LOCATIONCHANGE` 하나이며, `WINEVENT_OUTOFCONTEXT`, 프로세스·스레드 ID 0을 사용한다. 전경 창이 그대로인 F11 전환은 두 번째 hook이 처리한다.
+- `WINEVENT_SKIPOWNPROCESS`를 사용하지 않는다. 전체화면 앱에서 SPECTRA 창으로 전환한 이벤트까지 제외하면 스트립이 복귀하지 않을 수 있다. 대신 스트립 자신의 HWND 이벤트만 제외한다. 위치 이벤트는 `OBJID_WINDOW`·`CHILDID_SELF`이며 현재 전경 창인 경우만 통과시킨다. 전경 전환 이벤트는 새 전경 창이 NULL인 경우도 상태 재확인을 요청한다.
+- 콜백은 직접 그리거나 앱 mutex를 잡지 않는다. 등록 스레드의 `thread_local Cell<HWND>` 대상에 전용 `WM_STRIP_SHELL_CHANGED` 메시지를 `PostMessageW`로 보낸다. `Cell<bool>` pending 플래그로 중복 요청을 합치고, 전송 실패 또는 메시지 처리 시작 시 플래그를 해제한다. 실제 상태 조회·숨김·복귀는 wndproc에서 수행한다.
+- 두 hook의 `HWINEVENTHOOK`은 `StripState`가 소유한다. 창 생성 후 hook을 등록하고 **최초 `spawn` 성공 통지 전에** 등록 성공을 확인한다. 일부 등록 실패 시 이미 등록한 hook을 해제하고 창을 파기해 오류를 호출자에게 전달한다. 기능이 빠진 상태를 초기화 성공으로 보고하지 않는다.
+- `WM_DESTROY`에서는 대상 HWND를 먼저 NULL로 지우고 같은 등록 스레드에서 `UnhookWinEvent`한 뒤 상태를 해제한다. 재생성·토글 반복에서도 hook이 누적되지 않아야 한다. 콜백은 상태 포인터를 보관하지 않는다.
+- 셸 메시지와 WinEvent는 **캐시된 값의 재표시만** 요청한다. provider 조회·타이머·sleep 루프를 추가하지 않는다. OUTOFCONTEXT 콜백은 등록 스레드의 메시지 루프에서 전달되므로 기존 전용 스레드를 사용한다([SetWinEventHook 규약](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setwineventhook)).
+
+- [x] **Step 2: 자동숨김·전체화면에서 숨기기**
 
 `redraw`의 위치 계산 직후, `UpdateLayeredWindow` 호출 **전에** 넣는다:
 
 ```rust
 /// 작업표시줄이 자동숨김이거나 전체화면 앱이 떠 있으면 스트립도 비켜 준다.
-fn should_hide() -> bool {
+fn should_hide(strip_hwnd: HWND) -> bool {
     let mut data: APPBARDATA = unsafe { std::mem::zeroed() };
     data.cbSize = std::mem::size_of::<APPBARDATA>() as u32;
     let state = unsafe { SHAppBarMessage(ABM_GETSTATE, &mut data) };
@@ -1221,47 +1275,62 @@ fn should_hide() -> bool {
     }
     let mut notification = 0;
     if unsafe { SHQueryUserNotificationState(&mut notification) } == 0 {
-        return matches!(notification, QUNS_RUNNING_D3D_FULL_SCREEN | QUNS_PRESENTATION_MODE);
+        if matches!(notification, QUNS_RUNNING_D3D_FULL_SCREEN | QUNS_PRESENTATION_MODE) {
+            return true;
+        }
     }
-    false
+    foreground_covers_taskbar_monitor(strip_hwnd)
 }
 ```
 
-> 자동숨김은 v1에서 "숨긴다"로 처리한다. 작업표시줄이 올라올 때 따라 올라오게 하려면 `ABN_FULLSCREENAPP`·`ABN_POSCHANGED` 콜백 등록이 필요한데, 이는 스펙 §3-2의 경로 ②와 함께 재검토한다.
+`foreground_covers_taskbar_monitor`도 구현한다. `GetForegroundWindow`로 현재 전경 창을 얻고, NULL·스트립 자체·desktop/shell 창·최소화되거나 보이지 않는 창은 제외한다. `GetWindowRect`와 `MonitorFromWindow`·`GetMonitorInfoW`를 스트립의 DPI-aware 스레드에서 사용해 **주 작업표시줄이 있는 모니터의 전체 `rcMonitor`**를 덮는지 비교한다. 창의 client rect나 작업 영역 `rcWork`와 비교하지 않는다. 다른 모니터의 전체화면은 이 기하 판정에서 제외한다. API 실패 시 이 보조 판정은 false로 두고 다음 이벤트에서 다시 확인한다. 이렇게 D3D·발표 모드 조회에 잡히지 않는 브라우저 F11·테두리 없는 전체화면도 처리한다.
 
-- [ ] **Step 3: 임시 진입점 제거**
+`should_hide(hwnd)`가 true면 `ShowWindow(hwnd, SW_HIDE)` 후 `Ok(())`를 반환한다. false로 바뀐 이벤트에서는 일반 redraw 경로의 `SWP_SHOWWINDOW`로 복귀한다. HWND가 화면에 없어도 WinEvent hook과 메시지 루프는 살아 있어야 한다.
 
-Task 2 Step 7에서 넣은 `--probe-strip` 분기와 `lib.rs`의 `probe_*` 헬퍼 2개를 삭제한다. 이제 정식 설정 토글로 확인할 수 있다.
+> 자동숨김은 v1에서 옵션이 켜져 있는 동안 "항상 숨긴다"로 유지한다. 작업표시줄 노출에 맞춰 따라 나타나는 기능은 이번 범위에 추가하지 않는다.
 
-Run: `grep -rn "probe_strip" src-tauri/src/`
+- [x] **Step 3: 임시 진입점 제거**
+
+Task 2 Step 7에서 넣은 `--probe-strip` 분기와 현재 남은 `lib.rs`의 `probe_strip_for_20s` 헬퍼 1개를 삭제했다. 정식 공급자 CLI는 유지하고, 정식 설정 토글로 표시를 확인한다.
+
+Run: `rg -n -- 'probe_strip|--probe-strip' src-tauri/src/`
 Expected: 결과 없음
 
-- [ ] **Step 4: 빌드·테스트 전체 게이트**
+- [x] **Step 4: 빌드·테스트 전체 게이트**
 
-Run:
-```bash
-cd src-tauri && cargo build --offline 2>&1 | grep -c warning && cargo test --lib --offline 2>&1 | tail -3
+저장소 루트의 PowerShell에서 각각 순차 실행하고, 각 명령 직후 `$LASTEXITCODE -eq 0`과 출력의 경고 유무를 확인한다. `grep -c warning`은 일치가 없으면 종료 코드 1이라 다음 `&&` 명령을 건너뛸 수 있으므로 성공 판정에 사용하지 않는다.
+
+```powershell
+cargo build --manifest-path src-tauri/Cargo.toml --offline --locked
+cargo test --manifest-path src-tauri/Cargo.toml --lib --offline --locked
+cargo build --manifest-path src-tauri/Cargo.toml --offline --locked --features native-oauth
+cargo test --manifest-path src-tauri/Cargo.toml --lib --offline --locked --features native-oauth
 ```
-Expected: `0`, `59 passed; 0 failed`
+Expected: 모든 명령 exit 0, 경고 0. 현재 기본 구성은 `62 passed; 0 failed; 7 ignored`. 7개 명시 실행 Win32/GDI 검사는 `cargo test --manifest-path src-tauri/Cargo.toml --lib --offline --locked -- --ignored --test-threads=1 --nocapture`로 별도 실행한다. native-oauth는 추가 기능 테스트가 있으므로 기본 구성과 같은 개수를 가정하지 않는다.
 
-- [ ] **Step 5: 육안 검증 — 릴리스 빌드로 5가지 시나리오**
+- [x] **Step 5: 육안 검증 — 릴리스 빌드로 기존 시나리오 + 전체화면·hook 수명 확인**
 
-Run: `npm run desktop:build` 후 설치 없이 `src-tauri/target/release/spectra-native.exe` 실행
+**확인 근거:** 사용자 `이상 없음`은 이번에 요청한 F11/일반 최대화·Alt+Tab·테마/배율·탐색기 재시작·자동숨김 5항목에 적용한다. 기존 설정/재기동 흐름은 Task 4 사용자 PASS와 배선 해시 보존을 근거로 유지한다. hook 수명 10회와 등록 실패는 실제 Win32 자동 검사로 확인했다. 별도 해상도 변경·D3D·물리 다중 모니터·30분 가려짐 관찰은 미실시이며 이 체크에 포함하지 않는다.
+
+Run: `node node_modules/@tauri-apps/cli/tauri.js build --no-bundle -- --offline --locked` 후 `src-tauri/target/release/spectra-native.exe` 실행. `custom-protocol`과 프론트 자산이 포함된 standalone 빌드를 사용하고, 실행 중인 설치본이 있으면 트레이 메뉴에서 종료 후 새 EXE 경로를 확인한다.
 
 사용자에게 다음을 요청한다(각 항목 스크린샷 또는 확인):
-1. **기본값**: `ui-prefs.json`을 지우고 기동 → 스트립이 보이지 않는다
+1. **기본값**: 기존 사용자 `ui-prefs.json`은 보존한다. 기본 OFF·구버전 설정 호환은 임시 경로를 쓰는 Task 4 자동 검사 결과로 확인한다.
 2. **켜기**: 설정 → "작업표시줄 표시" 켜기 → 즉시 스트립이 나타나고 값이 실제 스냅샷과 일치한다
 2-1. **켠 채로 재기동**: 기동 직후에는 `last_snapshots`가 비어 `build_model`이 `None`을 돌려주므로 스트립이 **첫 새로고침이 끝난 뒤에** 나타난다. 이는 설계대로이며 실패가 아니다 — 창이 뜨자마자 보이지 않는다고 보고하지 않는다
 3. **테마**: Windows 설정에서 라이트↔다크 전환 → 스트립 색이 따라간다
 4. **explorer 재시작**: 작업 관리자에서 Windows 탐색기 다시 시작 → 10초 안에 스트립이 같은 자리로 돌아온다
 5. **끄기**: 토글을 끄면 스트립이 사라지고, 앱을 재기동해도 꺼진 상태가 유지된다
+6. **전체화면 전환**: 공급자 새로고침·테마·해상도 변경 없이 브라우저 F11 진입·해제, 다른 전체화면 앱과 일반 창 사이 Alt+Tab을 각각 반복한다. 숨김과 복귀가 각 전환 후 1초 이내에 일어나고, 일반 최대화 창에서는 스트립이 유지돼야 한다. 가능하면 D3D 전체화면도 별도로 확인한다.
+7. **hook 수명**: 표시 토글을 10회 켰다 끈 뒤 한 번의 전경 전환이 중복 처리되지 않는지 로그로 확인한다. 꺼진 상태에서는 콜백 대상이 비어 있고 해제되지 않은 hook이 없어야 한다. 등록 실패 경로는 실제 API 호출 결과 또는 명시적인 실패 주입으로 검사하되 육안 PASS와 분리한다.
+8. **자동숨김**: 옵션을 켜면 스트립이 숨고, 끄면 다음 셸 이벤트에서 복귀한다. 숨긴 상태에서도 전체화면 해제 이벤트가 전달되는지 확인한다.
 
 추가로 **가려짐 관찰**: 30분 사용 중 스트립이 다른 창에 가려지는 일이 2회 이상 재현되면 스펙 §3-2의 경로 ②로 전환 판단이 필요하다 — 발생 여부를 기록한다.
 
 - [ ] **Step 6: 커밋**
 
 ```bash
-git add src-tauri/src
+git add src-tauri/Cargo.toml src-tauri/src/taskbar_window.rs src-tauri/src/main.rs src-tauri/src/lib.rs
 git commit -m "feat(strip): follow explorer restarts, theme changes and fullscreen state
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
@@ -1280,7 +1349,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 - Consumes: Task 5의 릴리스 빌드
 - Produces: 없음(기록만)
 
-- [ ] **Step 1: 대기 상태 30분 측정**
+- [x] **Step 1: 대기 상태 30분 측정**
 
 스트립을 **켠 채** 창을 닫고(대기 모드도 켬) 60초 안정화 후 측정한다. 실행자가 직접 30분을 기다리지 말고 사용자에게 명령을 제시하고 결과를 받는다.
 
@@ -1290,12 +1359,14 @@ npm run measure:memory -- -Scenario standby-strip -Samples 61 -IntervalSeconds 3
 
 Expected: 평균 작업 집합 ≤ 35 MB, `processCount` 전 표본 1
 
-- [ ] **Step 2: 실행 파일 크기 기록**
+- [x] **Step 2: 실행 파일 크기 기록**
 
 Run: `ls -l src-tauri/target/release/spectra-native.exe && sha256sum src-tauri/target/release/spectra-native.exe`
 Expected: Phase 4 기준 5,836,800 B 대비 증가분을 기록. `windows-sys`는 기존재 크레이트이므로 신규 feature 분량만 늘어난다.
 
-- [ ] **Step 3: 문서 갱신**
+- [x] **Step 3: 문서 갱신**
+
+**2026-09-12 결과:** standby-strip 61표본(30초 간격, 1,839초)에서 평균 작업 집합 33.6 MB, 최대 34.1 MB, 평균 private 7.4 MB, 프로세스 수 전 구간 1개를 기록했다. 평균 ≤35 MB 및 프로세스 1개 기준 PASS. standalone 실행 파일은 5,881,344 B, Phase 4 기준 대비 +44,544 B(+0.76%)이며 SHA-256은 `456DC56FDFC0A520744A6B621491C4D87C815065489BB5E3714BFEA8A51BDEFA`다. `docs/performance/memory-budget.md`, `README.md`, 스펙 상태를 갱신했다. 원자료와 검증 기록은 `task-6-verification/`에 둔다. 추가 D3D·다중 모니터·가려짐 관찰은 미실시로 남긴다.
 
 `docs/performance/memory-budget.md`에 절 추가:
 
@@ -1314,7 +1385,7 @@ Expected: Phase 4 기준 5,836,800 B 대비 증가분을 기록. `windows-sys`�
 `README.md`의 대기 모드 설명 문단 끝에 한 문장 추가:
 
 ```markdown
-대시보드 설정의 "작업표시줄 표시"를 켜면 작업표시줄 알림 영역 왼쪽에 `Codex NN% · Claude NN%`를 창 없이 상시 표시합니다(기본값 꺼짐, 주 작업표시줄·가로 배치만 지원).
+대시보드 설정의 "작업표시줄 표시"를 켜면 작업표시줄 알림 영역 왼쪽에 Codex·Claude CI와 잔여율을 창 없이 상시 표시합니다(기본값 꺼짐, 주 작업표시줄·가로 배치만 지원).
 ```
 
 스펙 상태 줄에 완료 기록과 §1 성공 기준 표의 항목별 판정(PASS/FAIL)을 적는다. 미달 항목은 미달로 남긴다.
