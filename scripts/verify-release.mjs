@@ -50,10 +50,19 @@ export function verifyManifest(manifest, version, signature, assetId) {
   if (nsis) assert.deepEqual(nsis, target, "NSIS-specific target must match the Windows updater target");
 }
 
+export function readRelease(version, runGh = (args) => JSON.parse(execFileSync("gh", args, { encoding: "utf8" }))) {
+  // GitHub's tag REST endpoint does not return drafts. The CLI resolves both
+  // draft and published releases; use its numeric ID for the full REST asset data.
+  const summary = runGh(["release", "view", `v${version}`, "--repo", repo, "--json", "databaseId"]);
+  assert.ok(Number.isSafeInteger(summary.databaseId) && summary.databaseId > 0, "Valid release ID is required");
+  const release = runGh(["api", `repos/${repo}/releases/${summary.databaseId}`]);
+  assert.equal(release.tag_name, `v${version}`);
+  return release;
+}
+
 export function verifyArtifacts(directory, version) {
   const name = `SPECTRA_${version}_x64-setup.exe`;
-  const release = JSON.parse(execFileSync("gh", ["api", `repos/${repo}/releases/tags/v${version}`], { encoding: "utf8" }));
-  assert.equal(release.tag_name, `v${version}`);
+  const release = readRelease(version);
   const installer = release.assets.find((asset) => asset.name === name);
   assert.ok(installer, "Installer must be uploaded to the intended release");
   const signature = readFileSync(join(directory, `${name}.sig`), "utf8");

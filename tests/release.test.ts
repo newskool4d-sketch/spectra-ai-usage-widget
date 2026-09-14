@@ -1,6 +1,19 @@
 import { it } from "node:test";
 import assert from "node:assert/strict";
-import { verifyVersions, verifyManifest } from "../scripts/verify-release.mjs";
+import { verifyVersions, verifyManifest, readRelease } from "../scripts/verify-release.mjs";
+
+it("resolves draft releases by numeric ID rather than the published-only tag endpoint", () => {
+  const calls: string[][] = [];
+  const result = readRelease("0.2.2", (args: string[]) => {
+    calls.push(args);
+    return args[0] === "release" ? { databaseId: 123 } : { tag_name: "v0.2.2", draft: true, assets: [] };
+  });
+  assert.equal(result.draft, true);
+  assert.deepEqual(calls[1], ["api", "repos/newskool4d-sketch/spectra-ai-usage-widget/releases/123"]);
+  assert.throws(() => readRelease("0.2.2", () => ({ databaseId: "not-an-id" })));
+  assert.throws(() => readRelease("0.2.2", (args: string[]) =>
+    args[0] === "release" ? { databaseId: 123 } : { tag_name: "v0.2.1" }));
+});
 
 it("release versions and both lockfiles agree", () => {
   const current = verifyVersions();

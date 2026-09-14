@@ -6,7 +6,7 @@
 
 | 검사 | 결과 |
 |---|---|
-| `npm test` | 47개 통과 |
+| `npm test` | 태그 코드 47개 통과, 초안 조회 회귀 테스트 추가 후 48개 통과 |
 | `npm run build` | 통과 |
 | `npm run verify:release` | 버전·잠금 파일·릴리즈 노트 통과 |
 | `cargo test --manifest-path src-tauri/Cargo.toml --lib --locked` | 70개 통과, GUI 8개 별도 실행 |
@@ -15,6 +15,39 @@
 | `git diff --check` | 통과 |
 
 Windows 테스트는 툴팁 컨트롤 문자열 소비·갱신·hover 메시지 연결·숨김·UTF-16 버퍼 수명·창 10회 생성/파기를 검증합니다. 실제 마우스 hover 육안 확인과 앱 내 업그레이드는 잠금 화면으로 미검증입니다.
+
+## 로컬 패키지 및 실제 조회
+
+- 릴리즈 코드 커밋: `dd94c179a6e9c35ab318bc66215c812deb9c3efe`, 태그 `v0.2.2`.
+- `npm run desktop:build -- --ci -- --locked`: 통과.
+- 로컬 NSIS: `SPECTRA_0.2.2_x64-setup.exe`, 2,841,628 bytes.
+- 로컬 설치 파일 SHA-256: `7E566A71B72610808B36149830F7612AFBA04E51B6AB41FA0C054F99D6FCB2A5`.
+- 같은 Tauri updater 버전이 사용하는 `minisign-verify`로 로컬 패키지와 `.sig`를 설정 공개키에 대조: 통과.
+- 새 실행 파일의 실제 Claude 진단: `signed-in`, `connected`, `claude-usage-api`, 한도 창 2개. 실패한 요청이 아닌 실제 직접 조회 성공을 확인했습니다. 계정 식별자·토큰·잔여 수치는 이 문서에 기록하지 않습니다.
+- Windows Authenticode: `NotSigned`. Tauri 서명 성공을 Windows 게시자 인증으로 표현하지 않습니다.
+
+로컬 빌드와 GitHub 빌드는 도구 체인·패키징 시각이 달라 파일 해시가 다를 수 있습니다. 공개 배포본은 별도로 다운로드해 검증합니다.
+
+## 공개 배포 검증
+
+- [GitHub 실행 34807046946](https://github.com/newskool4d-sketch/spectra-ai-usage-widget/actions/runs/34807046946): 프런트엔드·Rust 테스트, NSIS 빌드와 서명 업로드 통과. 마지막 검증 단계는 초안을 `releases/tags/<tag>`로 조회해 404로 실패했습니다. **전체 CI 성공으로 표시하지 않습니다.**
+- `gh release view --json databaseId`로 초안을 식별한 후 `releases/<id>`를 조회하도록 검증 스크립트를 수정했습니다. 회귀 테스트 및 실제 초안의 파일·manifest·서명·업로드 digest 검사를 통과했습니다.
+- 기존 CI 산출물을 교체하지 않고 체크섬 파일을 추가한 뒤 수동으로 공개했습니다. 태그를 이동하거나 CI를 재실행해 공개 설치 파일을 덮어쓰지 않았습니다. 수정된 스크립트의 전체 태그 CI 재실행은 다음 릴리즈에서 확인해야 합니다.
+- [공개 v0.2.2](https://github.com/newskool4d-sketch/spectra-ai-usage-widget/releases/tag/v0.2.2): 2026-09-14 13:56 KST, draft=false, prerelease=false, 최신 릴리즈.
+- 공개 자산: NSIS `.exe`, `.exe.sig`, `latest.json`, `SHA256SUMS.txt`.
+- 공개 설치 파일: 2,834,147 bytes, SHA-256 `EE8C68DD680579EEDCC6A4C6847D66D2320DB73C743AF9D1A746AC1E887CFDD8`.
+- 인증 헤더 없이 `releases/latest/download/latest.json` 조회 HTTP 200 및 버전 0.2.2 확인.
+- manifest의 설치 파일 URL을 updater와 같은 `Accept: application/octet-stream`으로 비인증 다운로드하고 GitHub digest·공개 체크섬·설정 공개키 서명을 모두 대조: 통과.
+
+## 최종 판정: PARTIAL
+
+| 요구사항 | 상태 | 근거/잔여 항목 |
+|---|---|---|
+| 1. 서명 키·공개 릴리즈·업데이트 다운로드 연결 | PASS | 실제 공개 파일·manifest·해시·서명 검증 |
+| 1. 설치된 0.2.1에서 앱 내 업데이트·재시작 | 미검증 | PC 잠금 화면. 기존 설치본을 0.2.1로 유지 |
+| 3. Claude 최신성·마지막 수집 시각·복구 안내 | PASS | 단위 테스트, 실제 Claude 조회, 네이티브 컨트롤 소비 테스트 |
+| 3. 실제 설치 화면의 마우스 hover 육안 확인 | 미검증 | 잠금 해제 후 확인 필요 |
+| 후속 릴리즈의 전체 CI 자동 공개 | 미검증 | 초안 조회 수정은 테스트·실데이터 검사 통과, 전체 태그 CI는 미재실행 |
 
 ## 검증 경계
 
