@@ -42,6 +42,7 @@ pub struct ProviderUsageSnapshot {
     pub auth_method: Option<String>,
     pub plan_type: Option<String>,
     pub source: Option<String>,
+    /// Data capture time (epoch seconds), never the time of a failed refresh attempt.
     pub last_synced_at: Option<u64>,
     pub bridge_installed: bool,
     pub windows: Vec<ProviderQuotaWindow>,
@@ -498,6 +499,13 @@ struct ClaudeUsageCache {
     seven_day: Option<ClaudeRateWindow>,
 }
 
+fn claude_cache_is_stale(cache: &ClaudeUsageCache, source_is_live: bool, now: u64) -> bool {
+    // A failed direct lookup must not make a recent fallback look freshly checked.
+    !source_is_live || cache.captured_at > now || now.saturating_sub(cache.captured_at) > 24 * 60 * 60
+        || [&cache.five_hour, &cache.seven_day].into_iter().flatten()
+            .any(|window| window.resets_at.is_some_and(|reset| reset <= now))
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ClaudeBridgeConfig {
@@ -792,6 +800,23 @@ fn command_output(spec: &CommandSpec, args: &[&str]) -> Result<Output, String> {
     output_with_timeout(&mut command, CLAUDE_AUTH_TIMEOUT, MAX_COMMAND_OUTPUT_BYTES)
 }
 
+fn claude_live_failure_hint(error: Option<&str>) -> Option<&'static str> {
+    match error {
+        Some("claude-oauth-token-expired") => {
+            Some("Claude Code 로그인 갱신이 필요합니다. 토큰이 만료되어 Claude Code를 한 번 실행해 주세요.")
+        }
+        Some("claude-usage-unauthorized") => {
+            Some("Claude 사용량 조회를 위한 로그인이 필요합니다. 조회가 거부되어 Claude Code에서 다시 로그인해 주세요.")
+        }
+        Some("claude-usage-network-failed") => Some("Claude 사용량 서버에 연결하지 못했습니다."),
+        Some("json-read-failed") | Some("claude-oauth-token-missing") => {
+            Some("Claude Code 로그인 정보를 찾지 못해 상태선 캐시만 사용합니다.")
+        }
+        Some(_) => Some("Claude 사용량 직접 조회에 실패해 상태선 캐시만 사용합니다."),
+        None => None,
+    }
+}
+
 fn claude_snapshot() -> ProviderUsageSnapshot {
     let Some(spec) = resolve_command("claude") else {
         return unavailable_snapshot("claude", "Claude Code를 찾지 못했습니다.");
@@ -861,9 +886,8 @@ fn claude_snapshot() -> ProviderUsageSnapshot {
     if let Some(cache) = cache {
         captured_at = Some(cache.captured_at);
         let now = unix_now();
-        stale = now.saturating_sub(cache.captured_at) > 24 * 60 * 60;
+        stale = claude_cache_is_stale(&cache, source_is_live, now);
         if let Some(window) = cache.five_hour {
-            stale |= window.resets_at.is_some_and(|reset| reset <= now);
             let used = window.used_percentage.clamp(0.0, 100.0);
             windows.push(ProviderQuotaWindow {
                 id: "rolling".to_string(),
@@ -875,7 +899,6 @@ fn claude_snapshot() -> ProviderUsageSnapshot {
             });
         }
         if let Some(window) = cache.seven_day {
-            stale |= window.resets_at.is_some_and(|reset| reset <= now);
             let used = window.used_percentage.clamp(0.0, 100.0);
             windows.push(ProviderQuotaWindow {
                 id: "weekly".to_string(),
@@ -895,23 +918,8 @@ fn claude_snapshot() -> ProviderUsageSnapshot {
     } else {
         "waiting-for-usage"
     };
-    let live_failure_hint = match live_error.as_deref() {
-        Some("claude-oauth-token-expired") => {
-            Some("Claude Code 로그인 토큰이 만료됐습니다. Claude Code를 한 번 실행하면 갱신됩니다.")
-        }
-        Some("claude-usage-unauthorized") => {
-            Some("Claude 사용량 직접 조회가 거부됐습니다. Claude Code에서 다시 로그인해 주세요.")
-        }
-        Some("claude-usage-network-failed") => Some("Claude 사용량 서버에 연결하지 못했습니다."),
-        Some("json-read-failed") | Some("claude-oauth-token-missing") => {
-            Some("Claude Code 로그인 정보를 찾지 못해 상태선 캐시만 사용합니다.")
-        }
-        Some(_) => Some("Claude 사용량 직접 조회에 실패해 상태선 캐시만 사용합니다."),
-        None => None,
-    };
-    let message = if env::var_os("ANTHROPIC_API_KEY").is_some() {
-        "ANTHROPIC_API_KEY가 구독 로그인보다 우선할 수 있습니다.".to_string()
-    } else if source_is_live {
+    let live_failure_hint = claude_live_failure_hint(live_error.as_deref());
+    let mut message = if source_is_live {
         "Claude 공식 사용량을 직접 조회했습니다.".to_string()
     } else if !has_usage {
         match live_failure_hint {
@@ -928,6 +936,9 @@ fn claude_snapshot() -> ProviderUsageSnapshot {
     } else {
         "Claude Code 공식 상태선 한도를 동기화했습니다.".to_string()
     };
+    if env::var_os("ANTHROPIC_API_KEY").is_some() {
+        message.push_str(" ANTHROPIC_API_KEY가 구독 로그인보다 우선할 수 있습니다.");
+    }
     ProviderUsageSnapshot {
         provider_id: "claude".to_string(),
         runtime_available: true,
@@ -1351,6 +1362,34 @@ mod tests {
         let seven = cache.seven_day.unwrap();
         assert_eq!(seven.used_percentage, 31.0);
         assert_eq!(seven.resets_at, Some(1_787_526_000));
+    }
+
+    #[test]
+    fn claude_fallback_is_stale_even_before_reset_and_keeps_its_capture_time() {
+        let mut cache = ClaudeUsageCache {
+            captured_at: 1_000,
+            five_hour: Some(ClaudeRateWindow { used_percentage: 20.0, resets_at: Some(1_200) }),
+            seven_day: None,
+        };
+        assert!(!claude_cache_is_stale(&cache, true, 1_100));
+        assert!(claude_cache_is_stale(&cache, false, 1_100));
+        assert_eq!(cache.captured_at, 1_000);
+        assert!(claude_cache_is_stale(&cache, true, 1_200));
+        cache.five_hour.as_mut().unwrap().resets_at = None;
+        assert!(!claude_cache_is_stale(&cache, true, 1_000 + 86400));
+        assert!(claude_cache_is_stale(&cache, true, 1_000 + 86401));
+        assert!(claude_cache_is_stale(&cache, true, 999));
+    }
+
+    #[test]
+    fn claude_usage_auth_failure_requires_action_even_if_cli_reported_signed_in() {
+        let expired = claude_live_failure_hint(Some("claude-oauth-token-expired")).unwrap();
+        assert!(expired.contains("로그인 갱신이 필요"));
+        let unauthorized = claude_live_failure_hint(Some("claude-usage-unauthorized")).unwrap();
+        assert!(unauthorized.contains("로그인이 필요"));
+        assert!(unauthorized.contains("다시 로그인"));
+        assert!(!claude_live_failure_hint(Some("claude-usage-network-failed")).unwrap().contains("로그인"));
+        assert!(claude_live_failure_hint(None).is_none());
     }
 
     #[test]

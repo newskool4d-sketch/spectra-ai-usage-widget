@@ -3,6 +3,7 @@ import { Icon, type IconName } from "./components/Icon";
 import { Sparkline } from "./components/Sparkline";
 import { computeNextAction, computeTimeProgress, hasVerifiedUsage, paceLabel } from "./data/next-action";
 import { createRefreshSequencer } from "./data/refresh-sequence";
+import { claudeFreshness } from "./data/usage-freshness";
 import { metricLabels, planQuotas, providers, rangeLabels, type AuthMethod, type Metric, type PlanQuota, type Provider, type ProviderId, type QuotaWindow, type QuotaWindowId, type UsageRange } from "./data/providers";
 import { checkForAppUpdate, type AvailableAppUpdate } from "./integrations/app-updater";
 import { providersToRefreshAfterBoot } from "./integrations/boot-state";
@@ -81,8 +82,10 @@ function formatReset(epochSeconds: number | null) {
 }
 
 function formatSyncedAt(epochSeconds: number | null) {
-  if (!epochSeconds) return null;
-  return new Intl.DateTimeFormat("ko-KR", { hour: "2-digit", minute: "2-digit" }).format(new Date(epochSeconds * 1000));
+  if (epochSeconds === null) return null;
+  const date = new Date(epochSeconds * 1000);
+  if (!Number.isFinite(date.getTime())) return null;
+  return new Intl.DateTimeFormat("ko-KR", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }).format(date);
 }
 
 function planName(providerId: ProviderId, planType: string | null) {
@@ -134,6 +137,7 @@ function quotaFromSnapshot(snapshot: NativeProviderUsageSnapshot, fallback: Plan
     source: verified ? snapshot.source! : "unavailable",
     confidence: verified ? "verified" : "unavailable",
     lastSyncedAt: formatSyncedAt(snapshot.lastSyncedAt),
+    lastSyncedAtMs: snapshot.lastSyncedAt === null ? null : snapshot.lastSyncedAt * 1000,
     bridgeInstalled: snapshot.bridgeInstalled,
     statusMessage: snapshot.message,
     windows
@@ -148,6 +152,7 @@ function nativePendingQuota(fallback: PlanQuota): PlanQuota {
     source: "unavailable",
     confidence: "unavailable",
     lastSyncedAt: null,
+    lastSyncedAtMs: null,
     bridgeInstalled: false,
     statusMessage: "공식 도구의 계정 및 사용량 상태를 확인하고 있습니다.",
     windows: fallback.windows.map(window => ({
@@ -172,6 +177,7 @@ function initialQuotaRecord(snapshots: readonly NativeProviderUsageSnapshot[] = 
 }
 
 function connectionLabel(quota: PlanQuota) {
+  if (quota.providerId === "claude" && quota.source !== "example") return claudeFreshness(quota, Date.now()).label;
   if (quota.connectionState === "not_installed") return "공식 CLI 설치 필요";
   if (quota.connectionState === "signed_out") return "계정 로그인 필요";
   if (quota.connectionState === "waiting") return quota.bridgeInstalled ? "로그인됨 · 첫 사용량 대기" : "로그인됨 · 동기화 설정 필요";
@@ -229,7 +235,7 @@ const TopActions = memo(function TopActions({ refreshedAt, refreshing, solid, th
   onTheme: () => void;
 }>) {
   return <div className="top-actions">
-    <span className="sync-state"><i /> 동기화 · {refreshedAt}</span>
+    <span className="sync-state"><i /> 조회 시도 · {refreshedAt}</span>
     <button type="button" className={`icon-button ${refreshing ? "spinning" : ""}`} onClick={onRefresh} aria-label="데이터 새로고침"><Icon name="refresh" size={17} /></button>
     <button type="button" className="icon-button" onClick={onSolid} aria-label="투명도 전환" title={solid ? "유리 모드" : "가독성용 불투명 모드"}><Icon name="eye" size={17} /></button>
     <button type="button" className="icon-button" onClick={onTheme} aria-label="테마 전환" title={theme === "dark" ? "일반 모드" : "다크 모드"}><Icon name={theme === "dark" ? "sun" : "moon"} size={17} /></button>
@@ -310,12 +316,13 @@ const emptyQuotaWindow = (id: QuotaWindowId, providerId: ProviderId): QuotaWindo
   kindLabel: "실제 데이터 대기"
 });
 
-const QuotaCell = memo(function QuotaCell({ provider, window, available }: Readonly<{ provider: Provider; window: QuotaWindow; available: boolean }>) {
+const QuotaCell = memo(function QuotaCell({ provider, window, available, freshness }: Readonly<{ provider: Provider; window: QuotaWindow; available: boolean; freshness?: ReturnType<typeof claudeFreshness> }>) {
   const progress = available ? computeTimeProgress(window, Date.now()) : null;
-  return <div className="quota-cell" style={providerStyle(provider.color)}>
+  return <div className="quota-cell" style={providerStyle(provider.color)} title={freshness?.tooltip}>
     <div className="quota-cell-top"><span className="quota-cell-pill">{provider.name}</span><span className="quota-cell-window">{window.label}</span></div>
     <div className="quota-cell-value">{available ? Math.round(window.remainingPercent) : "—"}{available ? <span>%</span> : null}</div>
     <div className="quota-cell-meta">{available ? `초기화 · ${window.resetLabel}` : "연결 후 표시"}</div>
+    {freshness ? <div className="quota-cell-meta">{freshness.label}</div> : null}
     <div className="quota-cell-meter" aria-label={available ? `${provider.name} ${window.label} ${Math.round(window.remainingPercent)}% 남음` : `${provider.name} ${window.label} 데이터 대기`}><i style={{ width: `${available ? window.remainingPercent : 0}%` }} /></div>
     {progress ? <div className="quota-cell-time"><i style={{ "--progress": `${progress.timePercent}%` } as CSSProperties} aria-label={`시간 진행 ${Math.round(progress.timePercent)}%`} />{progress.pace !== "even" ? <span className={`quota-cell-pace ${progress.pace}`}>{paceLabel(progress.pace)}</span> : null}</div> : null}
   </div>;
@@ -331,6 +338,13 @@ const NextActionStrip = memo(function NextActionStrip({ quotas, eyebrow }: Reado
 });
 
 const QuotaBoard = memo(function QuotaBoard({ quotas }: Readonly<{ quotas: QuotaRecord }>) {
+  const [, setNow] = useState(Date.now);
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 15_000);
+    return () => window.clearInterval(timer);
+  }, []);
+  // Read the clock on snapshot renders too: a response may arrive between timer ticks.
+  const freshness = claudeFreshness(quotas.claude, Date.now());
   const windowIds: readonly QuotaWindowId[] = ["rolling", "weekly"];
   return <div className="quota-board span-2" role="group" aria-label="공급자별 한도 현황">
     {providers.flatMap(provider => windowIds.map(id => {
@@ -338,7 +352,7 @@ const QuotaBoard = memo(function QuotaBoard({ quotas }: Readonly<{ quotas: Quota
       const found = quota.windows.find(candidate => candidate.id === id);
       const window = found ?? emptyQuotaWindow(id, provider.id);
       const available = hasDisplayValue(quota) && found !== undefined;
-      return <QuotaCell key={`${provider.id}-${id}`} provider={provider} window={window} available={available} />;
+      return <QuotaCell key={`${provider.id}-${id}`} provider={provider} window={window} available={available} freshness={provider.id === "claude" ? freshness : undefined} />;
     }))}
   </div>;
 });

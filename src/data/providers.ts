@@ -35,6 +35,7 @@ export type PlanQuota = Readonly<{
   source: QuotaSource;
   confidence: QuotaConfidence;
   lastSyncedAt: string | null;
+  lastSyncedAtMs?: number | null; // Data capture time, not the refresh request time.
   bridgeInstalled: boolean;
   statusMessage: string;
   windows: readonly QuotaWindow[];

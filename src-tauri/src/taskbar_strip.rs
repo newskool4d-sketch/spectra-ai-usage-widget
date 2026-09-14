@@ -1,4 +1,5 @@
 use crate::provider_usage::ProviderUsageSnapshot;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// 표시 순서와 사람이 읽는 이름. 스냅샷 도착 순서와 무관하게 이 순서로 그린다.
 const PROVIDERS: [(&str, &str); 2] = [("codex", "Codex"), ("claude", "Claude")];
@@ -82,7 +83,50 @@ pub fn retheme_model(model: &mut StripModel, theme: StripTheme) {
     }
 }
 
+fn claude_status(snapshot: &ProviderUsageSnapshot, now: u64) -> &'static str {
+    if snapshot.connection_state == "not-installed" {
+        return "Claude Code 설치 필요";
+    }
+    if snapshot.auth_state == "signed-out" || snapshot.connection_state == "signed-out" {
+        return "로그인 필요";
+    }
+    if snapshot.connection_state == "error" && snapshot.windows.is_empty() {
+        return "연결 상태 확인 필요";
+    }
+    if snapshot.windows.is_empty() {
+        return "사용량 갱신 대기";
+    }
+    let expired = snapshot.windows.iter().any(|window| window.resets_at.is_some_and(|reset| reset <= now));
+    let captured_recently = snapshot.last_synced_at
+        .is_some_and(|captured| captured <= now && now - captured <= 24 * 60 * 60);
+    if snapshot.connection_state != "connected" || expired || !captured_recently
+        || snapshot.source.as_deref() != Some("claude-usage-api") {
+        "갱신 대기 (캐시)"
+    } else {
+        "동기화됨"
+    }
+}
+
+fn last_sync_label(captured_at: Option<u64>, now: u64) -> String {
+    let age = match captured_at {
+        None => return "기록 없음".to_string(),
+        Some(captured) if captured > now => return "시각 확인 필요".to_string(),
+        Some(captured) => now - captured,
+    };
+    match age {
+        0..=59 => "1분 이내".to_string(),
+        60..=3599 => format!("{}분 전", age / 60),
+        3600..=86399 => format!("{}시간 {}분 전", age / 3600, age % 3600 / 60),
+        _ => format!("{}일 {}시간 전", age / 86400, age % 86400 / 3600),
+    }
+}
+
 pub fn build_model(snapshots: &[ProviderUsageSnapshot], theme: StripTheme) -> Option<StripModel> {
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+    build_model_at(snapshots, theme, now)
+}
+
+fn build_model_at(snapshots: &[ProviderUsageSnapshot], theme: StripTheme, now: u64) -> Option<StripModel> {
     let colors = palette(theme);
     let mut segments = Vec::with_capacity(PROVIDERS.len());
     let mut tooltip_lines = Vec::new();
@@ -116,7 +160,17 @@ pub fn build_model(snapshots: &[ProviderUsageSnapshot], theme: StripTheme) -> Op
                     value: NO_VALUE.to_string(),
                     value_color: colors.label,
                 });
-                tooltip_lines.push(format!("{name}  연결되지 않음"));
+                if id != "claude" || snapshot.is_none() {
+                    tooltip_lines.push(format!("{name}  연결되지 않음"));
+                }
+            }
+        }
+        if let Some(snapshot) = snapshot.filter(|_| id == "claude") {
+            let status = claude_status(snapshot, now);
+            tooltip_lines.push(format!("Claude · {status}"));
+            tooltip_lines.push(format!("마지막 동기화: {} (데이터 수집 기준)", last_sync_label(snapshot.last_synced_at, now)));
+            if snapshot.connection_state != "connected" && !snapshot.message.is_empty() {
+                tooltip_lines.push(snapshot.message.clone());
             }
         }
     }
@@ -281,6 +335,77 @@ mod tests {
         assert!(model.tooltip.contains("Codex"));
         assert!(model.tooltip.contains("72%"));
         assert!(model.tooltip.contains("55%"));
+    }
+
+    #[test]
+    fn claude_tooltip_distinguishes_captured_data_from_refresh_attempts() {
+        let mut claude = snapshot("claude", "connected", vec![window("rolling", 72.0)]);
+        claude.source = Some("claude-usage-api".into());
+        claude.last_synced_at = Some(1_000);
+        let fresh = build_model_at(&[claude.clone()], StripTheme::Dark, 1_300).unwrap();
+        assert!(fresh.tooltip.contains("Claude · 동기화됨"));
+        assert!(fresh.tooltip.contains("마지막 동기화: 5분 전 (데이터 수집 기준)"));
+
+        claude.connection_state = "stale".into();
+        claude.message = "서버 연결 실패. 마지막 동기화 값을 표시합니다.".into();
+        let cached = build_model_at(&[claude], StripTheme::Dark, 1_600).unwrap();
+        assert!(cached.tooltip.contains("Claude · 갱신 대기 (캐시)"));
+        assert!(cached.tooltip.contains("마지막 동기화: 10분 전"));
+        assert!(cached.tooltip.contains("서버 연결 실패"));
+        assert_eq!(cached.segments[1].value, "72%");
+    }
+
+    #[test]
+    fn claude_tooltip_expires_at_reset_without_waiting_for_a_response() {
+        let mut claude = snapshot("claude", "connected", vec![window("rolling", 72.0)]);
+        claude.source = Some("claude-usage-api".into());
+        claude.last_synced_at = Some(100);
+        claude.windows[0].resets_at = Some(120);
+        assert_eq!(claude_status(&claude, 119), "동기화됨");
+        assert_eq!(claude_status(&claude, 120), "갱신 대기 (캐시)");
+        claude.windows[0].resets_at = None;
+        assert_eq!(claude_status(&claude, 100 + 86401), "갱신 대기 (캐시)");
+        claude.source = Some("claude-statusline".into());
+        assert_eq!(claude_status(&claude, 119), "갱신 대기 (캐시)");
+    }
+
+    #[test]
+    fn claude_tooltip_shows_login_waiting_and_error_without_inventing_a_sync_time() {
+        for (state, label) in [("signed-out", "로그인 필요"), ("waiting-for-usage", "사용량 갱신 대기"),
+            ("error", "연결 상태 확인 필요"), ("not-installed", "Claude Code 설치 필요")] {
+            let model = build_model_at(&[
+                snapshot("codex", "connected", vec![window("weekly", 55.0)]),
+                snapshot("claude", state, vec![]),
+            ], StripTheme::Light, 1_000).unwrap();
+            assert!(model.tooltip.contains(&format!("Claude · {label}")));
+            assert!(model.tooltip.contains("마지막 동기화: 기록 없음"));
+            assert_eq!(model.segments[1].value, "—");
+        }
+    }
+
+    #[test]
+    fn last_sync_age_handles_missing_future_and_day_boundaries() {
+        assert_eq!(last_sync_label(None, 1_000), "기록 없음");
+        assert_eq!(last_sync_label(Some(1_001), 1_000), "시각 확인 필요");
+        assert_eq!(last_sync_label(Some(1_000), 1_059), "1분 이내");
+        assert_eq!(last_sync_label(Some(1_000), 1_060), "1분 전");
+        assert_eq!(last_sync_label(Some(1_000), 4_660), "1시간 1분 전");
+        assert_eq!(last_sync_label(Some(1_000), 91_000), "1일 1시간 전");
+    }
+
+    #[test]
+    fn claude_signed_in_cache_still_surfaces_usage_login_failures() {
+        let mut claude = snapshot("claude", "stale", vec![window("rolling", 72.0)]);
+        claude.source = Some("claude-statusline".into());
+        claude.last_synced_at = Some(1_000);
+        for hint in ["Claude Code 로그인 갱신이 필요합니다.", "Claude 사용량 조회를 위한 로그인이 필요합니다."] {
+            claude.message = hint.into();
+            let model = build_model_at(&[claude.clone()], StripTheme::Dark, 1_300).unwrap();
+            assert!(model.tooltip.contains(hint));
+            assert!(model.tooltip.contains("갱신 대기 (캐시)"));
+            assert!(model.tooltip.contains("마지막 동기화: 5분 전"));
+            assert_eq!(model.segments[1].value, "72%");
+        }
     }
 
     #[test]

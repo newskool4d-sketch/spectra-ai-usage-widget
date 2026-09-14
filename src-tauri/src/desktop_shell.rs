@@ -324,6 +324,9 @@ pub(crate) fn ensure_taskbar_refresh_loop(app: &AppHandle) {
                     .unwrap_or_default()
                     .as_secs();
                 let reset_due = claude_reset_due(&snapshots, now);
+                // Age/reset status must advance even with no WebView or new response.
+                // This reuses the existing wake-up and performs no provider lookup.
+                update_taskbar_strip(&worker);
                 if !reset_due || now.saturating_sub(last_attempt) < 60 {
                     continue;
                 }
