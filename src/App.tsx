@@ -4,6 +4,7 @@ import { Sparkline } from "./components/Sparkline";
 import { computeNextAction, computeTimeProgress, hasVerifiedUsage, paceLabel } from "./data/next-action";
 import { createRefreshSequencer } from "./data/refresh-sequence";
 import { metricLabels, planQuotas, providers, rangeLabels, type AuthMethod, type Metric, type PlanQuota, type Provider, type ProviderId, type QuotaWindow, type QuotaWindowId, type UsageRange } from "./data/providers";
+import { checkForAppUpdate, type AvailableAppUpdate } from "./integrations/app-updater";
 import { providersToRefreshAfterBoot } from "./integrations/boot-state";
 import { providerCapabilities, type ProviderCapability } from "./integrations/provider-capabilities";
 import { getNativeProviderUsage, installNativeProviderBridge, isTauriRuntime, readBootState, removeNativeProviderBridge, setNativeStandby, setNativeStrip, setNativeUiPrefs, startNativeProviderLogin, type NativeProviderActionResult, type NativeProviderUsageSnapshot } from "./integrations/tauri-native-bridge";
@@ -53,6 +54,9 @@ type ProviderActionFeedback = Readonly<{
   status: NativeProviderActionResult["status"] | "refreshed" | "demo-only";
   message: string;
 }>;
+
+type UpdatePhase = "idle" | "checking" | "available" | "installing" | "up-to-date" | "unsupported" | "error";
+type UpdateState = Readonly<{ phase: UpdatePhase; version: string | null; message: string }>;
 
 type QuotaRecord = Readonly<Record<ProviderId, PlanQuota>>;
 type ProductView = "overview" | "services" | "trend" | "alerts" | "settings";
@@ -230,6 +234,13 @@ const TopActions = memo(function TopActions({ refreshedAt, refreshing, solid, th
     <button type="button" className="icon-button" onClick={onSolid} aria-label="투명도 전환" title={solid ? "유리 모드" : "가독성용 불투명 모드"}><Icon name="eye" size={17} /></button>
     <button type="button" className="icon-button" onClick={onTheme} aria-label="테마 전환" title={theme === "dark" ? "일반 모드" : "다크 모드"}><Icon name={theme === "dark" ? "sun" : "moon"} size={17} /></button>
   </div>;
+});
+
+const UpdateNotice = memo(function UpdateNotice({ version, onInstall, onDismiss }: Readonly<{ version: string; onInstall: () => void; onDismiss: () => void }>) {
+  return <aside className="update-notice" role="status" aria-live="polite">
+    <div className="update-notice-copy"><strong>SPECTRA 새 버전 {version}</strong><span>업데이트를 설치할 준비가 되었습니다.</span></div>
+    <div className="update-notice-actions"><button type="button" className="primary-action" onClick={onInstall}>지금 설치</button><button type="button" className="text-button" onClick={onDismiss}>나중에</button></div>
+  </aside>;
 });
 
 const NavRail = memo(function NavRail({ view, onView }: Readonly<{ view: ProductView; onView: (view: ProductView) => void }>) {
@@ -450,6 +461,9 @@ type LayoutActions = Readonly<{
   onTheme: () => void;
   onStandby: () => void;
   onStrip: () => void;
+  updateState: UpdateState;
+  onCheckForUpdate: () => void;
+  onInstallUpdate: () => void;
 }>;
 
 type SharedViewProps = LayoutActions & Readonly<{
@@ -477,7 +491,7 @@ function viewCopy(view: ProductView) {
 
 type ViewPanelProps = Omit<SharedViewProps, "onView">;
 
-const DesktopViewPanel = memo(function DesktopViewPanel({ view, activeProvider, activeProviderId, activeQuota, quotas, metric, range, onProvider, onMetric, onRange, onOpenOAuth, refreshedAt, refreshing, solid, theme, standby, strip, stripPending, onRefresh, onSolid, onTheme, onStandby, onStrip }: ViewPanelProps) {
+const DesktopViewPanel = memo(function DesktopViewPanel({ view, activeProvider, activeProviderId, activeQuota, quotas, metric, range, onProvider, onMetric, onRange, onOpenOAuth, refreshedAt, refreshing, solid, theme, standby, strip, stripPending, onRefresh, onSolid, onTheme, onStandby, onStrip, updateState, onCheckForUpdate, onInstallUpdate }: ViewPanelProps) {
   if (view === "services") {
     return <div className="view-stack"><article className="glass-card providers-card"><div className="card-heading"><div><span className="eyebrow">서비스</span><h3>서비스별 잔여량</h3></div><span className="live-pill"><i />공식 조회</span></div><div className="provider-list">{providers.map(provider => <ProviderRow key={provider.id} provider={provider} quota={quotas[provider.id]} active={provider.id === activeProviderId} onSelect={onProvider} />)}</div></article><OAuthConnectCard provider={activeProvider} quota={activeQuota} onOpen={onOpenOAuth} /></div>;
   }
@@ -487,7 +501,10 @@ const DesktopViewPanel = memo(function DesktopViewPanel({ view, activeProvider, 
   if (view === "alerts") {
     return <div className="view-stack"><article className="glass-card alert-panel"><div className="card-heading"><div><span className="eyebrow">알림</span><h3>지금 확인할 항목</h3></div><span className="live-pill"><i />현재 상태</span></div>{providers.map(provider => <div className="alert-row" key={provider.id} style={providerStyle(provider.color)}><ProviderLogo provider={provider} size="sm" /><div><strong>{connectionLabel(quotas[provider.id])}</strong><span>{quotas[provider.id].statusMessage}</span></div><b>{displayPercent(quotas[provider.id])}</b></div>)}</article></div>;
   }
-  return <div className="view-stack"><article className="glass-card settings-panel"><div className="card-heading"><div><span className="eyebrow">설정</span><h3>사용 환경</h3></div><span className="live-pill"><i />기기 안에서만 처리</span></div><div className="settings-row"><div><strong>화면 테마</strong><span>{theme === "dark" ? "짙은 배경과 선명한 대비를 사용합니다." : "밝은 배경과 부드러운 대비를 사용합니다."}</span></div><button type="button" className="secondary-action" onClick={onTheme}>{theme === "dark" ? "일반 모드" : "다크 모드"}</button></div><div className="settings-row"><div><strong>가독성용 불투명 모드</strong><span>{solid ? "현재 불투명 카드를 사용합니다." : "현재 반투명 카드를 사용합니다."}</span></div><button type="button" className="secondary-action" onClick={onSolid}>{solid ? "유리 모드" : "불투명 모드"}</button></div><div className="settings-row"><div><strong>메모리 절약 대기</strong><span>{standby ? "창을 닫으면 WebView를 종료하고 트레이만 남깁니다. 다시 열 때 약 0.5초 걸립니다." : "창을 닫으면 숨기기만 해 즉시 다시 표시됩니다(기본)."}</span></div><button type="button" className="secondary-action" onClick={onStandby}>{standby ? "빠른 재표시" : "메모리 절약"}</button></div><div className="settings-row"><div><strong>작업표시줄 표시</strong><span>{strip ? "작업표시줄 알림 영역 왼쪽에 마지막 확인 잔여량을 표시합니다." : "작업표시줄에 표시하지 않습니다(기본)."}</span></div><button type="button" className="secondary-action" onClick={onStrip} aria-pressed={strip} disabled={stripPending}>{strip ? "표시 끄기" : "표시 켜기"}</button></div><div className="settings-row"><div><strong>공식 사용량 새로고침</strong><span>Codex App Server와 Claude status line 캐시를 다시 확인합니다.</span></div><button type="button" className="primary-action" onClick={onRefresh} disabled={refreshing}>{refreshing ? "확인 중" : "지금 확인"}</button></div><div className="settings-note"><Icon name="shield" size={15} /><span>토큰·이메일·세션 원문은 SPECTRA에 복제하지 않습니다. 마지막 확인 · {refreshedAt}</span></div></article></div>;
+  const updateBusy = updateState.phase === "checking" || updateState.phase === "installing";
+  const updateAvailable = updateState.phase === "available";
+  const updateButtonLabel = updateAvailable ? "지금 설치" : updateState.phase === "installing" ? "설치 중" : updateState.phase === "checking" ? "확인 중" : "업데이트 확인";
+  return <div className="view-stack"><article className="glass-card settings-panel"><div className="card-heading"><div><span className="eyebrow">설정</span><h3>사용 환경</h3></div><span className="live-pill"><i />기기 안에서만 처리</span></div><div className="settings-row"><div><strong>화면 테마</strong><span>{theme === "dark" ? "짙은 배경과 선명한 대비를 사용합니다." : "밝은 배경과 부드러운 대비를 사용합니다."}</span></div><button type="button" className="secondary-action" onClick={onTheme}>{theme === "dark" ? "일반 모드" : "다크 모드"}</button></div><div className="settings-row"><div><strong>가독성용 불투명 모드</strong><span>{solid ? "현재 불투명 카드를 사용합니다." : "현재 반투명 카드를 사용합니다."}</span></div><button type="button" className="secondary-action" onClick={onSolid}>{solid ? "유리 모드" : "불투명 모드"}</button></div><div className="settings-row"><div><strong>메모리 절약 대기</strong><span>{standby ? "창을 닫으면 WebView를 종료하고 트레이만 남깁니다. 다시 열 때 약 0.5초 걸립니다." : "창을 닫으면 숨기기만 해 즉시 다시 표시됩니다(기본)."}</span></div><button type="button" className="secondary-action" onClick={onStandby}>{standby ? "빠른 재표시" : "메모리 절약"}</button></div><div className="settings-row"><div><strong>작업표시줄 표시</strong><span>{strip ? "작업표시줄 알림 영역 왼쪽에 마지막 확인 잔여량을 표시합니다." : "작업표시줄에 표시하지 않습니다(기본)."}</span></div><button type="button" className="secondary-action" onClick={onStrip} aria-pressed={strip} disabled={stripPending}>{strip ? "표시 끄기" : "표시 켜기"}</button></div><div className="settings-row"><div><strong>공식 사용량 새로고침</strong><span>Codex App Server와 Claude status line 캐시를 다시 확인합니다.</span></div><button type="button" className="primary-action" onClick={onRefresh} disabled={refreshing}>{refreshing ? "확인 중" : "지금 확인"}</button></div><div className="settings-row"><div><strong>SPECTRA 업데이트</strong><span>{updateState.message}</span></div><button type="button" className={updateAvailable ? "primary-action" : "secondary-action"} onClick={updateAvailable ? onInstallUpdate : onCheckForUpdate} disabled={updateBusy}>{updateButtonLabel}</button></div><div className="settings-note"><Icon name="shield" size={15} /><span>토큰·이메일·세션 원문은 SPECTRA에 복제하지 않습니다. 마지막 확인 · {refreshedAt}</span></div></article></div>;
 });
 
 const VariantADesktop = memo(function VariantADesktop({ view, onView, activeProvider, activeProviderId, activeQuota, quotas, metric, range, onProvider, onMetric, onRange, onOpenOAuth, ...actions }: SharedViewProps) {
@@ -571,6 +588,9 @@ export function App() {
   const [oauthOpen, setOauthOpen] = useState(false);
   const [actionFeedback, setActionFeedback] = useState<ProviderActionFeedback | null>(null);
   const [loginPollingProviderId, setLoginPollingProviderId] = useState<ProviderId | null>(null);
+  const [updateState, setUpdateState] = useState<UpdateState>({ phase: "idle", version: null, message: "업데이트 확인 전" });
+  const [updateDismissed, setUpdateDismissed] = useState(false);
+  const pendingUpdate = useRef<AvailableAppUpdate | null>(null);
   const initialRefreshStarted = useRef(false);
   const refreshSequence = useRef(createRefreshSequencer<ProviderId>()).current;
   const activeProvider = useMemo(() => providers.find(provider => provider.id === activeProviderId) ?? providers[0], [activeProviderId]);
@@ -664,6 +684,50 @@ export function App() {
       setRefreshing(false);
     }
   }, [refreshProvider]);
+
+  const checkForUpdates = useCallback(async () => {
+    if (!isTauriRuntime()) {
+      setUpdateState({ phase: "unsupported", version: null, message: "설치된 앱에서만 업데이트를 확인할 수 있습니다." });
+      return;
+    }
+    setUpdateState({ phase: "checking", version: null, message: "새 버전을 확인하고 있습니다." });
+    setUpdateDismissed(false);
+    try {
+      const update = await checkForAppUpdate();
+      pendingUpdate.current = update;
+      if (!update) {
+        setUpdateState({ phase: "up-to-date", version: null, message: "현재 최신 버전입니다." });
+        return;
+      }
+      setUpdateState({ phase: "available", version: update.version, message: `새 버전 ${update.version}을 설치할 수 있습니다.` });
+    } catch (error) {
+      pendingUpdate.current = null;
+      const detail = error instanceof Error ? error.message : "업데이트 서버에 연결하지 못했습니다.";
+      setUpdateState({ phase: "error", version: null, message: `업데이트 확인 실패: ${detail}` });
+    }
+  }, []);
+
+  const installUpdate = useCallback(async () => {
+    let update = pendingUpdate.current;
+    if (!update) {
+      await checkForUpdates();
+      update = pendingUpdate.current;
+    }
+    if (!update) return;
+    setUpdateState({ phase: "installing", version: update.version, message: `버전 ${update.version}을 설치하고 있습니다.` });
+    try {
+      await update.install();
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "업데이트를 설치하지 못했습니다.";
+      setUpdateState({ phase: "error", version: update.version, message: `업데이트 설치 실패: ${detail}` });
+    }
+  }, [checkForUpdates]);
+
+  useEffect(() => {
+    if (!isTauriRuntime()) return;
+    const timer = window.setTimeout(() => void checkForUpdates(), 2_500);
+    return () => window.clearTimeout(timer);
+  }, [checkForUpdates]);
 
   useEffect(() => {
     if (!isTauriRuntime() || initialRefreshStarted.current) return;
@@ -778,8 +842,11 @@ export function App() {
     onSolid: () => setSolid(value => !value),
     onTheme: () => setTheme(value => value === "dark" ? "light" : "dark"),
     onStandby: () => void toggleStandby(),
-    onStrip: () => void toggleStrip()
+    onStrip: () => void toggleStrip(),
+    updateState,
+    onCheckForUpdate: () => void checkForUpdates(),
+    onInstallUpdate: () => void installUpdate()
   };
 
-  return <><div className={solid ? "solid-mode" : ""}>{windowMode === "mini" ? <MiniLayout quotas={quotas} onRefresh={refresh} refreshing={refreshing} /> : isMobile ? <VariantCMobile {...sharedProps} /> : <VariantADesktop {...sharedProps} />}</div><OAuthDialog open={oauthOpen} provider={oauthProvider} quota={oauthQuota} startResult={actionFeedback} onClose={closeOAuth} onConnect={connectOAuth} onDisconnect={disconnectOAuth} /></>;
+  return <><div className={solid ? "solid-mode" : ""}>{windowMode === "mini" ? <MiniLayout quotas={quotas} onRefresh={refresh} refreshing={refreshing} /> : isMobile ? <VariantCMobile {...sharedProps} /> : <VariantADesktop {...sharedProps} />}</div>{updateState.phase === "available" && updateState.version && !updateDismissed ? <UpdateNotice version={updateState.version} onInstall={installUpdate} onDismiss={() => setUpdateDismissed(true)} /> : null}<OAuthDialog open={oauthOpen} provider={oauthProvider} quota={oauthQuota} startResult={actionFeedback} onClose={closeOAuth} onConnect={connectOAuth} onDisconnect={disconnectOAuth} /></>;
 }

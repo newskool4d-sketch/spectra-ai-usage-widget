@@ -85,6 +85,13 @@ h1 em { color: var(--color-heading-em); font-style: normal; }
 .settings-row span { margin-top: 4px; color: var(--muted); font-size: var(--text-xs); line-height: 1.5; }
 .settings-note { display: flex; margin-top: 10px; padding-top: 12px; align-items: center; gap: 7px; border-top: 1px solid var(--line); color: var(--subtle); font-size: var(--text-xs); }
 .settings-note .icon { flex: 0 0 auto; color: var(--lime); }
+.update-notice { position: fixed; right: 24px; bottom: 24px; z-index: 20; display: flex; max-width: min(460px, calc(100vw - 32px)); padding: 14px 16px; align-items: center; gap: 14px; border: 1px solid color-mix(in srgb, var(--lime), var(--line) 50%); border-radius: var(--radius-md); background: var(--color-surface-solid); box-shadow: var(--shadow-app); }
+.update-notice-copy { min-width: 0; }
+.update-notice-copy strong, .update-notice-copy span { display: block; }
+.update-notice-copy strong { font-size: var(--text-sm); }
+.update-notice-copy span { margin-top: 4px; overflow: hidden; color: var(--muted); font-size: var(--text-xs); text-overflow: ellipsis; white-space: nowrap; }
+.update-notice-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 8px; }
+.update-notice-actions .text-button { white-space: nowrap; }
 .glass-card { position: relative; min-height: 170px; padding: var(--space-5); overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--color-surface-card); box-shadow: var(--shadow-card); }
 .glass-card::before { display: none; }
 .span-2 { grid-column: span 2; }
@@ -252,6 +259,8 @@ h1 em { color: var(--color-heading-em); font-style: normal; }
   .product-shell { padding: 10px; }
   .variant-a { display:block; }.nav-rail { display:none; }
   .app-surface,.stream-app{min-height:calc(100vh - 20px);border-radius:24px}
+  .update-notice { right: 16px; bottom: 16px; left: 16px; max-width: none; align-items: flex-start; flex-direction: column; gap: 10px; }
+  .update-notice-actions { width: 100%; justify-content: flex-end; }
   .command-center { padding: 22px 15px 100px; }.app-header{display:block}.app-header .top-actions{margin-top:18px;justify-content:flex-end}.sync-state{margin-right:auto}
   .bento-grid { grid-template-columns: 1fr; }.span-2{grid-column:auto}.view-stack{margin-top:18px}.trend-window-grid{grid-template-columns:1fr}.settings-row{align-items:flex-start;flex-direction:column;gap:10px}.settings-row button{width:100%}.alert-row span{white-space:normal}
   .stream-app .quota-board { margin-top: 21px; }
