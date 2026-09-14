@@ -4,7 +4,7 @@ import { Sparkline } from "./components/Sparkline";
 import { computeNextAction, computeTimeProgress, hasVerifiedUsage, paceLabel } from "./data/next-action";
 import { createRefreshSequencer } from "./data/refresh-sequence";
 import { metricLabels, planQuotas, providers, rangeLabels, type AuthMethod, type Metric, type PlanQuota, type Provider, type ProviderId, type QuotaWindow, type QuotaWindowId, type UsageRange } from "./data/providers";
-import { providersMissingFromBoot } from "./integrations/boot-state";
+import { providersToRefreshAfterBoot } from "./integrations/boot-state";
 import { providerCapabilities, type ProviderCapability } from "./integrations/provider-capabilities";
 import { getNativeProviderUsage, installNativeProviderBridge, isTauriRuntime, readBootState, removeNativeProviderBridge, setNativeStandby, setNativeStrip, setNativeUiPrefs, startNativeProviderLogin, type NativeProviderActionResult, type NativeProviderUsageSnapshot } from "./integrations/tauri-native-bridge";
 
@@ -668,7 +668,7 @@ export function App() {
   useEffect(() => {
     if (!isTauriRuntime() || initialRefreshStarted.current) return;
     initialRefreshStarted.current = true;
-    const pending = providersMissingFromBoot(boot, providers.map(provider => provider.id));
+    const pending = providersToRefreshAfterBoot(boot, providers.map(provider => provider.id));
     if (pending.length === providers.length) {
       void refresh();
       return;

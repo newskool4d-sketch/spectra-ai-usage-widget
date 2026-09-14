@@ -2,6 +2,8 @@ use tauri::menu::MenuBuilder;
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{App, AppHandle, LogicalSize, Manager, Runtime, Size, WebviewWindow};
 use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(target_os = "windows")]
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::image::Image;
 
 pub(crate) const MAIN_WINDOW_LABEL: &str = "main";
@@ -286,6 +288,69 @@ pub(crate) fn update_taskbar_strip<R: Runtime>(app: &AppHandle<R>) {
     }
 }
 
+/// Claude's reset timestamp is the one provider signal that can become stale while the
+/// WebView is destroyed. Keep the native strip self-healing without polling until a reset.
+#[cfg(target_os = "windows")]
+pub(crate) fn ensure_taskbar_refresh_loop(app: &AppHandle) {
+    let state = app.state::<crate::AppState>();
+    if !state.ui.lock().map(|prefs| prefs.strip).unwrap_or(false) {
+        return;
+    }
+    if state
+        .strip_refresh_started
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return;
+    }
+
+    let worker = app.clone();
+    let spawned = std::thread::Builder::new()
+        .name("spectra-claude-reset-refresh".to_string())
+        .spawn(move || {
+            let mut last_attempt = 0_u64;
+            loop {
+                std::thread::sleep(Duration::from_secs(15));
+                let state = worker.state::<crate::AppState>();
+                let enabled = state.ui.lock().map(|prefs| prefs.strip).unwrap_or(false);
+                if !enabled {
+                    last_attempt = 0;
+                    continue;
+                }
+
+                let snapshots = state.last_snapshots.lock().map(|list| list.clone()).unwrap_or_default();
+                let now = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                let reset_due = claude_reset_due(&snapshots, now);
+                if !reset_due || now.saturating_sub(last_attempt) < 60 {
+                    continue;
+                }
+
+                last_attempt = now;
+                let refresh_app = worker.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(error) = crate::provider_usage_snapshot(refresh_app, "claude".to_string()).await {
+                        eprintln!("spectra: scheduled Claude reset refresh failed: {error}");
+                    }
+                });
+            }
+        });
+    if let Err(error) = spawned {
+        state.strip_refresh_started.store(false, Ordering::Release);
+        eprintln!("spectra: Claude reset refresh loop is unavailable: {error}");
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn claude_reset_due(snapshots: &[crate::provider_usage::ProviderUsageSnapshot], now: u64) -> bool {
+    snapshots
+        .iter()
+        .find(|snapshot| snapshot.provider_id == "claude")
+        .is_some_and(|snapshot| snapshot.windows.iter().any(|window| window.resets_at.is_some_and(|reset| reset <= now)))
+}
+
 #[cfg(not(target_os = "windows"))]
 pub(crate) fn update_taskbar_strip<R: Runtime>(_app: &AppHandle<R>) {}
 
@@ -342,5 +407,32 @@ mod tests {
         assert!(!try_begin_recreate(&flag));
         drop(RecreateGuard(&flag));
         assert!(try_begin_recreate(&flag));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn claude_reset_refresh_starts_only_after_a_window_reset() {
+        let snapshot = crate::provider_usage::ProviderUsageSnapshot {
+            provider_id: "claude".into(),
+            runtime_available: true,
+            auth_state: "signed-in".into(),
+            connection_state: "connected".into(),
+            auth_method: None,
+            plan_type: None,
+            source: Some("claude-usage-api".into()),
+            last_synced_at: Some(100),
+            bridge_installed: false,
+            windows: vec![crate::provider_usage::ProviderQuotaWindow {
+                id: "rolling".into(),
+                label: "5시간 한도".into(),
+                used_percent: 20.0,
+                remaining_percent: 80.0,
+                resets_at: Some(120),
+                window_duration_mins: Some(300),
+            }],
+            message: String::new(),
+        };
+        assert!(!super::claude_reset_due(&[snapshot.clone()], 119));
+        assert!(super::claude_reset_due(&[snapshot], 120));
     }
 }

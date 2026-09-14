@@ -17,7 +17,7 @@
 | 위치 | 스트립 오른쪽 끝이 `TrayNotifyWnd.left`에 접하고, 셸 요소와 겹치는 픽셀이 0이다 | 스크린샷 + `SPECTRA_TIMING_LOG=1` 좌표 로그 |
 | 메모리 | 대기(standby) 상태 총 작업 집합 ≤ **35 MB** (Phase 4 기준 31.5 MB + 스트립) | `scripts/measure-memory.ps1 -Scenario standby-strip` |
 | 메모리 | 대기 상태 프로세스 수가 **1**로 유지된다(WebView2 0개) | 동일 스크립트 `processCount` 열 |
-| 폴링 | 스트립 갱신이 `provider_usage_snapshot` 완료 시점에만 일어난다. 데이터 목적 타이머 0개 | `grep -n "SetTimer" src-tauri/src/` 결과가 위치 재확인 용도 외 0건 + 코드 리뷰 |
+| 갱신 | 스트립 갱신은 `provider_usage_snapshot` 완료 시점에 일어나며, Claude 초기화 시각이 지난 경우에만 네이티브 감시가 재조회를 시작한다(15초 확인 간격·재시도 최소 60초) | 코드 리뷰 + Claude 초기화 경계 테스트 |
 | 테마 | 작업표시줄 라이트↔다크 전환 시 10초 안에 스트립 색이 따라간다 | 수동 전환 + 스크린샷 2장 |
 | 기본값 | `UiPrefs.strip == false`(기본)에서 스트립 창이 생성되지 않고 현행 동작과 동일하다 | `ui-prefs.json` 없는 상태로 기동 + 창 목록 확인 |
 | 복원 | explorer.exe 재시작 후 10초 안에 스트립이 같은 위치로 돌아온다 | 수동 재시작 + 스크린샷 |
@@ -26,7 +26,7 @@
 
 ### 1-1. 최종 판정 (2026-09-12)
 
-표시·위치·테마·기본값·Explorer 재시작·전체화면/자동숨김 전환은 Task 2~5 자동 검사와 사용자 육안 확인으로 PASS했다. 대기 상태 메모리는 Task 6에서 61개 표본 평균 33.6 MB, 최대 34.1 MB, 프로세스 수 1개로 PASS했다. 데이터 목적 폴링은 없고 `Cargo.lock`의 새 package는 없다. 별도 D3D 전체화면, 물리 다중 모니터, 30분 가려짐 관찰은 이 판정에 포함하지 않았다.
+표시·위치·테마·기본값·Explorer 재시작·전체화면/자동숨김 전환은 Task 2~5 자동 검사와 사용자 육안 확인으로 PASS했다. 대기 상태 메모리는 Task 6에서 61개 표본 평균 33.6 MB, 최대 34.1 MB, 프로세스 수 1개로 PASS했다. 무조건 폴링은 없고 Claude 초기화 경계만 제한적으로 감시하며 `Cargo.lock`의 새 package는 없다. 별도 D3D 전체화면, 물리 다중 모니터, 30분 가려짐 관찰은 이 판정에 포함하지 않았다.
 
 ## 2. 실측 근거 (2026-09-12, windows-main)
 
@@ -105,7 +105,7 @@ Shell_SecondaryTrayWnd 없음(단일 작업표시줄)
 
 스트립은 **작업표시줄 테마**를 따른다 — `HKCU\...\Themes\Personalize\SystemUsesLightTheme`. `UiPrefs.theme`(기본 `dark`)는 SPECTRA 자기 창의 설정이므로 **연결하지 않는다**. 두 값을 묶으면 조용한 오색 버그가 된다.
 
-### 3-6. 갱신 시점 (폴링 금지 유지)
+### 3-6. 갱신 시점 (무조건 폴링 금지, Claude 초기화 경계만 감시)
 
 | 트리거 | 하는 일 |
 |---|---|
@@ -113,8 +113,9 @@ Shell_SecondaryTrayWnd 없음(단일 작업표시줄)
 | `WM_SETTINGCHANGE` | 테마·글꼴·작업표시줄 위치 재확인 |
 | `WM_DISPLAYCHANGE`·`WM_DPICHANGED` | 위치·배율 재계산 |
 | `TaskbarCreated` 등록 메시지 | explorer 재시작 후 복귀 |
+| 작업표시줄 표시 상태에서 Claude 초기화 시각 경과 | 15초 간격으로 경계를 확인하고, 경과 시 `provider_usage_snapshot`을 재호출(재시도 최소 60초) |
 
-데이터를 얻기 위한 타이머는 두지 않는다(`docs/performance/memory-budget.md`의 "앱 유휴 상태에서는 provider 폴링을 하지 않습니다" 불변식 유지). 위치 재확인용 저빈도 타이머는 위 메시지로 해결되지 않는 경우에 한해, 사유를 문서에 적고 추가한다.
+일반 공급자 폴링은 두지 않는다. 단, 작업표시줄이 켜져 있고 Claude의 저장된 초기화 시각이 지난 경우에만 네이티브 감시가 재조회를 시작한다. 이 경로는 WebView가 닫힌 대기 상태에서도 스트립을 최신화하기 위한 예외다.
 
 ### 3-7. 기본값과 범위
 

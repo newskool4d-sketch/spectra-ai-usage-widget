@@ -30,6 +30,8 @@ use crate::taskbar_strip::{palette, place_strip, retheme_model, Rect as StripRec
 const CLASS_NAME: &str = "SpectraTaskbarStrip";
 const WM_STRIP_REDRAW: u32 = WM_APP + 1;
 const WM_STRIP_SHELL_CHANGED: u32 = WM_APP + 2;
+const STRIP_FONT_WEIGHT: i32 = 600;
+const STRIP_FONT_SCALE_PERCENT: i64 = 110;
 
 // OUTOFCONTEXT 콜백은 hook 등록 스레드에서 전달된다. 상태 포인터·앱 잠금을 공유하지 않는다.
 thread_local! {
@@ -385,10 +387,22 @@ fn shell_font(dpi: u32) -> Result<HFONT, String> {
             .filter(|height| *height > 0).ok_or("strip fallback font size is invalid")?;
         font.lfHeight = -height;
     }
+    font.lfHeight = scale_font_height(font.lfHeight);
+    font.lfWeight = STRIP_FONT_WEIGHT;
     // 검은 DIB와 섞인 안티앨리어싱 픽셀이 알파 복원 후 후광으로 남지 않게 한다.
     font.lfQuality = NONANTIALIASED_QUALITY;
     let handle = unsafe { CreateFontIndirectW(&font) };
     if handle.is_null() { Err(win32_error("CreateFontIndirectW")) } else { Ok(handle) }
+}
+
+fn scale_font_height(height: i32) -> i32 {
+    let magnitude = i64::from(height).abs();
+    let scaled = magnitude
+        .saturating_mul(STRIP_FONT_SCALE_PERCENT)
+        .saturating_add(99)
+        / 100;
+    let scaled = scaled.min(i64::from(i32::MAX)) as i32;
+    if height < 0 { -scaled } else { scaled }
 }
 
 fn bitmap_byte_len(width: i32, height: i32) -> Result<usize, String> {
@@ -976,7 +990,8 @@ mod tests {
             assert_ne!(SystemParametersInfoForDpi(
                 SPI_GETNONCLIENTMETRICS, metrics.cbSize, &mut metrics as *mut _ as *mut _, 0, 144,
             ), 0);
-            assert_eq!(font.lfHeight, metrics.lfStatusFont.lfHeight, "use the scaled shell height");
+            assert_eq!(font.lfHeight, scale_font_height(metrics.lfStatusFont.lfHeight), "use the slightly larger scaled shell height");
+            assert_eq!(font.lfWeight, STRIP_FONT_WEIGHT, "use a semibold strip font");
             assert_eq!(font.lfFaceName, metrics.lfStatusFont.lfFaceName, "use the shell font family");
             assert_eq!(font.lfQuality, NONANTIALIASED_QUALITY);
         }

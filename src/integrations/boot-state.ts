@@ -36,3 +36,17 @@ export function providersMissingFromBoot<T extends string>(boot: NativeBootState
   const restored = new Set<string>(boot.snapshots.map(snapshot => snapshot.providerId));
   return all.filter(id => !restored.has(id));
 }
+
+/**
+ * Restored Claude usage must be checked again because its reset window can expire
+ * while the WebView is asleep or the taskbar strip remains visible on its own.
+ */
+export function providersToRefreshAfterBoot<T extends string>(boot: NativeBootState | null, all: readonly T[]): T[] {
+  const pending = providersMissingFromBoot(boot, all);
+  if (!boot) return pending;
+  const claude = all.find(id => id === "claude");
+  if (claude && boot.snapshots.some(snapshot => snapshot.providerId === claude) && !pending.includes(claude)) {
+    return [...pending, claude];
+  }
+  return pending;
+}

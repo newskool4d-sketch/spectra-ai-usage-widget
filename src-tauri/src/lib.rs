@@ -41,6 +41,8 @@ pub struct AppState {
     pub(crate) snapshot_requests: Mutex<std::collections::HashMap<String, u64>>,
     #[cfg(target_os = "windows")]
     pub(crate) strip: Mutex<Option<taskbar_window::StripHandle>>,
+    #[cfg(target_os = "windows")]
+    pub(crate) strip_refresh_started: std::sync::atomic::AtomicBool,
 }
 
 impl AppState {
@@ -319,6 +321,10 @@ fn set_standby(enabled: bool, state: State<'_, AppState>) -> Result<standby::UiP
 fn set_strip(enabled: bool, app: AppHandle, state: State<'_, AppState>) -> Result<standby::UiPrefs, String> {
     let prefs = apply_prefs(&state, |prefs| prefs.strip = enabled)?;
     desktop_shell::update_taskbar_strip(&app);
+    #[cfg(target_os = "windows")]
+    if enabled {
+        desktop_shell::ensure_taskbar_refresh_loop(&app);
+    }
     Ok(prefs)
 }
 
@@ -374,6 +380,10 @@ pub fn run() {
                 eprintln!("spectra: main window could not be shown at startup: {error}");
             }
             desktop_shell::update_taskbar_strip(app.handle());
+            #[cfg(target_os = "windows")]
+            if app.state::<AppState>().ui.lock().map(|prefs| prefs.strip).unwrap_or(false) {
+                desktop_shell::ensure_taskbar_refresh_loop(app.handle());
+            }
 
             #[cfg(feature = "native-oauth")]
             {
