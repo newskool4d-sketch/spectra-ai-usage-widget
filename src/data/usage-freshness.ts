@@ -1,5 +1,8 @@
 import type { PlanQuota } from "./providers.ts";
 
+/** Native lookup failure code for an expired Claude Code access token (provider_usage::CLAUDE_TOKEN_EXPIRED). */
+export const CLAUDE_TOKEN_EXPIRED = "claude-oauth-token-expired";
+
 // Keep the labels and expiry boundary aligned with taskbar_strip::claude_status.
 export function claudeFreshness(quota: PlanQuota, now: number): Readonly<{ label: string; tooltip: string }> {
   let label: string;
@@ -11,6 +14,7 @@ export function claudeFreshness(quota: PlanQuota, now: number): Readonly<{ label
   if (quota.source === "example") label = "브라우저 데모";
   else if (quota.connectionState === "not_installed") label = "Claude Code 설치 필요";
   else if (quota.connectionState === "signed_out") label = "로그인 필요";
+  else if (quota.liveFailure === CLAUDE_TOKEN_EXPIRED) label = "로그인 갱신 필요";
   else if (quota.connectionState === "error" && !hasUsage) label = "연결 상태 확인 필요";
   else if (!hasUsage) label = "사용량 갱신 대기";
   else if (quota.connectionState !== "connected" || expired || !capturedRecently || quota.source !== "claude-usage-api") label = "갱신 대기 (캐시)";

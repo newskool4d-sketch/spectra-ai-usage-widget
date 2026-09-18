@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { claudeFreshness } from "../src/data/usage-freshness.ts";
+import { CLAUDE_TOKEN_EXPIRED, claudeFreshness } from "../src/data/usage-freshness.ts";
 import { planQuotas, type PlanQuota } from "../src/data/providers.ts";
 
 const captured = 1_800_000_000_000;
@@ -63,5 +63,12 @@ describe("Claude freshness", () => {
       assert.ok(result.tooltip.includes(statusMessage));
       assert.ok(result.tooltip.includes(quota.lastSyncedAt!));
     }
+  });
+
+  it("asks for a login refresh when the Claude Code token expired, keeping the cached usage", () => {
+    const expired = claudeFreshness({ ...quota, connectionState: "stale", source: "claude-statusline", liveFailure: CLAUDE_TOKEN_EXPIRED, statusMessage: "Claude Code 로그인 갱신이 필요합니다. 토큰이 만료되어 Claude Code를 한 번 실행해 주세요." }, captured);
+    assert.equal(expired.label, "로그인 갱신 필요");
+    assert.ok(expired.tooltip.includes("토큰이 만료되어"));
+    assert.equal(claudeFreshness({ ...quota, liveFailure: null }, captured + 30_000).label, "동기화됨");
   });
 });

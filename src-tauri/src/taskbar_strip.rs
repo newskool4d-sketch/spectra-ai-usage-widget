@@ -90,6 +90,9 @@ fn claude_status(snapshot: &ProviderUsageSnapshot, now: u64) -> &'static str {
     if snapshot.auth_state == "signed-out" || snapshot.connection_state == "signed-out" {
         return "로그인 필요";
     }
+    if snapshot.live_failure.as_deref() == Some(crate::provider_usage::CLAUDE_TOKEN_EXPIRED) {
+        return "로그인 갱신 필요";
+    }
     if snapshot.connection_state == "error" && snapshot.windows.is_empty() {
         return "연결 상태 확인 필요";
     }
@@ -407,6 +410,20 @@ mod tests {
             assert!(model.tooltip.contains("마지막 동기화: 5분 전"));
             assert_eq!(model.segments[1].value, "72%");
         }
+    }
+
+    #[test]
+    fn claude_tooltip_asks_for_a_login_refresh_when_the_token_expired() {
+        let mut claude = snapshot("claude", "stale", vec![window("rolling", 72.0)]);
+        claude.source = Some("claude-statusline".into());
+        claude.last_synced_at = Some(1_000);
+        claude.live_failure = Some(crate::provider_usage::CLAUDE_TOKEN_EXPIRED.into());
+        claude.message = "Claude Code 로그인 갱신이 필요합니다. 토큰이 만료되어 Claude Code를 한 번 실행해 주세요. 마지막 동기화 값을 표시합니다.".into();
+        assert_eq!(claude_status(&claude, 1_300), "로그인 갱신 필요");
+        let model = build_model_at(&[claude], StripTheme::Dark, 1_300).unwrap();
+        assert!(model.tooltip.contains("Claude · 로그인 갱신 필요"));
+        assert!(model.tooltip.contains("토큰이 만료되어"));
+        assert_eq!(model.segments[1].value, "72%", "cached usage stays visible");
     }
 
     #[test]
