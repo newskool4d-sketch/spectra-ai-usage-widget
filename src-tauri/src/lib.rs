@@ -445,6 +445,7 @@ mod app_state_tests {
             bridge_installed: true,
             windows: Vec::new(),
             message: message.to_string(),
+            live_failure: None,
         }
     }
 

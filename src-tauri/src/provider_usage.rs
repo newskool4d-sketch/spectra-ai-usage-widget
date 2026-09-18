@@ -47,6 +47,9 @@ pub struct ProviderUsageSnapshot {
     pub bridge_installed: bool,
     pub windows: Vec<ProviderQuotaWindow>,
     pub message: String,
+    /// Machine-readable reason the newest lookup could not deliver fresh windows
+    /// (`None` on success). Read by the refresh scheduler and the freshness labels.
+    pub live_failure: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -162,6 +165,7 @@ fn unavailable_snapshot(provider_id: &str, message: &str) -> ProviderUsageSnapsh
         bridge_installed: false,
         windows: Vec::new(),
         message: message.to_string(),
+        live_failure: Some("runtime-unavailable".to_string()),
     }
 }
 
@@ -364,6 +368,7 @@ fn codex_snapshot() -> ProviderUsageSnapshot {
                 bridge_installed: false,
                 windows: Vec::new(),
                 message: format!("Codex App Server를 시작하지 못했습니다. ({reason})"),
+                live_failure: Some(reason),
             }
         }
     };
@@ -383,6 +388,7 @@ fn codex_snapshot() -> ProviderUsageSnapshot {
                     bridge_installed: false,
                     windows: Vec::new(),
                     message: format!("Codex 계정 상태를 확인하지 못했습니다. ({reason})"),
+                    live_failure: Some(reason),
                 }
             }
         };
@@ -402,6 +408,7 @@ fn codex_snapshot() -> ProviderUsageSnapshot {
             bridge_installed: false,
             windows: Vec::new(),
             message: "ChatGPT 계정 로그인이 필요합니다.".to_string(),
+            live_failure: Some("codex-signed-out".to_string()),
         };
     };
     let account_type = account
@@ -430,6 +437,7 @@ fn codex_snapshot() -> ProviderUsageSnapshot {
             bridge_installed: false,
             windows: Vec::new(),
             message: "API 키가 아닌 ChatGPT 요금제 로그인이 필요합니다.".to_string(),
+            live_failure: Some("codex-api-key-auth".to_string()),
         };
     }
 
@@ -448,6 +456,7 @@ fn codex_snapshot() -> ProviderUsageSnapshot {
                 bridge_installed: false,
                 windows: Vec::new(),
                 message: format!("Codex 요금제 한도를 가져오지 못했습니다. ({reason})"),
+                live_failure: Some(reason),
             }
         }
     };
@@ -475,6 +484,7 @@ fn codex_snapshot() -> ProviderUsageSnapshot {
             "계정은 연결됐지만 표시할 한도 창이 없습니다."
         }
         .to_string(),
+        live_failure: None,
     }
 }
 
@@ -554,6 +564,10 @@ fn claude_bridge_config_path() -> Option<PathBuf> {
 const CLAUDE_CREDENTIALS_ENV: &str = "SPECTRA_CLAUDE_CREDENTIALS";
 const CLAUDE_USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 const CLAUDE_USAGE_TIMEOUT: Duration = Duration::from_secs(10);
+/// Live lookup failure code for an expired Claude Code access token. The scheduler holds
+/// Claude until the credentials file changes, and both freshness labels turn it into
+/// "로그인 갱신 필요".
+pub const CLAUDE_TOKEN_EXPIRED: &str = "claude-oauth-token-expired";
 
 fn claude_credentials_path() -> Option<PathBuf> {
     if let Some(path) = env::var_os(CLAUDE_CREDENTIALS_ENV) {
@@ -584,7 +598,7 @@ fn read_claude_oauth_token_at(path: &Path, now_ms: u64) -> Result<String, String
         .ok_or_else(|| "claude-oauth-token-missing".to_string())?;
     if let Some(expires_at) = oauth.get("expiresAt").and_then(Value::as_u64) {
         if expires_at <= now_ms {
-            return Err("claude-oauth-token-expired".to_string());
+            return Err(CLAUDE_TOKEN_EXPIRED.to_string());
         }
     }
     Ok(token.to_string())
@@ -802,7 +816,7 @@ fn command_output(spec: &CommandSpec, args: &[&str]) -> Result<Output, String> {
 
 fn claude_live_failure_hint(error: Option<&str>) -> Option<&'static str> {
     match error {
-        Some("claude-oauth-token-expired") => {
+        Some(CLAUDE_TOKEN_EXPIRED) => {
             Some("Claude Code 로그인 갱신이 필요합니다. 토큰이 만료되어 Claude Code를 한 번 실행해 주세요.")
         }
         Some("claude-usage-unauthorized") => {
@@ -836,6 +850,7 @@ fn claude_snapshot() -> ProviderUsageSnapshot {
                 bridge_installed: claude_bridge_installed(),
                 windows: Vec::new(),
                 message: "Claude 계정 상태를 확인하지 못했습니다.".to_string(),
+                live_failure: Some("claude-auth-status-failed".to_string()),
             }
         }
     };
@@ -853,6 +868,7 @@ fn claude_snapshot() -> ProviderUsageSnapshot {
             bridge_installed: claude_bridge_installed(),
             windows: Vec::new(),
             message: "Claude Pro/Max 계정 로그인이 필요합니다.".to_string(),
+            live_failure: Some("claude-signed-out".to_string()),
         };
     };
 
@@ -957,6 +973,7 @@ fn claude_snapshot() -> ProviderUsageSnapshot {
         bridge_installed,
         windows,
         message,
+        live_failure: live_error,
     }
 }
 
@@ -1294,6 +1311,14 @@ mod tests {
         let path = env::temp_dir().join(format!("spectra-{name}-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&path).unwrap();
         path
+    }
+
+    #[test]
+    fn unavailable_snapshot_reports_a_machine_readable_failure() {
+        let snapshot = unavailable_snapshot("codex", "Codex CLI를 찾지 못했습니다.");
+        assert_eq!(snapshot.live_failure.as_deref(), Some("runtime-unavailable"));
+        assert_eq!(snapshot.connection_state, "not-installed");
+        assert_eq!(CLAUDE_TOKEN_EXPIRED, "claude-oauth-token-expired");
     }
 
     #[test]

@@ -434,6 +434,7 @@ mod tests {
                 window_duration_mins: Some(300),
             }],
             message: String::new(),
+            live_failure: None,
         };
         assert!(!super::claude_reset_due(&[snapshot.clone()], 119));
         assert!(super::claude_reset_due(&[snapshot], 120));

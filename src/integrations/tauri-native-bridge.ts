@@ -70,6 +70,7 @@ export type NativeProviderUsageSnapshot = Readonly<{
   bridgeInstalled: boolean;
   windows: readonly NativeProviderQuotaWindow[];
   message: string;
+  liveFailure?: string | null; // Newest lookup failure code, e.g. "claude-oauth-token-expired"; absent on success.
 }>;
 
 export type NativeProviderActionResult = Readonly<{

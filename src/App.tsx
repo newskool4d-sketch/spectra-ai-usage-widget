@@ -140,6 +140,7 @@ function quotaFromSnapshot(snapshot: NativeProviderUsageSnapshot, fallback: Plan
     lastSyncedAtMs: snapshot.lastSyncedAt === null ? null : snapshot.lastSyncedAt * 1000,
     bridgeInstalled: snapshot.bridgeInstalled,
     statusMessage: snapshot.message,
+    liveFailure: snapshot.liveFailure ?? null,
     windows
   };
 }

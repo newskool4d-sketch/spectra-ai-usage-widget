@@ -38,6 +38,7 @@ export type PlanQuota = Readonly<{
   lastSyncedAtMs?: number | null; // Data capture time, not the refresh request time.
   bridgeInstalled: boolean;
   statusMessage: string;
+  liveFailure?: string | null; // Native lookup failure code; undefined for browser demo data.
   windows: readonly QuotaWindow[];
 }>;
 

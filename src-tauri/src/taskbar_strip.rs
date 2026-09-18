@@ -246,6 +246,7 @@ mod tests {
             bridge_installed: false,
             windows,
             message: String::new(),
+            live_failure: None,
         }
     }
 
