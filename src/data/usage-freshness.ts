@@ -25,3 +25,10 @@ export function claudeFreshness(quota: PlanQuota, now: number): Readonly<{ label
   if (quota.connectionState !== "connected" && quota.statusMessage) lines.push(quota.statusMessage);
   return { label, tooltip: lines.join("\n") };
 }
+
+const clockFormatter = new Intl.DateTimeFormat("ko-KR", { hour: "2-digit", minute: "2-digit", hour12: false });
+
+/** "조회 시도" label for a refresh the native loop ran on its own. */
+export function autoRefreshLabel(at: Date): string {
+  return `자동 확인 ${clockFormatter.format(at)}`;
+}

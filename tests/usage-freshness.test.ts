@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { CLAUDE_TOKEN_EXPIRED, claudeFreshness } from "../src/data/usage-freshness.ts";
+import { CLAUDE_TOKEN_EXPIRED, autoRefreshLabel, claudeFreshness } from "../src/data/usage-freshness.ts";
 import { planQuotas, type PlanQuota } from "../src/data/providers.ts";
 
 const captured = 1_800_000_000_000;
@@ -70,5 +70,10 @@ describe("Claude freshness", () => {
     assert.equal(expired.label, "로그인 갱신 필요");
     assert.ok(expired.tooltip.includes("토큰이 만료되어"));
     assert.equal(claudeFreshness({ ...quota, liveFailure: null }, captured + 30_000).label, "동기화됨");
+  });
+
+  it("labels a native auto refresh with the wall-clock time", () => {
+    assert.equal(autoRefreshLabel(new Date(2027, 0, 15, 9, 5)), "자동 확인 09:05");
+    assert.equal(autoRefreshLabel(new Date(2027, 0, 15, 21, 40)), "자동 확인 21:40");
   });
 });

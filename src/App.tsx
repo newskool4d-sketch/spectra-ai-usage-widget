@@ -3,12 +3,12 @@ import { Icon, type IconName } from "./components/Icon";
 import { Sparkline } from "./components/Sparkline";
 import { computeNextAction, computeTimeProgress, hasVerifiedUsage, paceLabel } from "./data/next-action";
 import { createRefreshSequencer } from "./data/refresh-sequence";
-import { claudeFreshness } from "./data/usage-freshness";
+import { autoRefreshLabel, claudeFreshness } from "./data/usage-freshness";
 import { metricLabels, planQuotas, providers, rangeLabels, type AuthMethod, type Metric, type PlanQuota, type Provider, type ProviderId, type QuotaWindow, type QuotaWindowId, type UsageRange } from "./data/providers";
 import { checkForAppUpdate, type AvailableAppUpdate } from "./integrations/app-updater";
 import { providersToRefreshAfterBoot } from "./integrations/boot-state";
 import { providerCapabilities, type ProviderCapability } from "./integrations/provider-capabilities";
-import { getNativeProviderUsage, installNativeProviderBridge, isTauriRuntime, readBootState, removeNativeProviderBridge, setNativeStandby, setNativeStrip, setNativeUiPrefs, startNativeProviderLogin, type NativeProviderActionResult, type NativeProviderUsageSnapshot } from "./integrations/tauri-native-bridge";
+import { getNativeProviderUsage, installNativeProviderBridge, isTauriRuntime, listenNativeProviderUsage, readBootState, removeNativeProviderBridge, setNativeStandby, setNativeStrip, setNativeUiPrefs, startNativeProviderLogin, type NativeProviderActionResult, type NativeProviderUsageSnapshot, type TauriUnlisten } from "./integrations/tauri-native-bridge";
 
 const mobileBreakpoint = "(max-width: 820px)";
 const mobileClockFormatter = new Intl.DateTimeFormat("ko-KR", { hour: "2-digit", minute: "2-digit", hour12: false });
@@ -756,6 +756,27 @@ export function App() {
     // Codex App Server is not relaunched for data that is already on screen.
     for (const id of pending) void refreshProvider(id);
   }, [boot, refresh, refreshProvider]);
+
+  useEffect(() => {
+    if (!isTauriRuntime()) return;
+    let disposed = false;
+    let unlisten: TauriUnlisten | null = null;
+    void listenNativeProviderUsage(snapshot => {
+      const id = snapshot.providerId;
+      if (id !== "codex" && id !== "claude") return;
+      // Claim a fresh ticket so an older in-flight request cannot overwrite this newer snapshot.
+      refreshSequence.begin(id);
+      setQuotas(current => ({ ...current, [id]: quotaFromSnapshot(snapshot, planQuotas[id]) }));
+      setRefreshedAt(autoRefreshLabel(new Date()));
+    }).then(handle => {
+      if (disposed) void handle?.();
+      else unlisten = handle;
+    }).catch((error: unknown) => console.warn("SPECTRA: provider usage events are unavailable", error));
+    return () => {
+      disposed = true;
+      void unlisten?.();
+    };
+  }, [refreshSequence]);
 
   useEffect(() => {
     if (!loginPollingProviderId || !isTauriRuntime()) return;

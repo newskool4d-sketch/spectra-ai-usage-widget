@@ -1,7 +1,7 @@
 import type { ProviderId } from "../data/providers";
 import { parseBootState, type NativeBootState, type NativeUiPrefs } from "./boot-state";
 
-type TauriUnlisten = () => void | Promise<void>;
+export type TauriUnlisten = () => void | Promise<void>;
 type TauriInvoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 type TauriEvent<T> = Readonly<{ payload: T }>;
 type TauriGlobal = Readonly<{
@@ -172,4 +172,13 @@ export async function listenNativeOAuthRejected(
   const listener = nativeGlobal()?.event?.listen;
   if (!listener) return null;
   return listener<NativeOAuthRejected>("oauth-callback-rejected", event => onEvent(event.payload));
+}
+
+/** Snapshots the native refresh loop (and every command lookup) accepted as newest. */
+export async function listenNativeProviderUsage(
+  onEvent: (snapshot: NativeProviderUsageSnapshot) => void,
+): Promise<TauriUnlisten | null> {
+  const listener = nativeGlobal()?.event?.listen;
+  if (!listener) return null;
+  return listener<NativeProviderUsageSnapshot>("provider-usage-updated", event => onEvent(event.payload));
 }
