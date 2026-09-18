@@ -40,6 +40,17 @@
 - 인증 헤더 없이 `releases/latest/download/latest.json` 조회 HTTP 200, 버전 `0.2.4`, `pub_date 2026-09-18T13:52:17Z`. manifest의 설치 파일 URL을 updater와 같은 `Accept: application/octet-stream`으로 비인증 다운로드해 위 해시와 일치함을 확인했다.
 - 설정 공개키(minisign 키 ID `2b2190fae1b3f640`)로 `.exe.sig`를 직접 검증(Node 표준 `crypto`의 Ed25519 + BLAKE2b-512 prehash): 파일 서명·전역 서명 모두 유효, 키 ID 일치. 즉 Actions 서명 키는 앱에 내장된 공개키와 같은 쌍이다.
 
+## 실제 앱 내 업그레이드 (2026-09-18 23:17 KST)
+
+- 사용자 승인 후 설치 경로의 SPECTRA(로컬 0.2.3 표기 빌드, PID 9240)만 종료하고 같은 경로로 다시 실행했다(PID 29076, 23:17:41). 창 생성 2.5초 뒤 updater가 공개 `latest.json`을 조회해 새 버전 안내를 띄웠고, 사용자가 `지금 설치`를 눌렀다. 별도 설치 파일 실행 없이 updater가 내려받은 `spectra-0.2.4-installer.exe`가 passive 모드로 실행된 뒤 앱이 자동 재시작됐다.
+- 재시작 프로세스: PID `30352`, 시작 시각 `2026-09-18 23:17:58 KST`, 동일 설치 경로 `C:\Users\홍주형\AppData\Local\SPECTRA\spectra-native.exe`.
+- 설치 파일의 ProductVersion `0.2.4`, 크기 6,307,840 bytes, 수정 시각 `22:52:08`(Actions 빌드 시각) — 공개 CI 빌드로 교체됐다.
+- 설정 전후 SHA-256 일치:
+  - `ui-prefs.json`: `5A2026DBDEA57E57450D9D86C728AD7062900C55D96F3655634FEB38889065CF`
+  - `claude-statusline-bridge.json`: `A4785440885ED91C93C4FE36C68C85489DBC1CB22437E974137EC9675B4DF318`
+- 재시작 직후 Win32 창 열거로 미니 창(전경)과 작업 표시줄 스트립 `SpectraTaskbarStrip`이 모두 표시됨을 확인했다.
+- 공개 0.2.4 빌드에서도 환경변수 없이 `claude-usage.json`의 `captured_at`이 부팅 조회 23:18:01 → 23:20:00(+119초) → 23:22:02(+122초)로 갱신돼 2분 주기 갱신이 동작함을 확인했다.
+
 ## 최종 판정: PASS
 
 | 요구사항 | 상태 | 근거 |
@@ -48,7 +59,7 @@
 | Claude 토큰 갱신 즉시 반영·만료 보류·백오프 | PASS | 단위 테스트(자격 증명 stamp·보류·백오프), 라벨 테스트 Rust·TS |
 | 창·스트립 값 일치 | PASS | `provider-usage-updated` 이벤트 경로, 사용자 육안 확인 |
 | 서명된 공개 릴리즈·updater manifest | PASS | Actions 전 단계 통과, 서명·digest·체크섬·비인증 다운로드 검증 |
-| 앱 내 업그레이드(0.2.3 → 0.2.4) | 미실시 | 설치본은 로컬 0.2.3 빌드이며 앱 내 업데이트는 사용자 승인 후 진행 |
+| 앱 내 업그레이드(0.2.3 → 0.2.4) | PASS | 실제 `지금 설치`, updater 다운로드·서명 검증·passive 설치·자동 재시작, ProductVersion 0.2.4, 설정 전후 해시 일치 |
 
 ## 검증 경계
 
