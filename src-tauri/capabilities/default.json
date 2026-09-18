@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "SPECTRA desktop OAuth callback and vault bridge",
   "windows": ["main"],
-  "permissions": ["core:default", "deep-link:default"]
+  "permissions": ["core:default", "deep-link:default", "process:default", "updater:default"]
 }

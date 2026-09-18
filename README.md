@@ -36,16 +36,17 @@ npm run desktop:dev
 npm run desktop:build
 ```
 
-## Windows v0.2.1 공개 릴리스 주의
+## Windows 공개 릴리스 및 업데이트
 
 현재 Windows 설치 파일은 `Authenticode: NotSigned` 상태입니다. 따라서 Windows SmartScreen에서 게시자를 확인할 수 없다는 경고가 표시될 수 있습니다.
 
-- 공개 릴리스: [SPECTRA v0.2.1](https://github.com/newskool4d-sketch/spectra-ai-usage-widget/releases/tag/v0.2.1)
-- 설치 파일 SHA-256: `2D3AD0AD78823222CC3C1B59D9E68611FBC4776DE90EFF10120BF4C991475809`
+- 공개 릴리스: [SPECTRA 최신 릴리스](https://github.com/newskool4d-sketch/spectra-ai-usage-widget/releases/latest)
+- v0.2.2부터 설치 파일 해시는 릴리스의 `SHA256SUMS.txt`에 제공합니다.
 - 설치 전 릴리스 페이지의 SHA-256과 로컬 파일을 대조하세요.
 - 공개용 Authenticode 인증서를 확보하면 서명된 설치 파일로 교체할 예정입니다.
+- 공개 v0.2.1 사용자는 v0.2.2를 한 번 수동 설치해야 합니다. 이후에는 앱 창의 새 버전 안내에서 설치할 수 있습니다. [자동 업데이트 안내](./docs/release-updates.md)
 
-데스크톱 앱은 430×720 미니 창으로 시작합니다. 닫기 버튼은 앱을 종료하지 않고 트레이로 숨기며, 트레이 왼쪽 클릭 또는 두 번째 앱 실행으로 미니 창을 다시 엽니다. 트레이 메뉴에서는 미니 창, 1280×860 대시보드, 숨기기, 종료를 선택할 수 있습니다. 패키징 결과는 `src-tauri/target/release/bundle/nsis/`에 생성됩니다. 대시보드 설정의 "메모리 절약 대기"를 켜면 닫을 때 WebView 창을 종료해 트레이만 남기고(기본 스트립 OFF 대기 시 약 31 MB, 스트립 ON 실측 33.6 MB), 다시 열 때 테마·창 모드·마지막 수치를 복원합니다(재표시 약 0.6초). 기본값은 숨기기입니다. 설정의 "작업표시줄 표시"를 켜면 주 작업표시줄 알림 영역 왼쪽에 Codex·Claude CI와 잔여율을 창 없이 표시합니다(기본값 꺼짐, 주 작업표시줄의 가로 배치만 지원).
+데스크톱 앱은 430×720 미니 창으로 시작합니다. 닫기 버튼은 앱을 종료하지 않고 트레이로 숨기며, 트레이 왼쪽 클릭 또는 두 번째 앱 실행으로 미니 창을 다시 엽니다. 트레이 메뉴에서는 미니 창, 1280×860 대시보드, 숨기기, 종료를 선택할 수 있습니다. 패키징 결과는 `src-tauri/target/release/bundle/nsis/`에 생성됩니다. 대시보드 설정의 "메모리 절약 대기"를 켜면 닫을 때 WebView 창을 종료해 트레이만 남기고(기본 스트립 OFF 대기 시 약 31 MB, 스트립 ON 실측 33.6 MB), 다시 열 때 테마·창 모드·마지막 수치를 복원합니다(재표시 약 0.6초). 기본값은 숨기기입니다. 설정의 "작업표시줄 표시"를 켜면 주 작업표시줄 알림 영역 왼쪽에 Codex·Claude CI와 잔여율을 창 없이 표시하며, 표시가 켜진 동안 2분마다 Codex·Claude를 다시 확인하고 Claude Code가 로그인 토큰을 갱신하면 곧바로 반영합니다(기본값 꺼짐, 주 작업표시줄의 가로 배치만 지원).
 
 개인 정보가 제거된 네이티브 연결 진단:
 
@@ -95,7 +96,7 @@ Claude는 `claude auth status`로 로그인 상태를 확인합니다. 사용자
 
 ## 메모리 정책
 
-앱은 과거 시계열을 저장하거나 유휴 상태에서 계속 폴링하지 않습니다. 시작·수동 새로고침 때 현재 스냅샷만 읽고 Codex App Server는 즉시 종료합니다. 자세한 기준은 [`docs/performance/memory-budget.md`](./docs/performance/memory-budget.md)에 있습니다.
+앱은 과거 시계열을 저장하거나 공급자 사용량을 무조건 폴링하지 않습니다. 시작·수동 새로고침 때 현재 스냅샷만 읽고 Codex App Server는 즉시 종료하며, 작업표시줄 표시가 켜진 동안에만 2분 주기로 재조회하며 실패 시 최대 30분까지 간격을 늘립니다. 자세한 기준은 [`docs/performance/memory-budget.md`](./docs/performance/memory-budget.md)에 있습니다.
 
 ## 디자인 방향
 

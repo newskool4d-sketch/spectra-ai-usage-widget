@@ -1,6 +1,6 @@
 #![cfg(target_os = "windows")]
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::sync::{Arc, Mutex};
 
 use windows_sys::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
@@ -15,6 +15,11 @@ use windows_sys::Win32::Graphics::Gdi::{
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_DWORD};
 use windows_sys::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK};
+use windows_sys::Win32::UI::Controls::{
+    InitCommonControlsEx, ICC_BAR_CLASSES, INITCOMMONCONTROLSEX, TOOLTIPS_CLASSW,
+    TTF_IDISHWND, TTF_SUBCLASS, TTM_ACTIVATE, TTM_ADDTOOLW, TTM_DELTOOLW,
+    TTM_POP, TTM_SETMAXTIPWIDTH, TTM_UPDATETIPTEXTW, TTS_ALWAYSTIP, TTS_NOPREFIX, TTTOOLINFOW, WM_MOUSELEAVE,
+};
 use windows_sys::Win32::UI::HiDpi::{
     GetDpiForWindow, SetThreadDpiAwarenessContext, SystemParametersInfoForDpi,
     DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
@@ -30,6 +35,10 @@ use crate::taskbar_strip::{palette, place_strip, retheme_model, Rect as StripRec
 const CLASS_NAME: &str = "SpectraTaskbarStrip";
 const WM_STRIP_REDRAW: u32 = WM_APP + 1;
 const WM_STRIP_SHELL_CHANGED: u32 = WM_APP + 2;
+const STRIP_FONT_WEIGHT: i32 = 600;
+const STRIP_FONT_SCALE_PERCENT: i64 = 110;
+// SDK TTTOOLINFOW_V2_SIZE: all fields we use, accepted with or without a v6 manifest.
+const TOOL_INFO_SIZE: u32 = (std::mem::offset_of!(TTTOOLINFOW, lParam) + std::mem::size_of::<LPARAM>()) as u32;
 
 // OUTOFCONTEXT 콜백은 hook 등록 스레드에서 전달된다. 상태 포인터·앱 잠금을 공유하지 않는다.
 thread_local! {
@@ -129,6 +138,104 @@ fn tray_left() -> Option<i32> {
     Some(rc.left)
 }
 
+/// The control may retain lpszText. Keep the old buffer alive through the synchronous
+/// update, and remove the tool/destroy the control before releasing the last buffer.
+/// This object is used and dropped only on the strip window's thread.
+struct StripTooltip {
+    hwnd: HWND,
+    owner: HWND,
+    text: Vec<u16>,
+    registered: bool,
+    enabled: bool,
+}
+
+impl StripTooltip {
+    fn new(owner: HWND) -> Result<Self, String> {
+        if unsafe { IsWindow(owner) } == 0 { return Err("tooltip owner is unavailable".into()); }
+        let controls = INITCOMMONCONTROLSEX {
+            dwSize: std::mem::size_of::<INITCOMMONCONTROLSEX>() as u32,
+            dwICC: ICC_BAR_CLASSES,
+        };
+        if unsafe { InitCommonControlsEx(&controls) } == 0 {
+            return Err(win32_error("InitCommonControlsEx tooltip"));
+        }
+        let hwnd = unsafe {
+            CreateWindowExW(
+                WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+                TOOLTIPS_CLASSW, std::ptr::null(), WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX,
+                CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
+                owner, std::ptr::null_mut(), GetModuleHandleW(std::ptr::null()), std::ptr::null(),
+            )
+        };
+        if hwnd.is_null() { return Err(win32_error("CreateWindowExW tooltip")); }
+        let mut tooltip = Self { hwnd, owner, text: vec![0], registered: false, enabled: false };
+        let mut info = tooltip.tool_info();
+        info.lpszText = tooltip.text.as_mut_ptr();
+        if unsafe { SendMessageW(hwnd, TTM_ADDTOOLW, 0, &info as *const _ as LPARAM) } == 0 {
+            return Err("tooltip tool registration failed".into());
+        }
+        tooltip.registered = true;
+        unsafe { SendMessageW(hwnd, TTM_ACTIVATE, 0, 0) };
+        Ok(tooltip)
+    }
+
+    fn tool_info(&self) -> TTTOOLINFOW {
+        TTTOOLINFOW {
+            cbSize: TOOL_INFO_SIZE,
+            // Common Controls intercepts mouse messages; no polling/cursor movement.
+            // IDISHWND also follows the entire client area after a DPI/size change.
+            uFlags: TTF_IDISHWND | TTF_SUBCLASS,
+            hwnd: self.owner,
+            uId: self.owner as usize,
+            ..unsafe { std::mem::zeroed() }
+        }
+    }
+
+    fn set_text(&mut self, text: &str) {
+        let mut next: Vec<u16> = text.encode_utf16().map(|unit| if unit == 0 { 32 } else { unit })
+            .chain(std::iter::once(0)).collect();
+        if next != self.text {
+            let mut info = self.tool_info();
+            info.lpszText = next.as_mut_ptr();
+            unsafe { SendMessageW(self.hwnd, TTM_UPDATETIPTEXTW, 0, &info as *const _ as LPARAM) };
+            self.text = next;
+        }
+        let dpi = unsafe { GetDpiForWindow(self.owner) }.max(96);
+        let width = (u64::from(dpi) * 360 / 96).min(i32::MAX as u64) as LPARAM;
+        // A nonnegative maximum width enables multiline Korean status text.
+        unsafe { SendMessageW(self.hwnd, TTM_SETMAXTIPWIDTH, 0, width) };
+    }
+
+    fn pop(&self) {
+        unsafe { SendMessageW(self.hwnd, TTM_POP, 0, 0) };
+    }
+
+    fn set_enabled(&mut self, enabled: bool) {
+        let enabled = enabled && self.text.len() > 1;
+        if !enabled { self.pop(); }
+        if self.enabled != enabled {
+            unsafe { SendMessageW(self.hwnd, TTM_ACTIVATE, usize::from(enabled), 0) };
+            self.enabled = enabled;
+        }
+    }
+}
+
+impl Drop for StripTooltip {
+    fn drop(&mut self) {
+        // Windows may already have destroyed this owned popup during owner teardown.
+        if unsafe { IsWindow(self.hwnd) } != 0 {
+            self.pop();
+            if self.registered {
+                let info = self.tool_info();
+                unsafe { SendMessageW(self.hwnd, TTM_DELTOOLW, 0, &info as *const _ as LPARAM) };
+            }
+            if unsafe { DestroyWindow(self.hwnd) } == 0 {
+                eprintln!("spectra: tooltip window could not be destroyed");
+            }
+        }
+    }
+}
+
 struct StripState {
     model: Arc<Mutex<Option<StripModel>>>,
     on_click: Box<dyn Fn() + Send + 'static>,
@@ -136,13 +243,14 @@ struct StripState {
     font_dpi: Cell<u32>,
     taskbar_created: u32,
     hooks: [HWINEVENTHOOK; 2],
+    tooltip: RefCell<Option<StripTooltip>>,
 }
 
 impl StripState {
     fn new(model: Arc<Mutex<Option<StripModel>>>, on_click: Box<dyn Fn() + Send + 'static>) -> Self {
         Self {
             model, on_click, font: Cell::new(std::ptr::null_mut()), font_dpi: Cell::new(0),
-            taskbar_created: 0, hooks: [std::ptr::null_mut(); 2],
+            taskbar_created: 0, hooks: [std::ptr::null_mut(); 2], tooltip: RefCell::new(None),
         }
     }
 
@@ -159,10 +267,31 @@ impl StripState {
         }
         Ok(self.font.get())
     }
+
+    fn sync_tooltip(&self, text: &str) {
+        if let Ok(mut slot) = self.tooltip.try_borrow_mut() {
+            if let Some(tooltip) = slot.as_mut() { tooltip.set_text(text); }
+        }
+    }
+
+    fn enable_tooltip(&self, enabled: bool) {
+        // Synchronous window messages can reenter this window procedure.
+        if let Ok(mut slot) = self.tooltip.try_borrow_mut() {
+            if let Some(tooltip) = slot.as_mut() { tooltip.set_enabled(enabled); }
+        }
+    }
+
+    fn pop_tooltip(&self) {
+        if let Ok(slot) = self.tooltip.try_borrow() {
+            if let Some(tooltip) = slot.as_ref() { tooltip.pop(); }
+        }
+    }
 }
 
 impl Drop for StripState {
     fn drop(&mut self) {
+        // Userdata is already cleared. Any tooltip notifications now see no Rust state.
+        drop(self.tooltip.get_mut().take());
         // WM_DESTROY가 콜백 대상을 먼저 비운 뒤, 등록한 바로 그 스레드에서 해제한다.
         for hook in &mut self.hooks {
             if !hook.is_null() {
@@ -192,6 +321,7 @@ unsafe impl Sync for StripHandle {}
 impl StripHandle {
     pub fn update(&self, model: Option<StripModel>) {
         if let Ok(mut slot) = self.model.lock() {
+            if *slot == model { return; }
             *slot = model;
         }
         unsafe { PostMessageW(self.hwnd as HWND, WM_STRIP_REDRAW, 0, 0) };
@@ -302,6 +432,8 @@ fn create_window_with_hooks(
             let hook = register(event)?;
             unsafe { (*boxed).hooks[index] = hook; }
         }
+        let tooltip = StripTooltip::new(hwnd)?;
+        unsafe { (*boxed).tooltip.replace(Some(tooltip)); }
         Ok(())
     })();
     if let Err(error) = initialized {
@@ -328,7 +460,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
         WM_STRIP_REDRAW | WM_STRIP_SHELL_CHANGED => {
             if msg == WM_STRIP_SHELL_CHANGED { SHELL_PENDING.with(|pending| pending.set(false)); }
             if let Err(error) = redraw(hwnd) {
-                ShowWindow(hwnd, SW_HIDE);
+                hide_strip(hwnd);
                 eprintln!("spectra: strip redraw failed: {error}");
             }
             0
@@ -336,9 +468,20 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
         WM_LBUTTONUP => {
             let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const StripState;
             if let Some(state) = ptr.as_ref() {
+                state.pop_tooltip();
                 (state.on_click)();
             }
             0
+        }
+        WM_SHOWWINDOW if wparam == 0 => {
+            let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const StripState;
+            if let Some(state) = ptr.as_ref() { state.enable_tooltip(false); }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
+        WM_CANCELMODE | WM_MOUSELEAVE => {
+            let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const StripState;
+            if let Some(state) = ptr.as_ref() { state.pop_tooltip(); }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
         }
         WM_DESTROY => {
             if SHELL_TARGET.with(Cell::get) == hwnd {
@@ -385,10 +528,22 @@ fn shell_font(dpi: u32) -> Result<HFONT, String> {
             .filter(|height| *height > 0).ok_or("strip fallback font size is invalid")?;
         font.lfHeight = -height;
     }
+    font.lfHeight = scale_font_height(font.lfHeight);
+    font.lfWeight = STRIP_FONT_WEIGHT;
     // 검은 DIB와 섞인 안티앨리어싱 픽셀이 알파 복원 후 후광으로 남지 않게 한다.
     font.lfQuality = NONANTIALIASED_QUALITY;
     let handle = unsafe { CreateFontIndirectW(&font) };
     if handle.is_null() { Err(win32_error("CreateFontIndirectW")) } else { Ok(handle) }
+}
+
+fn scale_font_height(height: i32) -> i32 {
+    let magnitude = i64::from(height).abs();
+    let scaled = magnitude
+        .saturating_mul(STRIP_FONT_SCALE_PERCENT)
+        .saturating_add(99)
+        / 100;
+    let scaled = scaled.min(i64::from(i32::MAX)) as i32;
+    if height < 0 { -scaled } else { scaled }
 }
 
 fn bitmap_byte_len(width: i32, height: i32) -> Result<usize, String> {
@@ -717,21 +872,28 @@ fn should_hide(strip: HWND) -> bool {
 }
 
 /// CI와 셸 글꼴로 측정한 크기의 투명 스트립을 작업표시줄 위에 올린다.
+fn hide_strip(hwnd: HWND) {
+    let state = unsafe { (GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const StripState).as_ref() };
+    if let Some(state) = state { state.enable_tooltip(false); }
+    unsafe { ShowWindow(hwnd, SW_HIDE) };
+}
+
 fn redraw(hwnd: HWND) -> Result<(), String> {
     let state = unsafe { (GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const StripState).as_ref() };
     let Some(state) = state else { return Ok(()) };
     let model = state.model.lock().ok().and_then(|slot| slot.clone());
+    state.sync_tooltip(model.as_ref().map(|model| model.tooltip.as_str()).unwrap_or_default());
     let Some(mut model) = model else {
-        unsafe { ShowWindow(hwnd, SW_HIDE) };
+        hide_strip(hwnd);
         return Ok(());
     };
     let (Some((taskbar, edge)), Some(tray)) = (taskbar_rect(), tray_left()) else {
-        unsafe { ShowWindow(hwnd, SW_HIDE) };
+        hide_strip(hwnd);
         return Ok(());
     };
     // 지원하지 않는 세로 작업표시줄에서는 렌더링 자체를 건너뛴다.
     if matches!(edge, TaskbarEdge::Left | TaskbarEdge::Right) || should_hide(hwnd) {
-        unsafe { ShowWindow(hwnd, SW_HIDE) };
+        hide_strip(hwnd);
         return Ok(());
     }
     let dpi = unsafe { GetDpiForWindow(hwnd) };
@@ -741,7 +903,7 @@ fn redraw(hwnd: HWND) -> Result<(), String> {
     let rendered = render_model(&model, theme, font, dpi)?;
     let (width, height) = (rendered.layout.width, rendered.layout.height);
     let Some((x, y)) = place_strip(taskbar, edge, tray, (width, height)) else {
-        unsafe { ShowWindow(hwnd, SW_HIDE) };
+        hide_strip(hwnd);
         return Ok(());
     };
     let surface = &rendered.surface;
@@ -757,6 +919,7 @@ fn redraw(hwnd: HWND) -> Result<(), String> {
             return Err(win32_error("SetWindowPos"));
         }
     }
+    state.enable_tooltip(true);
     Ok(())
 }
 
@@ -765,6 +928,10 @@ mod tests {
     use super::*;
     use crate::taskbar_strip::StripSegment;
     use windows_sys::Win32::Graphics::Gdi::{GetCurrentObject, GetObjectW, OBJ_BITMAP, OBJ_FONT};
+    use windows_sys::Win32::UI::Controls::{
+        TTHITTESTINFOW, TTM_GETMAXTIPWIDTH, TTM_GETTEXTW, TTM_GETTOOLCOUNT,
+        TTM_GETTOOLINFOW, TTM_HITTESTW,
+    };
     use windows_sys::Win32::UI::HiDpi::{
         AreDpiAwarenessContextsEqual, GetWindowDpiAwarenessContext, DPI_AWARENESS_CONTEXT_UNAWARE,
     };
@@ -796,6 +963,86 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires Windows Common Controls; run with --ignored --test-threads=1"]
+    fn tooltip_control_consumes_model_updates_and_releases_with_owner() {
+        std::thread::spawn(|| unsafe {
+            struct WindowGuard(HWND);
+            impl Drop for WindowGuard {
+                fn drop(&mut self) {
+                    unsafe { if IsWindow(self.0) != 0 { DestroyWindow(self.0); } }
+                }
+            }
+            assert!(StripTooltip::new(std::ptr::null_mut()).is_err());
+            let initial = "Claude · 갱신 대기 (캐시)\n마지막 동기화: 5분 전 (데이터 수집 기준)";
+            let make_model = |text: &str| StripModel {
+                segments: vec![StripSegment { label: "Claude".into(), value: "72%".into(), value_color: [80, 180, 160] }],
+                tooltip: text.into(),
+            };
+            let shared = Arc::new(Mutex::new(Some(make_model(initial))));
+            let hwnd = create_window(StripState::new(Arc::clone(&shared), Box::new(|| {}))).unwrap();
+            let owner = WindowGuard(hwnd);
+            let tip = {
+                let state = &*(GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const StripState);
+                let slot = state.tooltip.borrow();
+                slot.as_ref().unwrap().hwnd
+            };
+            let read_text = |expected: &str| {
+                let mut buffer = vec![0u16; expected.encode_utf16().count() + 1];
+                let mut info = TTTOOLINFOW {
+                    cbSize: TOOL_INFO_SIZE,
+                    hwnd, uId: hwnd as usize, lpszText: buffer.as_mut_ptr(),
+                    ..std::mem::zeroed()
+                };
+                SendMessageW(tip, TTM_GETTEXTW, buffer.len(), &mut info as *mut _ as LPARAM);
+                let len = buffer.iter().position(|unit| *unit == 0).unwrap_or(buffer.len());
+                String::from_utf16(&buffer[..len]).unwrap()
+            };
+            // Exercise the same window message/redraw path used by StripHandle::update.
+            SendMessageW(hwnd, WM_STRIP_REDRAW, 0, 0);
+            assert_eq!(SendMessageW(tip, TTM_GETTOOLCOUNT, 0, 0), 1);
+            assert_eq!(read_text(initial), initial, "native control must consume the model payload");
+            let mut info = TTTOOLINFOW {
+                cbSize: TOOL_INFO_SIZE,
+                hwnd, uId: hwnd as usize, ..std::mem::zeroed()
+            };
+            assert_ne!(SendMessageW(tip, TTM_GETTOOLINFOW, 0, &mut info as *mut _ as LPARAM), 0);
+            assert_eq!(info.uFlags & (TTF_IDISHWND | TTF_SUBCLASS), TTF_IDISHWND | TTF_SUBCLASS,
+                "the control must intercept hover messages on the actual strip HWND");
+            assert!(SendMessageW(tip, TTM_GETMAXTIPWIDTH, 0, 0) >= 360, "multiline tips are enabled");
+
+            // Geometry/hit testing uses the real control, without moving the user's cursor.
+            assert_ne!(SetWindowPos(hwnd, std::ptr::null_mut(), 0, 0, 240, 40,
+                SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOMOVE), 0);
+            let mut hit = TTHITTESTINFOW { hwnd, pt: POINT { x: 5, y: 5 }, ti: info };
+            hit.ti.lpszText = std::ptr::null_mut();
+            assert_ne!(SendMessageW(tip, TTM_HITTESTW, 0, &mut hit as *mut _ as LPARAM), 0);
+            assert_eq!(hit.ti.uId, hwnd as usize);
+            SendMessageW(hwnd, WM_MOUSEMOVE, 0, (5 << 16) | 5);
+            SendMessageW(hwnd, WM_MOUSELEAVE, 0, 0);
+
+            let updated = format!("Claude · 로그인 필요\n{}", "갱신 대기 · 🕒 & 100%\n".repeat(100));
+            *shared.lock().unwrap() = Some(make_model(&updated));
+            SendMessageW(hwnd, WM_STRIP_REDRAW, 0, 0);
+            let _heap_churn = vec![vec![42u16; updated.encode_utf16().count() + 1]; 16];
+            assert_eq!(read_text(&updated), updated, "updated UTF-16 buffer must outlive SendMessage");
+            SendMessageW(hwnd, WM_CANCELMODE, 0, 0);
+            *shared.lock().unwrap() = None;
+            SendMessageW(hwnd, WM_STRIP_REDRAW, 0, 0);
+            assert_eq!(read_text(""), "");
+            assert_eq!(IsWindowVisible(hwnd), 0);
+            assert_eq!(IsWindowVisible(tip), 0);
+            {
+                let state = &*(GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const StripState);
+                assert!(!state.tooltip.borrow().as_ref().unwrap().enabled);
+            }
+            drop(owner);
+            assert_eq!(IsWindow(hwnd), 0);
+            assert_eq!(IsWindow(tip), 0, "tooltip must not outlive its owner/buffer");
+            discard_quit_message();
+        }).join().unwrap();
+    }
+
+    #[test]
     #[ignore = "requires a Windows desktop; run with --ignored --test-threads=1"]
     fn shell_hooks_release_after_ten_window_lifecycles() {
         std::thread::spawn(|| unsafe {
@@ -803,6 +1050,7 @@ mod tests {
                 let hwnd = create_window(StripState::new(Arc::new(Mutex::new(None)), Box::new(|| {}))).unwrap();
                 let state = &*(GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const StripState);
                 let hooks = state.hooks;
+                let tooltip = state.tooltip.borrow().as_ref().unwrap().hwnd;
                 assert!(hooks.iter().all(|hook| !hook.is_null()));
                 assert_eq!(SHELL_TARGET.with(Cell::get), hwnd);
                 assert!(state.taskbar_created >= 0xc000);
@@ -810,6 +1058,7 @@ mod tests {
                 assert!(SHELL_PENDING.with(Cell::get));
                 assert_ne!(DestroyWindow(hwnd), 0);
                 assert_eq!(IsWindow(hwnd), 0);
+                assert_eq!(IsWindow(tooltip), 0, "owned tooltip must be released in cycle {cycle}");
                 assert!(SHELL_TARGET.with(Cell::get).is_null());
                 assert!(!SHELL_PENDING.with(Cell::get));
                 for hook in hooks {
@@ -976,7 +1225,8 @@ mod tests {
             assert_ne!(SystemParametersInfoForDpi(
                 SPI_GETNONCLIENTMETRICS, metrics.cbSize, &mut metrics as *mut _ as *mut _, 0, 144,
             ), 0);
-            assert_eq!(font.lfHeight, metrics.lfStatusFont.lfHeight, "use the scaled shell height");
+            assert_eq!(font.lfHeight, scale_font_height(metrics.lfStatusFont.lfHeight), "use the slightly larger scaled shell height");
+            assert_eq!(font.lfWeight, STRIP_FONT_WEIGHT, "use a semibold strip font");
             assert_eq!(font.lfFaceName, metrics.lfStatusFont.lfFaceName, "use the shell font family");
             assert_eq!(font.lfQuality, NONANTIALIASED_QUALITY);
         }

@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { parseBootState, providersMissingFromBoot } from "../src/integrations/boot-state.ts";
+import { parseBootState, providersMissingFromBoot, providersToRefreshAfterBoot } from "../src/integrations/boot-state.ts";
 
 const snapshot = {
   providerId: "codex", runtimeAvailable: true, authState: "signed-in", connectionState: "connected",
@@ -78,5 +78,23 @@ describe("providersMissingFromBoot", () => {
   it("lists nothing when every provider was restored", () => {
     const boot = parseBootState({ theme: "dark", solid: false, standby: true, mode: "mini", snapshots: [snapshot, { ...snapshot, providerId: "claude" }] });
     assert.deepEqual(providersMissingFromBoot(boot, all), []);
+  });
+});
+
+describe("providersToRefreshAfterBoot", () => {
+  const all = ["codex", "claude"] as const;
+
+  it("refreshes a restored Claude snapshot in addition to missing providers", () => {
+    const boot = parseBootState({ theme: "dark", solid: false, standby: true, mode: "mini", snapshots: [snapshot, { ...snapshot, providerId: "claude" }] });
+    assert.deepEqual(providersToRefreshAfterBoot(boot, all), ["claude"]);
+  });
+
+  it("does not add Claude when it was not restored", () => {
+    const boot = parseBootState({ theme: "dark", solid: false, standby: true, mode: "mini", snapshots: [snapshot] });
+    assert.deepEqual(providersToRefreshAfterBoot(boot, all), ["claude"]);
+  });
+
+  it("refreshes every provider on a cold boot", () => {
+    assert.deepEqual(providersToRefreshAfterBoot(null, all), ["codex", "claude"]);
   });
 });

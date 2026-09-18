@@ -1,6 +1,6 @@
 {
   "name": "spectra-ai-usage-widget",
-  "version": "0.2.1",
+  "version": "0.2.4",
   "private": true,
   "type": "module",
   "description": "Code-first React/TypeScript product screen for a cross-platform AI usage widget.",
@@ -13,10 +13,13 @@
     "verify:baseline": "node scripts/verify-design-baseline.mjs",
     "verify:tokens": "node scripts/verify-design-tokens.mjs",
     "verify:memory": "node scripts/verify-memory-budget.mjs",
+    "verify:release": "node scripts/verify-release.mjs",
     "test": "node --test \"tests/**/*.test.ts\"",
     "measure:memory": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/measure-memory.ps1"
   },
   "dependencies": {
+    "@tauri-apps/plugin-process": "2.3.1",
+    "@tauri-apps/plugin-updater": "2.11.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
   },

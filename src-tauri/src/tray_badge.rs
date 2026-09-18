@@ -120,6 +120,7 @@ mod tests {
                 id: id.to_string(), label: id.to_string(), used_percent: 100.0 - remaining, remaining_percent: remaining, resets_at: None, window_duration_mins: None,
             }).collect(),
             message: String::new(),
+            live_failure: None,
         }
     }
 

@@ -12,6 +12,8 @@ mod taskbar_strip;
 #[cfg(target_os = "windows")]
 mod taskbar_window;
 mod tray_badge;
+#[cfg(any(target_os = "windows", test))]
+mod usage_refresh;
 
 #[cfg(feature = "native-oauth")]
 use std::io::{Read, Write};
@@ -20,9 +22,9 @@ use std::net::TcpListener;
 use std::sync::Mutex;
 
 use serde::Serialize;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 #[cfg(feature = "native-oauth")]
-use tauri::{Emitter, Runtime};
+use tauri::Runtime;
 #[cfg(feature = "native-oauth")]
 use tauri_plugin_deep_link::DeepLinkExt;
 #[cfg(feature = "native-oauth")]
@@ -41,6 +43,8 @@ pub struct AppState {
     pub(crate) snapshot_requests: Mutex<std::collections::HashMap<String, u64>>,
     #[cfg(target_os = "windows")]
     pub(crate) strip: Mutex<Option<taskbar_window::StripHandle>>,
+    #[cfg(target_os = "windows")]
+    pub(crate) strip_refresh_started: std::sync::atomic::AtomicBool,
 }
 
 impl AppState {
@@ -240,8 +244,12 @@ fn credential_remove(provider_id: String) -> Result<(), String> {
     let _ = provider_id;
     Ok(())
 }
-#[tauri::command]
-async fn provider_usage_snapshot(
+/// Event carrying a fresh `ProviderUsageSnapshot` to the WebView. It also fires for
+/// command-initiated lookups; the frontend applies whichever snapshot arrives last.
+pub(crate) const PROVIDER_USAGE_EVENT: &str = "provider-usage-updated";
+
+/// Shared by the `provider_usage_snapshot` command and the native refresh loop.
+pub(crate) async fn refresh_provider(
     app: AppHandle,
     provider_id: String,
 ) -> Result<provider_usage::ProviderUsageSnapshot, String> {
@@ -250,15 +258,26 @@ async fn provider_usage_snapshot(
     let snapshot = tauri::async_runtime::spawn_blocking(move || provider_usage::snapshot(&worker_provider_id))
         .await
         .map_err(|_| "provider usage worker failed".to_string())?;
-    // A newer request for the same provider may have finished first; the standby cache and the
-    // tray badge follow the newest request only, mirroring the frontend's refresh sequencing.
+    // A newer request for the same provider may have finished first; the standby cache, the
+    // tray badge, the strip and the WebView follow the newest request only.
     let state = app.state::<AppState>();
     if state.snapshot_request_is_current(&provider_id, ticket) {
         state.remember_snapshot(&snapshot);
         desktop_shell::update_tray_badge(&app);
         desktop_shell::update_taskbar_strip(&app);
+        if let Err(error) = app.emit(PROVIDER_USAGE_EVENT, &snapshot) {
+            eprintln!("spectra: provider usage event was not delivered: {error}");
+        }
     }
     Ok(snapshot)
+}
+
+#[tauri::command]
+async fn provider_usage_snapshot(
+    app: AppHandle,
+    provider_id: String,
+) -> Result<provider_usage::ProviderUsageSnapshot, String> {
+    refresh_provider(app, provider_id).await
 }
 
 #[tauri::command]
@@ -319,12 +338,19 @@ fn set_standby(enabled: bool, state: State<'_, AppState>) -> Result<standby::UiP
 fn set_strip(enabled: bool, app: AppHandle, state: State<'_, AppState>) -> Result<standby::UiPrefs, String> {
     let prefs = apply_prefs(&state, |prefs| prefs.strip = enabled)?;
     desktop_shell::update_taskbar_strip(&app);
+    #[cfg(target_os = "windows")]
+    if enabled {
+        desktop_shell::ensure_usage_refresh_loop(&app);
+    }
     Ok(prefs)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let mut builder = tauri::Builder::default().plugin(tauri_plugin_deep_link::init());
+    let mut builder = tauri::Builder::default()
+        .plugin(tauri_plugin_deep_link::init())
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build());
 
     #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
     {
@@ -374,6 +400,10 @@ pub fn run() {
                 eprintln!("spectra: main window could not be shown at startup: {error}");
             }
             desktop_shell::update_taskbar_strip(app.handle());
+            #[cfg(target_os = "windows")]
+            if app.state::<AppState>().ui.lock().map(|prefs| prefs.strip).unwrap_or(false) {
+                desktop_shell::ensure_usage_refresh_loop(app.handle());
+            }
 
             #[cfg(feature = "native-oauth")]
             {
@@ -432,6 +462,7 @@ mod app_state_tests {
             bridge_installed: true,
             windows: Vec::new(),
             message: message.to_string(),
+            live_failure: None,
         }
     }
 

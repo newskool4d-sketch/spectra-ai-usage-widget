@@ -35,8 +35,10 @@ export type PlanQuota = Readonly<{
   source: QuotaSource;
   confidence: QuotaConfidence;
   lastSyncedAt: string | null;
+  lastSyncedAtMs?: number | null; // Data capture time, not the refresh request time.
   bridgeInstalled: boolean;
   statusMessage: string;
+  liveFailure?: string | null; // Native lookup failure code; undefined for browser demo data.
   windows: readonly QuotaWindow[];
 }>;
 

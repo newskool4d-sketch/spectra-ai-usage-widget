@@ -11,7 +11,7 @@ SPECTRA는 트레이에 오래 머무는 앱이므로 사용량 연결 뒤에도
 - Codex JSONL은 총 2MiB, JSON 파일은 4MiB, Claude 상태선 입력은 1MiB로 제한합니다.
 - 기존 Claude 상태선 명령은 2초, 출력은 64KiB로 제한합니다.
 - 로그인 직후 확인은 대화상자가 열린 동안 단일 재귀 `setTimeout`으로만 수행하며 성공·닫기·30회 제한에서 종료합니다.
-- 앱 유휴 상태에서는 provider 폴링을 하지 않습니다. 시작 시 한 번, 사용자가 새로고침할 때 한 번 조회합니다.
+- 작업표시줄 표시가 꺼진 유휴 상태에서는 provider 폴링을 하지 않습니다. 표시가 켜진 동안에만 네이티브 루프가 2분 주기로 Claude → Codex를 순차 재조회하며, 실패는 최대 30분까지 백오프하고 토큰 만료 중에는 조회하지 않습니다(2026-09-18).
 - `matchMedia` 리스너는 한 개만 등록하고 effect cleanup에서 해제합니다.
 - `prefers-reduced-motion`을 존중합니다.
 
@@ -197,7 +197,7 @@ fat 빌드(`spectra-native.exe`, SHA-256 `883195EE…`)로 사용자가 직접 �
 
 ## 2026-09-12 작업표시줄 스트립 (B안)
 
-변경: 기존 `windows-sys 0.61.2`에 `Win32_UI_Accessibility` feature를 추가하고, 네이티브 레이어드 스트립 창 1개와 전용 메시지 스레드 1개를 사용했다. WebView 창은 추가하지 않는다. 스트립은 공급자 스냅샷 완료와 셸 변화 이벤트에서 캐시된 값을 다시 그리며 데이터 목적의 타이머나 폴링을 사용하지 않는다.
+변경: 기존 `windows-sys 0.61.2`에 `Win32_UI_Accessibility` feature를 추가하고, 네이티브 레이어드 스트립 창 1개와 전용 메시지 스레드 1개를 사용했다. WebView 창은 추가하지 않는다. 스트립은 공급자 스냅샷 완료와 셸 변화 이벤트에서 캐시된 값을 다시 그린다. 갱신 주기는 2026-09-18 절에서 개정했다.
 
 대기 조건은 `standby=true`, `strip=true`, 미니 창 닫힘 상태였다. Task 5 standalone 실행 파일 PID 25064를 대상으로 60초 안정화 후 30초 간격으로 61개 표본을 수집했다. 측정 구간은 2026-09-12 17:33:01~18:03:40 KST(총 1,839초), 표본 간격은 30~31초였다. CSV 원자료는 [`standby-strip-task6-20260912.csv`](./measurements/standby-strip-task6-20260912.csv)이며 SHA-256은 `39E93B88F85742EEA66BF6D61EE1D512B67E54233D1BAB00E9DAA769C4166608`이다.
 
@@ -208,4 +208,12 @@ fat 빌드(`spectra-native.exe`, SHA-256 `883195EE…`)로 사용자가 직접 �
 평균 작업 집합은 기준 35 MB보다 1.4 MB 낮고, 프로세스 수는 전 표본에서 1개였다. 대기 스트립의 총 작업 집합 목표와 WebView 파기 조건을 모두 충족한다. 실행 파일은 Task 5 standalone 빌드 `5,881,344 B`, SHA-256 `456DC56FDFC0A520744A6B621491C4D87C815065489BB5E3714BFEA8A51BDEFA`이며, Phase 4 기준 5,836,800 B보다 44,544 B(약 0.76%) 증가했다.
 
 Task 5의 셸 이벤트·WinEvent·자동숨김·F11·Explorer 재시작 검증은 별도 [Task 5 보고서](../superpowers/sdd/2026-09-12-taskbar-usage-strip/task-5-report.md)에 기록했다. 이번 측정은 대기 모드의 메모리·프로세스 수만 판정한다. 활성 미니 창 30분 메모리 목표(Phase 3 평균 422.6 MB)는 이 결과로 변경하지 않는다. 추가 D3D·다중 모니터·30분 가려짐 관찰은 실시하지 않았다.
+
+## 2026-09-18 스트립 주기 갱신 (A안)
+
+변경: 작업표시줄 표시가 켜진 동안 네이티브 루프(`spectra-usage-refresh`, 15초 tick)가 Claude → Codex를 120초마다 순차 재조회한다. `.credentials.json`이 다시 쓰이면 다음 tick에 Claude를 즉시 재조회하고, 실패는 120·240·480·960·1800초로 백오프하며, 토큰 만료(`claude-oauth-token-expired`)는 자격 증명 변경 또는 30분까지 조회를 보류한다. 갱신된 스냅샷은 `provider-usage-updated` 이벤트로 WebView에도 전달된다. 규칙과 근거는 [`docs/superpowers/specs/2026-09-18-strip-periodic-refresh.md`](../superpowers/specs/2026-09-18-strip-periodic-refresh.md)에 있다.
+
+비용(2026-09-18 실측, 설치본 0.2.3): Claude 조회 1.1초(`claude auth status` + HTTPS 1회), Codex 조회 1.3초(`codex app-server` + RPC 2회). 두 프로세스 모두 조회 직후 종료되므로 상주 메모리 증가는 없고, 2분당 약 2.4초의 단기 실행이 더해진다. 위 2026-09-12 standby-strip 30분 실측(평균 33.6 MB)은 주기 갱신 이전 값이며, 같은 시나리오 재측정은 후속 항목이다.
+
+주의(2026-09-18 확인): `npm run verify:memory`는 이 변경 이전인 `a87d1a5`에서 이미 FAIL이었다 — JS 번들 244,894 B(예산 240,000 B 초과)와 `dd94c17`(0.2.2 업데이터·Claude 신선도 라벨)이 추가한 `QuotaBoard`의 15초 `setInterval` 패턴 때문이다. 이번 변경은 +650 B(245,544 B)로 판정을 바꾸지 않는다. 예산 재설정 또는 타이머 교체는 별도 결정 사항이다.
 

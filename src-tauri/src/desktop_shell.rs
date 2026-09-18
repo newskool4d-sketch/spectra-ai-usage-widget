@@ -2,6 +2,8 @@ use tauri::menu::MenuBuilder;
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{App, AppHandle, LogicalSize, Manager, Runtime, Size, WebviewWindow};
 use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(target_os = "windows")]
+use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::image::Image;
 
 pub(crate) const MAIN_WINDOW_LABEL: &str = "main";
@@ -286,6 +288,79 @@ pub(crate) fn update_taskbar_strip<R: Runtime>(app: &AppHandle<R>) {
     }
 }
 
+/// Periodic provider refresh while the strip is visible: two-minute cadence, the Claude reset
+/// boundary, an immediate retry when Claude Code rewrites its credentials, exponential backoff
+/// on failures and a hold while the OAuth token is expired (spec 2026-09-18 §2-3).
+#[cfg(target_os = "windows")]
+pub(crate) fn ensure_usage_refresh_loop(app: &AppHandle) {
+    let state = app.state::<crate::AppState>();
+    if !state.ui.lock().map(|prefs| prefs.strip).unwrap_or(false) {
+        return;
+    }
+    if state
+        .strip_refresh_started
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return;
+    }
+
+    let worker = app.clone();
+    let spawned = std::thread::Builder::new()
+        .name("spectra-usage-refresh".to_string())
+        .spawn(move || {
+            let mut scheduler = crate::usage_refresh::Scheduler::new(unix_now());
+            loop {
+                std::thread::sleep(crate::usage_refresh::TICK);
+                let state = worker.state::<crate::AppState>();
+                let enabled = state.ui.lock().map(|prefs| prefs.strip).unwrap_or(false);
+                let snapshots = state.last_snapshots.lock().map(|list| list.clone()).unwrap_or_default();
+                let now = unix_now();
+                if enabled {
+                    // Age/reset labels must advance even with no new response; this performs no lookup.
+                    update_taskbar_strip(&worker);
+                }
+                let due = scheduler.plan(crate::usage_refresh::Inputs {
+                    now,
+                    strip_enabled: enabled,
+                    claude_reset_due: claude_reset_due(&snapshots, now),
+                    credentials_modified: crate::provider_usage::claude_credentials_modified(),
+                });
+                // Sequential on purpose: never spawn both provider CLIs at once.
+                for provider in due {
+                    let started = std::time::Instant::now();
+                    let result = tauri::async_runtime::block_on(crate::refresh_provider(worker.clone(), provider.id().to_string()));
+                    let outcome = match &result {
+                        Ok(snapshot) => crate::usage_refresh::outcome_for(snapshot),
+                        Err(error) => {
+                            eprintln!("spectra: scheduled {} refresh failed: {error}", provider.id());
+                            crate::usage_refresh::Outcome::Failed
+                        }
+                    };
+                    scheduler.record(provider, unix_now(), outcome);
+                    crate::standby::log_timing(&format!("usage_refresh:{}:{}", provider.id(), outcome.label()), started.elapsed());
+                }
+            }
+        });
+    if let Err(error) = spawned {
+        state.strip_refresh_started.store(false, Ordering::Release);
+        eprintln!("spectra: usage refresh loop is unavailable: {error}");
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn unix_now() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()
+}
+
+#[cfg(target_os = "windows")]
+fn claude_reset_due(snapshots: &[crate::provider_usage::ProviderUsageSnapshot], now: u64) -> bool {
+    snapshots
+        .iter()
+        .find(|snapshot| snapshot.provider_id == "claude")
+        .is_some_and(|snapshot| snapshot.windows.iter().any(|window| window.resets_at.is_some_and(|reset| reset <= now)))
+}
+
 #[cfg(not(target_os = "windows"))]
 pub(crate) fn update_taskbar_strip<R: Runtime>(_app: &AppHandle<R>) {}
 
@@ -342,5 +417,33 @@ mod tests {
         assert!(!try_begin_recreate(&flag));
         drop(RecreateGuard(&flag));
         assert!(try_begin_recreate(&flag));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn claude_reset_refresh_starts_only_after_a_window_reset() {
+        let snapshot = crate::provider_usage::ProviderUsageSnapshot {
+            provider_id: "claude".into(),
+            runtime_available: true,
+            auth_state: "signed-in".into(),
+            connection_state: "connected".into(),
+            auth_method: None,
+            plan_type: None,
+            source: Some("claude-usage-api".into()),
+            last_synced_at: Some(100),
+            bridge_installed: false,
+            windows: vec![crate::provider_usage::ProviderQuotaWindow {
+                id: "rolling".into(),
+                label: "5시간 한도".into(),
+                used_percent: 20.0,
+                remaining_percent: 80.0,
+                resets_at: Some(120),
+                window_duration_mins: Some(300),
+            }],
+            message: String::new(),
+            live_failure: None,
+        };
+        assert!(!super::claude_reset_due(&[snapshot.clone()], 119));
+        assert!(super::claude_reset_due(&[snapshot], 120));
     }
 }

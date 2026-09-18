@@ -1,0 +1,76 @@
+name: Publish SPECTRA
+
+on:
+  push:
+    tags:
+      - "v*"
+
+concurrency:
+  group: publish-windows-release
+  cancel-in-progress: false
+
+jobs:
+  publish-tauri:
+    permissions:
+      contents: write
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Verify release version
+        run: node scripts/verify-release.mjs
+
+      - name: Verify signing secret is configured
+        env:
+          SIGNING_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:SIGNING_KEY)) {
+            throw 'TAURI_SIGNING_PRIVATE_KEY is required before publishing'
+          }
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Test frontend
+        run: npm test
+
+      - name: Test native library
+        run: cargo test --manifest-path src-tauri/Cargo.toml --lib --locked
+
+      - name: Build draft Tauri release
+        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: SPECTRA ${{ github.ref_name }}
+          releaseBody: "변경사항과 설치 안내: https://github.com/${{ github.repository }}/releases/tag/${{ github.ref_name }}"
+          releaseDraft: true
+          prerelease: false
+          args: --bundles nsis -- --locked
+          uploadUpdaterJson: true
+          updaterJsonPreferNsis: true
+          uploadUpdaterSignatures: true
+
+      - name: Verify complete assets and publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $assetDir = Join-Path $env:RUNNER_TEMP 'spectra-release-assets'
+          gh release download $env:GITHUB_REF_NAME --repo $env:GITHUB_REPOSITORY --dir $assetDir
+          if ($LASTEXITCODE -ne 0) { throw 'Draft asset download failed' }
+          node scripts/verify-release.mjs $assetDir
+          if ($LASTEXITCODE -ne 0) { throw 'Release asset verification failed' }
+          gh release upload $env:GITHUB_REF_NAME (Join-Path $assetDir 'SHA256SUMS.txt') --repo $env:GITHUB_REPOSITORY --clobber
+          if ($LASTEXITCODE -ne 0) { throw 'Checksum upload failed' }
+          gh release edit $env:GITHUB_REF_NAME --repo $env:GITHUB_REPOSITORY --notes-file "docs/releases/$($env:GITHUB_REF_NAME).md" --draft=false --latest
+          if ($LASTEXITCODE -ne 0) { throw 'Release publication failed' }
