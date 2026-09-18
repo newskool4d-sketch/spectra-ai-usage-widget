@@ -1,6 +1,6 @@
 # SPECTRA 작업표시줄 스트립 주기 갱신 (A안) 설계
 
-> 작성: 2026-09-18 · 기준 커밋 `a87d1a5`(브랜치 `feat/taskbar-usage-strip`, 설치본 0.2.3) · 상태: 구현 완료(2026-09-18, plan Task 1~6 커밋 `01677fa`→`12fc47d`; cargo 83 기본/85 native-oauth 통과 · 릴리스 빌드 2구성 경고 0 · npm 50 통과 · tokens·baseline PASS · lock 파일 변경 없음; `verify:memory`는 기준 커밋부터 FAIL — memory-budget.md 2026-09-18 절 참조) · 실물 검증(§1 주기·창 일치 행) 승인 대기 · 대기 재측정 후속
+> 작성: 2026-09-18 · 기준 커밋 `a87d1a5`(브랜치 `feat/taskbar-usage-strip`, 설치본 0.2.3) · 상태: 구현 완료(2026-09-18, plan Task 1~6 커밋 `01677fa`→`12fc47d`; cargo 83 기본/85 native-oauth 통과 · 릴리스 빌드 2구성 경고 0 · npm 50 통과 · tokens·baseline PASS · lock 파일 변경 없음; `verify:memory`는 기준 커밋부터 FAIL — memory-budget.md 2026-09-18 절 참조) · 실물 검증 완료(2026-09-18 22:02~22:10, no-bundle EXE `SPECTRA_TIMING_LOG=1`): `usage_refresh:claude:ok` 22:04:59(시작 +122초)·22:07:01(+123초), `usage_refresh:codex:ok` 22:05:01·22:07:03(+122초), 한 tick 안에서 Claude → Codex 순차, 조회 소요 Claude 843~966 ms·Codex 1.5~1.9초; 캐시 `captured_at`도 같은 시각에 갱신; 스트립 창 `SpectraTaskbarStrip` 표시 유지, 값이 사용자 조작 없이 48% → 45%로 변함 · 창 일치는 사용자 육안 확인 · 대기 재측정 후속
 > 목표: 작업표시줄 표시가 켜진 동안 Codex·Claude 잔여율이 사용자 조작 없이 **2분 이내** 최신값을 따라가고, Claude Code 세션이 토큰을 갱신하면 **수 초 안에** "동기화됨"으로 복귀한다. 2026-09-12 스펙이 확보한 대기 프로세스 1개는 유지한다.
 
 ## 0. 배경 — 2026-09-18 진단 요약
