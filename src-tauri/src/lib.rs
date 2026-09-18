@@ -12,6 +12,9 @@ mod taskbar_strip;
 #[cfg(target_os = "windows")]
 mod taskbar_window;
 mod tray_badge;
+#[cfg(any(target_os = "windows", test))]
+#[allow(dead_code)] // Task 3 wires the loop; the allow is removed there.
+mod usage_refresh;
 
 #[cfg(feature = "native-oauth")]
 use std::io::{Read, Write};
