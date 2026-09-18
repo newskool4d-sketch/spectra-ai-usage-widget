@@ -14,7 +14,7 @@
 
 - **의존성**: `windows-sys = { version = "0.61.2", ... }`를 `[target.'cfg(target_os = "windows")'.dependencies]`에만 추가한다. 다른 신규 크레이트 금지. `Cargo.lock`의 허용 변경은 **`[[package]] name = "spectra-native"`의 의존 목록에 `"windows-sys 0.61.2",` 한 줄이 추가되는 것뿐**이다 — 새 `[[package]]` 블록 0개, 버전 변경 0개(features는 lock에 기록되지 않음). Task 2에서 `git diff -- Cargo.lock`으로 검증. (2026-09-12 정정: 직접 의존을 추가하면 이 엣지 한 줄은 크레이트가 이미 트리에 있어도 반드시 생기므로 초안의 "바이트 동일"은 달성 불가능한 문구였다)
 - **기본값은 현행 동작**: `UiPrefs::default().strip == false` → 스트립 창을 아예 만들지 않는다
-- **무조건 폴링 금지**: 일반 공급자 대상 `SetTimer`/스레드 sleep 폴링은 두지 않는다. 작업표시줄 표시 상태에서 Claude의 저장된 초기화 시각이 지난 경우에만 15초 확인 간격·최소 60초 재시도로 `provider_usage_snapshot`을 호출한다. 셸 메시지(`WM_SETTINGCHANGE`·`WM_DISPLAYCHANGE`·`WM_DPICHANGED`·`TaskbarCreated`)와 Task 5의 WinEvent(전경 창·창 위치 변화)로 위치·테마·전체화면 상태를 재확인한다. WinEvent에서 공급자 조회를 호출하지 않는다.
+- **무조건 폴링 금지** (2026-09-18 대체 — 현행 규칙은 `docs/superpowers/plans/2026-09-18-strip-periodic-refresh.md`): 일반 공급자 대상 `SetTimer`/스레드 sleep 폴링은 두지 않는다. 작업표시줄 표시 상태에서 Claude의 저장된 초기화 시각이 지난 경우에만 15초 확인 간격·최소 60초 재시도로 `provider_usage_snapshot`을 호출한다. 셸 메시지(`WM_SETTINGCHANGE`·`WM_DISPLAYCHANGE`·`WM_DPICHANGED`·`TaskbarCreated`)와 Task 5의 WinEvent(전경 창·창 위치 변화)로 위치·테마·전체화면 상태를 재확인한다. WinEvent에서 공급자 조회를 호출하지 않는다.
 - **테마 출처**: 스트립은 `HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize\SystemUsesLightTheme`를 따른다. `UiPrefs.theme`와 **연결 금지**
 - **좌표계**: 스트립 전용 스레드가 창 생성 전에 `SetThreadDpiAwarenessContext(PER_MONITOR_AWARE_V2)`를 설정한다. Tauri 초기화를 건너뛰는 프로브도 동일한 물리 좌표계를 사용한다. 프로세스 기본 DPI 설정을 추정하지 않으며, 논리 픽셀을 가정한 상수를 두지 않는다.
 - **범위**: 주 작업표시줄·가로(TOP/BOTTOM)만. `Shell_SecondaryTrayWnd`·세로 작업표시줄은 스트립을 띄우지 않고 조용히 건너뛴다
@@ -1379,7 +1379,7 @@ Expected: Phase 4 기준 5,836,800 B 대비 증가분을 기록. `windows-sys`�
 |---|---|---|---|---|
 | standby-strip (30분, 스트립 켬) | 61 | (측정값) MB | 1 | ≤ 35 MB |
 
-갱신 트리거: `provider_usage_snapshot` 완료 · `WM_SETTINGCHANGE` · `WM_DISPLAYCHANGE` · `TaskbarCreated` · Claude 초기화 시각 경과(15초 확인 간격, 재시도 최소 60초).
+갱신 트리거: `provider_usage_snapshot` 완료 · `WM_SETTINGCHANGE` · `WM_DISPLAYCHANGE` · `TaskbarCreated` · 표시 중 2분 주기 네이티브 갱신(2026-09-18).
 ```
 
 `README.md`의 대기 모드 설명 문단 끝에 한 문장 추가:
@@ -1409,7 +1409,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 |---|---|
 | §1 표시·위치 기준 | Task 2(위치)·3(텍스트)·5(육안 검증) |
 | §1 메모리 ≤35 MB·프로세스 1 | Task 2(네이티브 선택)·6(측정) |
-| §1 무조건 폴링 없음·Claude 초기화 경계 갱신 | Task 4(스냅샷 지점 배선)·5(셸 이벤트·초기화 감시) |
+| §1 갱신(2026-09-18 개정) | 2026-09-18 plan Task 2·3 |
 | §1 테마 추종 | Task 4(`current_theme` 사용)·5(`WM_SETTINGCHANGE`) |
 | §1 기본값 꺼짐 | Task 4(`UiPrefs.strip` 기본 false) |
 | §1 explorer 재시작 복원 | Task 5(`TaskbarCreated`) |
