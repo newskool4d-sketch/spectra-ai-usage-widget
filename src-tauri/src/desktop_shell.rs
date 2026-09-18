@@ -3,7 +3,7 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::{App, AppHandle, LogicalSize, Manager, Runtime, Size, WebviewWindow};
 use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(target_os = "windows")]
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::image::Image;
 
 pub(crate) const MAIN_WINDOW_LABEL: &str = "main";
@@ -288,10 +288,11 @@ pub(crate) fn update_taskbar_strip<R: Runtime>(app: &AppHandle<R>) {
     }
 }
 
-/// Claude's reset timestamp is the one provider signal that can become stale while the
-/// WebView is destroyed. Keep the native strip self-healing without polling until a reset.
+/// Periodic provider refresh while the strip is visible: two-minute cadence, the Claude reset
+/// boundary, an immediate retry when Claude Code rewrites its credentials, exponential backoff
+/// on failures and a hold while the OAuth token is expired (spec 2026-09-18 §2-3).
 #[cfg(target_os = "windows")]
-pub(crate) fn ensure_taskbar_refresh_loop(app: &AppHandle) {
+pub(crate) fn ensure_usage_refresh_loop(app: &AppHandle) {
     let state = app.state::<crate::AppState>();
     if !state.ui.lock().map(|prefs| prefs.strip).unwrap_or(false) {
         return;
@@ -306,44 +307,50 @@ pub(crate) fn ensure_taskbar_refresh_loop(app: &AppHandle) {
 
     let worker = app.clone();
     let spawned = std::thread::Builder::new()
-        .name("spectra-claude-reset-refresh".to_string())
+        .name("spectra-usage-refresh".to_string())
         .spawn(move || {
-            let mut last_attempt = 0_u64;
+            let mut scheduler = crate::usage_refresh::Scheduler::new(unix_now());
             loop {
-                std::thread::sleep(Duration::from_secs(15));
+                std::thread::sleep(crate::usage_refresh::TICK);
                 let state = worker.state::<crate::AppState>();
                 let enabled = state.ui.lock().map(|prefs| prefs.strip).unwrap_or(false);
-                if !enabled {
-                    last_attempt = 0;
-                    continue;
-                }
-
                 let snapshots = state.last_snapshots.lock().map(|list| list.clone()).unwrap_or_default();
-                let now = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs();
-                let reset_due = claude_reset_due(&snapshots, now);
-                // Age/reset status must advance even with no WebView or new response.
-                // This reuses the existing wake-up and performs no provider lookup.
-                update_taskbar_strip(&worker);
-                if !reset_due || now.saturating_sub(last_attempt) < 60 {
-                    continue;
+                let now = unix_now();
+                if enabled {
+                    // Age/reset labels must advance even with no new response; this performs no lookup.
+                    update_taskbar_strip(&worker);
                 }
-
-                last_attempt = now;
-                let refresh_app = worker.clone();
-                tauri::async_runtime::spawn(async move {
-                    if let Err(error) = crate::provider_usage_snapshot(refresh_app, "claude".to_string()).await {
-                        eprintln!("spectra: scheduled Claude reset refresh failed: {error}");
-                    }
+                let due = scheduler.plan(crate::usage_refresh::Inputs {
+                    now,
+                    strip_enabled: enabled,
+                    claude_reset_due: claude_reset_due(&snapshots, now),
+                    credentials_modified: crate::provider_usage::claude_credentials_modified(),
                 });
+                // Sequential on purpose: never spawn both provider CLIs at once.
+                for provider in due {
+                    let started = std::time::Instant::now();
+                    let result = tauri::async_runtime::block_on(crate::refresh_provider(worker.clone(), provider.id().to_string()));
+                    let outcome = match &result {
+                        Ok(snapshot) => crate::usage_refresh::outcome_for(snapshot),
+                        Err(error) => {
+                            eprintln!("spectra: scheduled {} refresh failed: {error}", provider.id());
+                            crate::usage_refresh::Outcome::Failed
+                        }
+                    };
+                    scheduler.record(provider, unix_now(), outcome);
+                    crate::standby::log_timing(&format!("usage_refresh:{}:{}", provider.id(), outcome.label()), started.elapsed());
+                }
             }
         });
     if let Err(error) = spawned {
         state.strip_refresh_started.store(false, Ordering::Release);
-        eprintln!("spectra: Claude reset refresh loop is unavailable: {error}");
+        eprintln!("spectra: usage refresh loop is unavailable: {error}");
     }
+}
+
+#[cfg(target_os = "windows")]
+fn unix_now() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()
 }
 
 #[cfg(target_os = "windows")]

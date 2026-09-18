@@ -579,6 +579,23 @@ fn claude_credentials_path() -> Option<PathBuf> {
         .map(|path| path.join(".claude").join(".credentials.json"))
 }
 
+/// Modification stamp (unix milliseconds) of the file at `path`, `None` when unreadable.
+pub(crate) fn modified_stamp(path: &Path) -> Option<u64> {
+    fs::metadata(path)
+        .ok()?
+        .modified()
+        .ok()?
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .map(|elapsed| elapsed.as_millis() as u64)
+}
+
+/// Claude Code rewrites its credentials file whenever a session refreshes the OAuth token;
+/// the refresh loop watches this stamp to retry right away instead of waiting out a hold.
+pub(crate) fn claude_credentials_modified() -> Option<u64> {
+    claude_credentials_path().and_then(|path| modified_stamp(&path))
+}
+
 fn unix_now_millis() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1311,6 +1328,18 @@ mod tests {
         let path = env::temp_dir().join(format!("spectra-{name}-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&path).unwrap();
         path
+    }
+
+    #[test]
+    fn modified_stamp_tracks_rewrites_and_missing_files() {
+        let dir = temp_dir("stamp");
+        let path = dir.join("credentials.json");
+        assert_eq!(modified_stamp(&path), None);
+        fs::write(&path, b"{}").unwrap();
+        let first = modified_stamp(&path).expect("a written file has a stamp");
+        let later = SystemTime::now() + Duration::from_secs(5);
+        fs::File::options().write(true).open(&path).unwrap().set_modified(later).unwrap();
+        assert!(modified_stamp(&path).unwrap() > first);
     }
 
     #[test]
