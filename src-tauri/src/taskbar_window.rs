@@ -722,12 +722,18 @@ fn measure_layout(model: &StripModel, theme: StripTheme, font: HFONT, dpi: u32) 
     };
     for (index, segment) in model.segments.iter().enumerate() {
         if index > 0 { append(RunContent::Text(" · ".into()), colors.separator)?; }
-        if let Some(ci) = ProviderCi::for_label(&segment.label) {
-            append(RunContent::Ci(ci), ci.color(theme))?;
-        } else {
-            append(RunContent::Text(segment.label.clone()), colors.label)?;
+        // 같은 공급자의 기간별 값은 CI 하나 뒤에 묶어서 표시한다.
+        if index == 0 || model.segments[index - 1].label != segment.label {
+            if let Some(ci) = ProviderCi::for_label(&segment.label) {
+                append(RunContent::Ci(ci), ci.color(theme))?;
+            } else {
+                append(RunContent::Text(segment.label.clone()), colors.label)?;
+            }
+            append(RunContent::Text(" ".into()), colors.label)?;
         }
-        append(RunContent::Text(" ".into()), colors.label)?;
+        if let Some(label) = segment.window_label {
+            append(RunContent::Text(format!("{label} ")), colors.label)?;
+        }
         append(RunContent::Text(segment.value.clone()), segment.value_color)?;
     }
     let padding = dpi.checked_mul(4).and_then(|value| i32::try_from(value / 96).ok())
@@ -975,7 +981,7 @@ mod tests {
             assert!(StripTooltip::new(std::ptr::null_mut()).is_err());
             let initial = "Claude · 갱신 대기 (캐시)\n마지막 동기화: 5분 전 (데이터 수집 기준)";
             let make_model = |text: &str| StripModel {
-                segments: vec![StripSegment { label: "Claude".into(), value: "72%".into(), value_color: [80, 180, 160] }],
+                segments: vec![StripSegment { label: "Claude".into(), window_label: Some("5h"), value: "72%".into(), value_color: [80, 180, 160] }],
                 tooltip: text.into(),
             };
             let shared = Arc::new(Mutex::new(Some(make_model(initial))));
@@ -1247,14 +1253,16 @@ mod tests {
         for theme in [StripTheme::Light, StripTheme::Dark] {
             let colors = palette(theme);
             for (values, value_colors) in [
-                (["55%", "59%"], [colors.high, colors.high]),
-                (["0%", "100%"], [colors.low, colors.high]),
-                (["—", "31%"], [colors.label, colors.mid]),
-                (["8%", "—"], [colors.low, colors.label]),
+                (["55%", "72%", "31%"], [colors.high, colors.high, colors.mid]),
+                (["0%", "100%", "0%"], [colors.low, colors.high, colors.low]),
+                (["—", "—", "31%"], [colors.label, colors.label, colors.mid]),
+                (["8%", "72%", "—"], [colors.low, colors.high, colors.label]),
+                (["8%", "—", "—"], [colors.low, colors.label, colors.label]),
             ] {
                 let model = StripModel {
-                    segments: ["Codex", "Claude"].into_iter().enumerate().map(|(index, label)| StripSegment {
-                        label: label.into(), value: values[index].into(), value_color: value_colors[index],
+                    segments: [("Codex", None), ("Claude", Some("5h")), ("Claude", Some("7d"))]
+                        .into_iter().enumerate().map(|(index, (label, window_label))| StripSegment {
+                        label: label.into(), window_label, value: values[index].into(), value_color: value_colors[index],
                     }).collect(),
                     tooltip: String::new(),
                 };
@@ -1277,7 +1285,11 @@ mod tests {
                         (RunContent::Text(" · ".into()), colors.separator),
                         (RunContent::Ci(ProviderCi::Claude), ProviderCi::Claude.color(theme)),
                         (RunContent::Text(" ".into()), colors.label),
+                        (RunContent::Text("5h ".into()), colors.label),
                         (RunContent::Text(values[1].into()), value_colors[1]),
+                        (RunContent::Text(" · ".into()), colors.separator),
+                        (RunContent::Text("7d ".into()), colors.label),
+                        (RunContent::Text(values[2].into()), value_colors[2]),
                     ];
                     assert_eq!(layout.runs.len(), expected_runs.len());
                     let mut x = 0;
@@ -1317,13 +1329,13 @@ mod tests {
                     let padding = (4 * dpi / 96) as usize;
                     assert!(pixels[..padding * width * 4].iter().all(|byte| *byte == 0), "top padding must be transparent");
                     assert!(pixels[(height - padding) * width * 4..].iter().all(|byte| *byte == 0), "bottom padding must be transparent");
-                    let legacy = format!("Codex {} · Claude {}", values[0], values[1]);
+                    let legacy = format!("Codex {} · Claude 5h {} · 7d {}", values[0], values[1], values[2]);
                     let measure = DibSurface::for_size(1, 1).unwrap();
                     let _font = measure.select_font(font).unwrap();
                     let legacy_width = measure_run(measure.dc, &legacy).unwrap().0;
                     assert!(layout.width < legacy_width, "CI layout must be narrower than service names");
-                    eprintln!("{theme:?} {dpi} DPI: {} / {} = {width}x{height}, names={legacy_width}px", values[0], values[1]);
-                    if values == ["55%", "59%"] {
+                    eprintln!("{theme:?} {dpi} DPI: {} / 5h {} / 7d {} = {width}x{height}, names={legacy_width}px", values[0], values[1], values[2]);
+                    if values == ["55%", "72%", "31%"] {
                         if let Some(root) = std::env::var_os("SPECTRA_STRIP_PREVIEW_DIR") {
                             let path = std::path::PathBuf::from(root).join(format!("{theme:?}-{dpi}-{width}x{height}.bgra"));
                             std::fs::write(path, pixels).expect("offscreen preview bytes");

@@ -52,8 +52,8 @@ fn usable(snapshot: &ProviderUsageSnapshot) -> bool {
     matches!(snapshot.connection_state.as_str(), "connected" | "stale") && !snapshot.windows.is_empty()
 }
 
-/// 그 공급자가 실제로 먼저 막히는 창의 잔여율. tray_badge의 rolling 우선 규칙과 달리
-/// 임의 선택 없이 최솟값을 쓴다(스펙 §3-3).
+/// Codex의 기존 단일 값은 먼저 막히는 창의 잔여율을 유지한다.
+/// Claude는 build_model_at에서 5시간·주간을 각각 고정 표시한다(스펙 §3-3).
 pub fn provider_remaining(snapshot: &ProviderUsageSnapshot) -> Option<u8> {
     if !usable(snapshot) {
         return None;
@@ -66,7 +66,12 @@ pub fn provider_remaining(snapshot: &ProviderUsageSnapshot) -> Option<u8> {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct StripSegment { pub label: String, pub value: String, pub value_color: [u8; 3] }
+pub struct StripSegment {
+    pub label: String,
+    pub window_label: Option<&'static str>,
+    pub value: String,
+    pub value_color: [u8; 3],
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct StripModel { pub segments: Vec<StripSegment>, pub tooltip: String }
@@ -131,42 +136,40 @@ pub fn build_model(snapshots: &[ProviderUsageSnapshot], theme: StripTheme) -> Op
 
 fn build_model_at(snapshots: &[ProviderUsageSnapshot], theme: StripTheme, now: u64) -> Option<StripModel> {
     let colors = palette(theme);
-    let mut segments = Vec::with_capacity(PROVIDERS.len());
+    let mut segments = Vec::with_capacity(PROVIDERS.len() + 1);
     let mut tooltip_lines = Vec::new();
     let mut any_value = false;
 
     for (id, name) in PROVIDERS {
         let snapshot = snapshots.iter().find(|s| s.provider_id == id);
-        let remaining = snapshot.and_then(provider_remaining);
-        match remaining {
-            Some(percent) => {
-                any_value = true;
-                segments.push(StripSegment {
-                    label: name.to_string(),
-                    value: format!("{percent}%"),
-                    value_color: value_color(percent, colors),
-                });
-                let detail = snapshot
-                    .map(|s| {
-                        s.windows
-                            .iter()
-                            .map(|w| format!("{} {}%", w.label, w.remaining_percent.round().clamp(0.0, 100.0) as u8))
-                            .collect::<Vec<_>>()
-                            .join(" · ")
-                    })
-                    .unwrap_or_default();
-                tooltip_lines.push(format!("{name}  {detail}"));
+        let mut append_segment = |window_label, remaining: Option<u8>| {
+            any_value |= remaining.is_some();
+            segments.push(StripSegment {
+                label: name.to_string(),
+                window_label,
+                value: remaining.map(|percent| format!("{percent}%")).unwrap_or_else(|| NO_VALUE.to_string()),
+                value_color: remaining.map(|percent| value_color(percent, colors)).unwrap_or(colors.label),
+            });
+        };
+        if id == "claude" {
+            // 데이터 순서·잔여량 크기·누락 여부에 따라 표시 기준이 바뀌지 않는다.
+            for (window_id, label) in [("rolling", "5h"), ("weekly", "7d")] {
+                let remaining = snapshot.filter(|s| usable(s))
+                    .and_then(|s| s.windows.iter().find(|window| window.id == window_id))
+                    .map(|window| window.remaining_percent.round().clamp(0.0, 100.0) as u8);
+                append_segment(Some(label), remaining);
             }
-            None => {
-                segments.push(StripSegment {
-                    label: name.to_string(),
-                    value: NO_VALUE.to_string(),
-                    value_color: colors.label,
-                });
-                if id != "claude" || snapshot.is_none() {
-                    tooltip_lines.push(format!("{name}  연결되지 않음"));
-                }
-            }
+        } else {
+            append_segment(None, snapshot.and_then(provider_remaining));
+        }
+        if let Some(snapshot) = snapshot.filter(|s| usable(s)) {
+            let detail = snapshot.windows.iter()
+                .map(|w| format!("{} {}%", w.label, w.remaining_percent.round().clamp(0.0, 100.0) as u8))
+                .collect::<Vec<_>>()
+                .join(" · ");
+            tooltip_lines.push(format!("{name}  {detail}"));
+        } else if id != "claude" || snapshot.is_none() {
+            tooltip_lines.push(format!("{name}  연결되지 않음"));
         }
         if let Some(snapshot) = snapshot.filter(|_| id == "claude") {
             let status = claude_status(snapshot, now);
@@ -209,18 +212,18 @@ mod tests {
     fn theme_changes_recolor_cached_values_without_changing_text_or_tooltip() {
         let mut model = StripModel {
             segments: ["0%", "19%", "20%", "49%", "50%", "100%", "—"].into_iter()
-                .map(|value| StripSegment { label: "Codex".into(), value: value.into(), value_color: [0; 3] })
+                .map(|value| StripSegment { label: "Claude".into(), window_label: Some("5h"), value: value.into(), value_color: [0; 3] })
                 .collect(),
             tooltip: "SPECTRA · 캐시된 실제 잔여량".into(),
         };
-        let text = model.segments.iter().map(|s| (s.label.clone(), s.value.clone())).collect::<Vec<_>>();
+        let text = model.segments.iter().map(|s| (s.label.clone(), s.window_label, s.value.clone())).collect::<Vec<_>>();
         let tooltip = model.tooltip.clone();
         for theme in [StripTheme::Light, StripTheme::Dark, StripTheme::Light] {
             retheme_model(&mut model, theme);
             let colors = palette(theme);
             assert_eq!(model.segments.iter().map(|s| s.value_color).collect::<Vec<_>>(),
                 [colors.low, colors.low, colors.mid, colors.mid, colors.high, colors.high, colors.label]);
-            assert_eq!(model.segments.iter().map(|s| (s.label.clone(), s.value.clone())).collect::<Vec<_>>(), text);
+            assert_eq!(model.segments.iter().map(|s| (s.label.clone(), s.window_label, s.value.clone())).collect::<Vec<_>>(), text);
             assert_eq!(model.tooltip, tooltip);
         }
     }
@@ -255,7 +258,7 @@ mod tests {
 
     #[test]
     fn provider_remaining_takes_the_binding_window_not_the_first() {
-        let s = snapshot("claude", "connected", vec![window("rolling", 59.0), window("weekly", 31.4)]);
+        let s = snapshot("codex", "connected", vec![window("rolling", 59.0), window("weekly", 31.4)]);
         assert_eq!(provider_remaining(&s), Some(31));
     }
 
@@ -276,11 +279,57 @@ mod tests {
             StripTheme::Light,
         )
         .expect("both providers are usable");
-        assert_eq!(model.segments.len(), 2);
+        assert_eq!(model.segments.len(), 3);
         assert_eq!(model.segments[0].label, "Codex");
+        assert_eq!(model.segments[0].window_label, None);
         assert_eq!(model.segments[0].value, "55%");
         assert_eq!(model.segments[1].label, "Claude");
+        assert_eq!(model.segments[1].window_label, Some("5h"));
         assert_eq!(model.segments[1].value, "59%");
+        assert_eq!(model.segments[2].label, "Claude");
+        assert_eq!(model.segments[2].window_label, Some("7d"));
+        assert_eq!(model.segments[2].value, "—");
+    }
+
+    #[test]
+    fn claude_keeps_both_periods_when_the_binding_window_changes() {
+        for state in ["connected", "stale"] {
+            for rolling in [72.0, 12.0, 100.0] {
+                let model = build_model(&[
+                    snapshot("claude", state, vec![window("weekly", 31.4), window("rolling", rolling)]),
+                ], StripTheme::Dark).unwrap();
+                assert_eq!(model.segments[0].value, "—");
+                assert_eq!(model.segments[1].window_label, Some("5h"));
+                assert_eq!(model.segments[1].value, format!("{rolling:.0}%"));
+                assert_eq!(model.segments[2].window_label, Some("7d"));
+                assert_eq!(model.segments[2].value, "31%");
+                assert_eq!(model.segments[1].value_color,
+                    if rolling < 20.0 { palette(StripTheme::Dark).low } else { palette(StripTheme::Dark).high });
+                assert_eq!(model.segments[2].value_color, palette(StripTheme::Dark).mid);
+            }
+        }
+    }
+
+    #[test]
+    fn claude_missing_windows_keep_their_slots_without_falling_back() {
+        for (state, windows, expected) in [
+            ("connected", vec![window("rolling", 72.0)], ["72%", "—"]),
+            ("connected", vec![window("weekly", 31.0)], ["—", "31%"]),
+            ("connected", vec![window("other", 9.0)], ["—", "—"]),
+            ("connected", vec![], ["—", "—"]),
+            ("signed-out", vec![window("rolling", 72.0), window("weekly", 31.0)], ["—", "—"]),
+        ] {
+            let model = build_model(&[
+                snapshot("codex", "connected", vec![window("weekly", 55.0)]),
+                snapshot("claude", state, windows),
+            ], StripTheme::Light).unwrap();
+            assert_eq!(model.segments[1].window_label, Some("5h"));
+            assert_eq!(model.segments[2].window_label, Some("7d"));
+            for (segment, expected) in model.segments[1..].iter().zip(expected) {
+                assert_eq!(segment.value, expected);
+                if expected == "—" { assert_eq!(segment.value_color, palette(StripTheme::Light).label); }
+            }
+        }
     }
 
     #[test]
@@ -297,6 +346,8 @@ mod tests {
         assert_eq!(model.segments[0].value_color, palette(StripTheme::Light).low);
         assert_eq!(model.segments[1].value, "—");
         assert_eq!(model.segments[1].value_color, palette(StripTheme::Light).label);
+        assert_eq!(model.segments[2].value, "—");
+        assert_eq!(model.segments[2].value_color, palette(StripTheme::Light).label);
     }
 
     #[test]
