@@ -53,7 +53,7 @@ fn usable(snapshot: &ProviderUsageSnapshot) -> bool {
 }
 
 /// Codex의 기존 단일 값은 먼저 막히는 창의 잔여율을 유지한다.
-/// Claude는 build_model_at에서 5시간·주간을 각각 고정 표시한다(스펙 §3-3).
+/// Claude와 5시간 창이 있는 Codex는 build_model_at에서 5시간·주간을 각각 고정 표시한다(스펙 §3-3).
 pub fn provider_remaining(snapshot: &ProviderUsageSnapshot) -> Option<u8> {
     if !usable(snapshot) {
         return None;
@@ -151,7 +151,11 @@ fn build_model_at(snapshots: &[ProviderUsageSnapshot], theme: StripTheme, now: u
                 value_color: remaining.map(|percent| value_color(percent, colors)).unwrap_or(colors.label),
             });
         };
-        if id == "claude" {
+        // Codex는 5시간 창이 있는 요금제(Plus 등)일 때만 두 기간을 나눠 표시하고,
+        // 주간 창만 있는 요금제(Pro 등)는 기존 단일 값을 유지한다.
+        let codex_has_short_window = id == "codex" && snapshot.filter(|s| usable(s))
+            .is_some_and(|s| s.windows.iter().any(|window| window.id == "rolling"));
+        if id == "claude" || codex_has_short_window {
             // 데이터 순서·잔여량 크기·누락 여부에 따라 표시 기준이 바뀌지 않는다.
             for (window_id, label) in [("rolling", "5h"), ("weekly", "7d")] {
                 let remaining = snapshot.filter(|s| usable(s))
@@ -330,6 +334,39 @@ mod tests {
                 if expected == "—" { assert_eq!(segment.value_color, palette(StripTheme::Light).label); }
             }
         }
+    }
+
+    #[test]
+    fn codex_with_a_short_window_shows_both_periods_like_claude() {
+        // Plus처럼 5시간 창이 있는 요금제: Codex도 5h·7d를 각각 고정 표시한다.
+        for (windows, expected) in [
+            (vec![window("weekly", 55.0), window("rolling", 72.0)], ["72%", "55%"]),
+            (vec![window("rolling", 12.0)], ["12%", "—"]),
+        ] {
+            for state in ["connected", "stale"] {
+                let model = build_model(&[
+                    snapshot("codex", state, windows.clone()),
+                    snapshot("claude", "connected", vec![window("rolling", 40.0), window("weekly", 30.0)]),
+                ], StripTheme::Light).unwrap();
+                assert_eq!(model.segments.len(), 4);
+                let codex = &model.segments[..2];
+                assert_eq!(codex.iter().map(|s| (s.label.as_str(), s.window_label)).collect::<Vec<_>>(),
+                    [("Codex", Some("5h")), ("Codex", Some("7d"))]);
+                assert_eq!(codex.iter().map(|s| s.value.as_str()).collect::<Vec<_>>(), expected);
+                assert_eq!(model.segments[2].window_label, Some("5h"));
+                assert_eq!(model.segments[2].value, "40%");
+            }
+        }
+    }
+
+    #[test]
+    fn codex_weekly_only_plan_keeps_a_single_unlabelled_value() {
+        // Pro처럼 주간 창만 오는 요금제는 빈 5h 칸을 만들지 않는다.
+        let model = build_model(&[snapshot("codex", "connected", vec![window("weekly", 55.0)])], StripTheme::Dark).unwrap();
+        assert_eq!(model.segments[0].label, "Codex");
+        assert_eq!(model.segments[0].window_label, None);
+        assert_eq!(model.segments[0].value, "55%");
+        assert_eq!(model.segments.len(), 3);
     }
 
     #[test]
