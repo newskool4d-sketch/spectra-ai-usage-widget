@@ -26,6 +26,13 @@
 - 다운로드한 공개 자산에 `scripts/verify-release.mjs <dir>` PASS, `sha256sum -c SHA256SUMS.txt` 3개 모두 OK.
 - 비인증 `releases/latest/download/latest.json`: 버전 `0.2.6`, Windows 대상 URL이 asset 584943376과 일치.
 
+## 실제 앱 내 업그레이드 (10:56 KST)
+
+- 꺼져 있던 설치본 0.2.5(6,308,352 bytes)를 10:56:27 실행 → `SPECTRA 새 버전 0.2.6` 안내에서 사용자가 `지금 설치` → updater가 공개 설치 파일로 설치 후 자동 재시작(PID 30128, 10:56:34).
+- 설치 경로 `%LOCALAPPDATA%\SPECTRA\spectra-native.exe`: ProductVersion `0.2.6`, 6,308,864 bytes, 수정 시각 10:42:54 KST(CI 빌드 시각), SHA-256 `C7A0846801B63C8F074394D521BAF309B44DA7E30C8F76FFCF12F3F4517D4B8F`.
+- 설치 전후 SHA-256 일치: `ui-prefs.json` `B1B2A9C7…520E6BDB`, `claude-statusline-bridge.json` `A4785440…5B4DF318`.
+- 재시작 2초 뒤 `claude-usage.json` 갱신(10:56:36) — 새 버전의 사용량 조회 동작 확인.
+
 ## 판정
 
 | 요구사항 | 상태 | 근거 |
@@ -33,10 +40,11 @@
 | Codex 5시간 창 있을 때 5h·7d 고정 표시 | PASS | 단위 테스트(connected·stale × 두 창/5시간만) |
 | 주간 창만 있는 요금제의 단일 값 유지 | PASS | 단위 테스트 + 기존 회귀 테스트 |
 | 서명된 공개 릴리스와 updater manifest | PASS | Actions 전 단계, 공개 자산·digest·체크섬 검증 |
-| 실제 앱 내 업그레이드 0.2.5 → 0.2.6 | 미검증 | 설치본 재시작 후 `지금 설치` 필요 |
+| 실제 앱 내 업그레이드 0.2.5 → 0.2.6 | PASS | 앱 내 설치, 새 버전 파일, 자동 재시작 |
+| 사용자 설정 보존 | PASS | 두 설정 파일의 설치 전후 해시 일치 |
 | Plus 계정 실물 표시 | 미검증 | 검증자 계정이 Pro(주간 창만 제공) — 사용자 제보로 확인 예정 |
 
-전체 판정: **PARTIAL** — 구현·공개 배포 PASS, 앱 내 업그레이드와 Plus 계정 실물 표시는 미검증.
+전체 판정: **PARTIAL** — 구현·공개 배포·앱 내 업그레이드·설정 보존 PASS, Plus 계정 실물 표시만 미검증.
 
 ## 검증 경계
 
