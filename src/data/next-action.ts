@@ -17,9 +17,22 @@ export function primaryWindow(quota: PlanQuota): QuotaWindow | undefined {
   return quota.windows.find(window => window.id === "rolling") ?? quota.windows[0];
 }
 
+function invalidRemaining(window: QuotaWindow): boolean {
+  return !Number.isFinite(window.remainingPercent) || window.remainingPercent < 0 || window.remainingPercent > 100;
+}
+
+function needsUsageRefresh(quota: PlanQuota, now: number): boolean {
+  // A passed reset is not evidence that the provider has replenished its quota.
+  return quota.windows.some(window => invalidRemaining(window)
+    || (window.resetsAt != null && (!Number.isFinite(window.resetsAt) || window.resetsAt <= now)));
+}
+
 function chipText(id: ProviderId, quota: PlanQuota, now: number): string {
-  const window = hasVerifiedUsage(quota) ? primaryWindow(quota) : undefined;
-  if (!window) return quota.connectionState === "waiting" ? `${providerNames[id]} 첫 사용량 대기` : `${providerNames[id]} 연결 필요`;
+  if (!hasVerifiedUsage(quota)) return quota.connectionState === "waiting" ? `${providerNames[id]} 첫 사용량 대기` : `${providerNames[id]} 연결 필요`;
+  if (quota.windows.some(invalidRemaining)) return `${providerNames[id]} 사용량 갱신 필요`;
+  // Show the binding limit, so a full rolling window cannot hide an exhausted week.
+  const window = quota.windows.find(window => window.remainingPercent === 0 && (window.resetsAt == null || window.resetsAt > now))
+    ?? primaryWindow(quota)!;
   const reset = window.resetsAt != null && window.resetsAt > now ? `${window.resetLabel} 초기화` : window.resetLabel;
   return `${providerNames[id]} ${window.label} ${Math.round(window.remainingPercent)}% 남음 · ${reset}`;
 }
@@ -36,8 +49,16 @@ export function computeNextAction(quotas: Readonly<Record<ProviderId, PlanQuota>
   if (connected.length === 0) {
     return { recommendedProvider: null, headline: `${providerIds.map(id => providerNames[id]).join("·")} 연결 후 권장 서비스를 알려 드립니다`, chips };
   }
-  let best = connected[0];
-  for (const id of connected.slice(1)) {
+  const available = connected.filter(id => !needsUsageRefresh(quotas[id], now)
+    && quotas[id].windows.every(window => window.remainingPercent > 0));
+  if (available.length === 0) {
+    const headline = connected.some(id => needsUsageRefresh(quotas[id], now))
+      ? "사용량을 새로고침한 뒤 권장 서비스를 확인해 주세요"
+      : "사용 가능한 한도가 없습니다 · 초기화를 기다려 주세요";
+    return { recommendedProvider: null, headline, chips };
+  }
+  let best = available[0];
+  for (const id of available.slice(1)) {
     const candidate = primaryWindow(quotas[id]);
     const current = primaryWindow(quotas[best]);
     if (candidate && current && beats(candidate, current)) best = id;

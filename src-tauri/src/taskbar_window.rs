@@ -56,6 +56,15 @@ fn request_shell_redraw() {
     });
 }
 
+fn is_taskbar_geometry_window(hwnd: HWND) -> bool {
+    // Explorer 재시작 뒤에도 현재 셸 HWND를 확인한다. 다른 앱의 위치 이벤트는 무시한다.
+    let taskbar = unsafe { FindWindowW(wide("Shell_TrayWnd").as_ptr(), std::ptr::null()) };
+    if taskbar.is_null() || hwnd.is_null() { return false; }
+    hwnd == taskbar || hwnd == unsafe {
+        FindWindowExW(taskbar, std::ptr::null_mut(), wide("TrayNotifyWnd").as_ptr(), std::ptr::null())
+    }
+}
+
 unsafe extern "system" fn on_win_event(
     _hook: HWINEVENTHOOK, event: u32, hwnd: HWND, object: i32, child: i32,
     _thread: u32, _time: u32,
@@ -66,7 +75,7 @@ unsafe extern "system" fn on_win_event(
         EVENT_SYSTEM_FOREGROUND => request_shell_redraw(), // NULL 전경도 재확인한다.
         EVENT_OBJECT_LOCATIONCHANGE
             if !hwnd.is_null() && object == OBJID_WINDOW && child == CHILDID_SELF as i32
-                && hwnd == GetForegroundWindow() => request_shell_redraw(),
+                && (hwnd == GetForegroundWindow() || is_taskbar_geometry_window(hwnd)) => request_shell_redraw(),
         _ => {}
     }
 }
@@ -104,8 +113,11 @@ pub fn current_theme() -> StripTheme {
     if status == 0 && value == 1 { StripTheme::Light } else { StripTheme::Dark }
 }
 
-/// 작업표시줄 사각형과 붙은 모서리.
-fn taskbar_rect() -> Option<(StripRect, TaskbarEdge)> {
+/// 작업표시줄 사각형과 붙은 모서리, 대상 모니터의 DPI.
+fn taskbar_rect() -> Option<(StripRect, TaskbarEdge, u32)> {
+    let taskbar = unsafe { FindWindowW(wide("Shell_TrayWnd").as_ptr(), std::ptr::null()) };
+    let dpi = unsafe { GetDpiForWindow(taskbar) };
+    if dpi == 0 { return None; }
     let mut data: APPBARDATA = unsafe { std::mem::zeroed() };
     data.cbSize = std::mem::size_of::<APPBARDATA>() as u32;
     if unsafe { SHAppBarMessage(ABM_GETTASKBARPOS, &mut data) } == 0 {
@@ -118,7 +130,7 @@ fn taskbar_rect() -> Option<(StripRect, TaskbarEdge)> {
         _ => TaskbarEdge::Bottom,
     };
     let rc = data.rc;
-    Some((StripRect { left: rc.left, top: rc.top, right: rc.right, bottom: rc.bottom }, edge))
+    Some((StripRect { left: rc.left, top: rc.top, right: rc.right, bottom: rc.bottom }, edge, dpi))
 }
 
 /// 알림 영역(트레이~시계)의 왼쪽 가장자리. 실측상 Windows 11 26200에서도 존재한다.
@@ -893,7 +905,7 @@ fn redraw(hwnd: HWND) -> Result<(), String> {
         hide_strip(hwnd);
         return Ok(());
     };
-    let (Some((taskbar, edge)), Some(tray)) = (taskbar_rect(), tray_left()) else {
+    let (Some((taskbar, edge, dpi)), Some(tray)) = (taskbar_rect(), tray_left()) else {
         hide_strip(hwnd);
         return Ok(());
     };
@@ -902,11 +914,18 @@ fn redraw(hwnd: HWND) -> Result<(), String> {
         hide_strip(hwnd);
         return Ok(());
     }
-    let dpi = unsafe { GetDpiForWindow(hwnd) };
+    render_at_geometry(hwnd, state, &mut model, taskbar, edge, tray, dpi)
+}
+
+fn render_at_geometry(
+    hwnd: HWND, state: &StripState, model: &mut StripModel, taskbar: StripRect, edge: TaskbarEdge, tray: i32, dpi: u32,
+) -> Result<(), String> {
+    // 이동 전 스트립 HWND는 이전 모니터의 DPI를 유지할 수 있다.
+    // 작업표시줄의 DPI를 사용해야 공간 부족으로 숨긴 뒤에도 새 모니터에서 복원된다.
     let font = state.font_for_dpi(dpi)?;
     let theme = current_theme();
-    retheme_model(&mut model, theme);
-    let rendered = render_model(&model, theme, font, dpi)?;
+    retheme_model(model, theme);
+    let rendered = render_model(model, theme, font, dpi)?;
     let (width, height) = (rendered.layout.width, rendered.layout.height);
     let Some((x, y)) = place_strip(taskbar, edge, tray, (width, height)) else {
         hide_strip(hwnd);
@@ -1141,6 +1160,16 @@ mod tests {
             assert!(SHELL_PENDING.with(Cell::get), "foreground resize is observed while hidden");
             assert_ne!(PeekMessageW(&mut message, hwnd, WM_STRIP_SHELL_CHANGED, WM_STRIP_SHELL_CHANGED, PM_REMOVE), 0);
             DispatchMessageW(&message);
+            let taskbar = FindWindowW(wide("Shell_TrayWnd").as_ptr(), std::ptr::null());
+            let notify = FindWindowExW(taskbar, std::ptr::null_mut(), wide("TrayNotifyWnd").as_ptr(), std::ptr::null());
+            for shell_window in [taskbar, notify] {
+                assert!(!shell_window.is_null(), "desktop shell window must exist for this native test");
+                invoke(EVENT_OBJECT_LOCATIONCHANGE, shell_window, OBJID_WINDOW, CHILDID_SELF as i32);
+                assert!(SHELL_PENDING.with(Cell::get), "taskbar/tray geometry changes must redraw even while hidden");
+                assert_ne!(PeekMessageW(&mut message, hwnd, WM_STRIP_SHELL_CHANGED, WM_STRIP_SHELL_CHANGED, PM_REMOVE), 0);
+                DispatchMessageW(&message);
+                assert!(!SHELL_PENDING.with(Cell::get));
+            }
             let state = &*(GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const StripState);
             let font = state.font_for_dpi(96).unwrap();
             SendMessageW(hwnd, WM_SETTINGCHANGE, 0, 0);
@@ -1160,7 +1189,79 @@ mod tests {
             request_shell_redraw();
             assert!(!SHELL_PENDING.with(Cell::get), "failed post must not latch pending");
             SHELL_TARGET.with(|target| target.set(std::ptr::null_mut()));
-            eprintln!("callback filters, 100-to-1 coalescing, hidden resize, shell messages, teardown and post failure: PASS");
+            eprintln!("callback filters, 100-to-1 coalescing, hidden resize, taskbar/tray geometry, shell messages, teardown and post failure: PASS");
+        }).join().unwrap();
+    }
+
+    #[test]
+    #[ignore = "requires a Windows desktop; run with --ignored --test-threads=1"]
+    fn strip_geometry_hides_and_recovers_the_native_window_and_tooltip() {
+        std::thread::spawn(|| unsafe {
+            use std::sync::atomic::{AtomicUsize, Ordering};
+            struct WindowGuard(HWND);
+            impl Drop for WindowGuard {
+                fn drop(&mut self) {
+                    unsafe { if IsWindow(self.0) != 0 { DestroyWindow(self.0); } }
+                }
+            }
+            let clicks = Arc::new(AtomicUsize::new(0));
+            let callback_clicks = Arc::clone(&clicks);
+            let hwnd = create_window(StripState::new(Arc::new(Mutex::new(None)), Box::new(move || {
+                callback_clicks.fetch_add(1, Ordering::Relaxed);
+            }))).unwrap();
+            let _window = WindowGuard(hwnd);
+            let state = &*(GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const StripState);
+            let tip = state.tooltip.borrow().as_ref().unwrap().hwnd;
+            let mut model = StripModel {
+                segments: [("Codex", "5h", "100%"), ("Codex", "7d", "20%"),
+                    ("Claude", "5h", "8%"), ("Claude", "7d", "—")].into_iter()
+                    .map(|(label, period, value)| StripSegment {
+                        label: label.into(), window_label: Some(period), value: value.into(), value_color: [0; 3],
+                    }).collect(),
+                tooltip: "SPECTRA synthetic geometry test".into(),
+            };
+            state.sync_tooltip(&model.tooltip);
+            let (taskbar, edge, dpi) = taskbar_rect().expect("desktop taskbar geometry");
+            let shell = FindWindowW(wide("Shell_TrayWnd").as_ptr(), std::ptr::null());
+            assert_eq!(dpi, GetDpiForWindow(shell), "render at the destination taskbar DPI");
+            assert!(matches!(edge, TaskbarEdge::Top | TaskbarEdge::Bottom));
+            // 실제 HWND/GDI 경로에 합성 트레이 경계만 주입한다. 셸 설정은 변경하지 않는다.
+            for visible in [false, true, false, true] {
+                let tray = if visible { taskbar.right } else { taskbar.left + 1 };
+                render_at_geometry(hwnd, state, &mut model, taskbar, edge, tray, dpi).unwrap();
+                assert_eq!(IsWindowVisible(hwnd) != 0, visible);
+                assert_eq!(state.tooltip.borrow().as_ref().unwrap().enabled, visible);
+                if visible {
+                    let mut rect: RECT = std::mem::zeroed();
+                    assert_ne!(GetWindowRect(hwnd, &mut rect), 0);
+                    assert_eq!(rect.right, tray);
+                    assert!(rect.left >= taskbar.left && rect.top >= taskbar.top && rect.bottom <= taskbar.bottom);
+                    SendMessageW(hwnd, WM_LBUTTONUP, 0, 0);
+                } else {
+                    assert_eq!(IsWindowVisible(tip), 0, "hidden strip must not leave a tooltip above other windows");
+                }
+            }
+            assert_eq!(clicks.load(Ordering::Relaxed), 2, "click callback survives hide/recover cycles");
+            let font = state.font_for_dpi(96).unwrap();
+            let compact_height = render_model(&model, current_theme(), font, 96).unwrap().layout.height;
+            let compact_taskbar = StripRect { bottom: taskbar.top + compact_height, ..taskbar };
+            // 한 HWND의 DPI는 그대로 두고 대상 셸 DPI만 300%→100%로 바꾼다.
+            // 이전 고배율 폰트가 남아 낮은 작업표시줄에서 영구 숨김되는 회귀를 검증한다.
+            for target_dpi in [288, 96, 288, 96] {
+                render_at_geometry(hwnd, state, &mut model, compact_taskbar, edge, taskbar.right, target_dpi).unwrap();
+                let visible = target_dpi == 96;
+                assert_eq!(IsWindowVisible(hwnd) != 0, visible, "destination DPI {target_dpi} must determine fit");
+                assert_eq!(state.tooltip.borrow().as_ref().unwrap().enabled, visible);
+                if visible {
+                    let mut rect: RECT = std::mem::zeroed();
+                    assert_ne!(GetWindowRect(hwnd, &mut rect), 0);
+                    assert_eq!(rect.bottom - rect.top, compact_height);
+                }
+            }
+            assert_ne!(DestroyWindow(hwnd), 0);
+            assert_eq!(IsWindow(tip), 0);
+            discard_quit_message();
+            eprintln!("synthetic narrow/wide geometry and 300%/100% destination DPI: real HWND/GDI and tooltip hide/recover, click dispatch and teardown: PASS");
         }).join().unwrap();
     }
 
@@ -1253,14 +1354,25 @@ mod tests {
         for theme in [StripTheme::Light, StripTheme::Dark] {
             let colors = palette(theme);
             for (values, value_colors) in [
-                (["55%", "72%", "31%"], [colors.high, colors.high, colors.mid]),
-                (["0%", "100%", "0%"], [colors.low, colors.high, colors.low]),
-                (["—", "—", "31%"], [colors.label, colors.label, colors.mid]),
-                (["8%", "72%", "—"], [colors.low, colors.high, colors.label]),
-                (["8%", "—", "—"], [colors.low, colors.label, colors.label]),
+                (vec!["55%", "72%", "31%"], vec![colors.high, colors.high, colors.mid]),
+                (vec!["0%", "100%", "0%"], vec![colors.low, colors.high, colors.low]),
+                (vec!["—", "—", "31%"], vec![colors.label, colors.label, colors.mid]),
+                (vec!["8%", "72%", "—"], vec![colors.low, colors.high, colors.label]),
+                (vec!["8%", "—", "—"], vec![colors.low, colors.label, colors.label]),
+                (vec!["72%", "55%", "31%", "8%"], vec![colors.high, colors.high, colors.mid, colors.low]),
+                (vec!["0%", "100%", "100%", "0%"], vec![colors.low, colors.high, colors.high, colors.low]),
+                (vec!["100%", "—", "0%", "—"], vec![colors.high, colors.label, colors.low, colors.label]),
+                (vec!["—", "—", "72%", "31%"], vec![colors.label, colors.label, colors.high, colors.mid]),
+                (vec!["8%", "20%", "—", "—"], vec![colors.low, colors.mid, colors.label, colors.label]),
             ] {
+                let dual_codex = values.len() == 4;
+                let labels = if dual_codex {
+                    vec![("Codex", Some("5h")), ("Codex", Some("7d")), ("Claude", Some("5h")), ("Claude", Some("7d"))]
+                } else {
+                    vec![("Codex", None), ("Claude", Some("5h")), ("Claude", Some("7d"))]
+                };
                 let model = StripModel {
-                    segments: [("Codex", None), ("Claude", Some("5h")), ("Claude", Some("7d"))]
+                    segments: labels
                         .into_iter().enumerate().map(|(index, (label, window_label))| StripSegment {
                         label: label.into(), window_label, value: values[index].into(), value_color: value_colors[index],
                     }).collect(),
@@ -1278,7 +1390,23 @@ mod tests {
                     let pixels = unsafe {
                         std::slice::from_raw_parts(rendered.surface.pixels as *const u8, width * height * 4)
                     };
-                    let expected_runs = [
+                    let expected_runs = if dual_codex { vec![
+                        (RunContent::Ci(ProviderCi::Codex), ProviderCi::Codex.color(theme)),
+                        (RunContent::Text(" ".into()), colors.label),
+                        (RunContent::Text("5h ".into()), colors.label),
+                        (RunContent::Text(values[0].into()), value_colors[0]),
+                        (RunContent::Text(" · ".into()), colors.separator),
+                        (RunContent::Text("7d ".into()), colors.label),
+                        (RunContent::Text(values[1].into()), value_colors[1]),
+                        (RunContent::Text(" · ".into()), colors.separator),
+                        (RunContent::Ci(ProviderCi::Claude), ProviderCi::Claude.color(theme)),
+                        (RunContent::Text(" ".into()), colors.label),
+                        (RunContent::Text("5h ".into()), colors.label),
+                        (RunContent::Text(values[2].into()), value_colors[2]),
+                        (RunContent::Text(" · ".into()), colors.separator),
+                        (RunContent::Text("7d ".into()), colors.label),
+                        (RunContent::Text(values[3].into()), value_colors[3]),
+                    ] } else { vec![
                         (RunContent::Ci(ProviderCi::Codex), ProviderCi::Codex.color(theme)),
                         (RunContent::Text(" ".into()), colors.label),
                         (RunContent::Text(values[0].into()), value_colors[0]),
@@ -1290,7 +1418,7 @@ mod tests {
                         (RunContent::Text(" · ".into()), colors.separator),
                         (RunContent::Text("7d ".into()), colors.label),
                         (RunContent::Text(values[2].into()), value_colors[2]),
-                    ];
+                    ] };
                     assert_eq!(layout.runs.len(), expected_runs.len());
                     let mut x = 0;
                     for (run, (content, rgb)) in layout.runs.iter().zip(expected_runs) {
@@ -1329,15 +1457,20 @@ mod tests {
                     let padding = (4 * dpi / 96) as usize;
                     assert!(pixels[..padding * width * 4].iter().all(|byte| *byte == 0), "top padding must be transparent");
                     assert!(pixels[(height - padding) * width * 4..].iter().all(|byte| *byte == 0), "bottom padding must be transparent");
-                    let legacy = format!("Codex {} · Claude 5h {} · 7d {}", values[0], values[1], values[2]);
+                    let legacy = if dual_codex {
+                        format!("Codex 5h {} · 7d {} · Claude 5h {} · 7d {}", values[0], values[1], values[2], values[3])
+                    } else {
+                        format!("Codex {} · Claude 5h {} · 7d {}", values[0], values[1], values[2])
+                    };
                     let measure = DibSurface::for_size(1, 1).unwrap();
                     let _font = measure.select_font(font).unwrap();
                     let legacy_width = measure_run(measure.dc, &legacy).unwrap().0;
                     assert!(layout.width < legacy_width, "CI layout must be narrower than service names");
-                    eprintln!("{theme:?} {dpi} DPI: {} / 5h {} / 7d {} = {width}x{height}, names={legacy_width}px", values[0], values[1], values[2]);
-                    if values == ["55%", "72%", "31%"] {
+                    eprintln!("{theme:?} {dpi} DPI: {values:?} = {width}x{height}, names={legacy_width}px");
+                    if values == ["55%", "72%", "31%"] || values == ["72%", "55%", "31%", "8%"] {
                         if let Some(root) = std::env::var_os("SPECTRA_STRIP_PREVIEW_DIR") {
-                            let path = std::path::PathBuf::from(root).join(format!("{theme:?}-{dpi}-{width}x{height}.bgra"));
+                            let prefix = if dual_codex { "four-values-" } else { "" };
+                            let path = std::path::PathBuf::from(root).join(format!("{prefix}{theme:?}-{dpi}-{width}x{height}.bgra"));
                             std::fs::write(path, pixels).expect("offscreen preview bytes");
                         }
                     }

@@ -784,45 +784,144 @@ fn output_with_timeout(command: &mut Command, timeout: Duration, max_stdout: u64
         .stderr(Stdio::null())
         .spawn()
         .map_err(|_| "provider-command-failed".to_string())?;
-    wait_with_timeout(child, timeout, max_stdout)
+    wait_with_timeout(child, None, timeout, max_stdout)
 }
 
-/// Drains the child's stdout on a helper thread (so a chatty child cannot
-/// dead-lock on a full pipe) and kills it once `timeout` passes.
-fn wait_with_timeout(mut child: Child, timeout: Duration, max_stdout: u64) -> Result<Output, String> {
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| "provider-command-failed".to_string())?;
-    let reader = std::thread::spawn(move || {
-        let mut buffer = Vec::new();
-        let _ = stdout.take(max_stdout + 1).read_to_end(&mut buffer);
-        buffer
-    });
+#[cfg(target_os = "windows")]
+mod command_pipe {
+    use std::io::{self, Read};
+    use std::os::windows::io::AsRawHandle;
+    use std::process::{ChildStdin, ChildStdout};
+    use windows_sys::Win32::Foundation::ERROR_BROKEN_PIPE;
+    use windows_sys::Win32::System::Pipes::{PeekNamedPipe, SetNamedPipeHandleState, PIPE_NOWAIT};
+
+    pub fn prepare(_stdout: &ChildStdout, stdin: Option<&ChildStdin>) -> io::Result<()> {
+        if let Some(stdin) = stdin {
+            // Anonymous pipes support this mode too. Only the parent's write handle changes;
+            // a full pipe returns a short/zero write instead of blocking the deadline loop.
+            let ok = unsafe {
+                SetNamedPipeHandleState(stdin.as_raw_handle(), &PIPE_NOWAIT, std::ptr::null(), std::ptr::null())
+            };
+            if ok == 0 { return Err(io::Error::last_os_error()); }
+        }
+        Ok(())
+    }
+
+    pub fn read(stdout: &mut ChildStdout, buffer: &mut [u8]) -> io::Result<usize> {
+        let mut available = 0;
+        // This is the sole reader of this handle. Reading at most the available byte count
+        // cannot wait for a descendant that inherited the other end of the pipe.
+        let ok = unsafe {
+            PeekNamedPipe(stdout.as_raw_handle(), std::ptr::null_mut(), 0,
+                std::ptr::null_mut(), &mut available, std::ptr::null_mut())
+        };
+        if ok == 0 {
+            let error = io::Error::last_os_error();
+            return if error.raw_os_error() == Some(ERROR_BROKEN_PIPE as i32) { Ok(0) } else { Err(error) };
+        }
+        if available == 0 { return Err(io::ErrorKind::WouldBlock.into()); }
+        let count = buffer.len().min(available as usize);
+        stdout.read(&mut buffer[..count])
+    }
+}
+
+#[cfg(unix)]
+mod command_pipe {
+    use std::io::{self, Read};
+    use std::os::fd::AsRawFd;
+    use std::process::{ChildStdin, ChildStdout};
+
+    fn nonblocking(pipe: &impl AsRawFd) -> io::Result<()> {
+        // The parent owns these pipe ends for the entire exchange; preserve other flags.
+        let flags = unsafe { libc::fcntl(pipe.as_raw_fd(), libc::F_GETFL) };
+        if flags == -1 { return Err(io::Error::last_os_error()); }
+        if unsafe { libc::fcntl(pipe.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) } == -1 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+
+    pub fn prepare(stdout: &ChildStdout, stdin: Option<&ChildStdin>) -> io::Result<()> {
+        nonblocking(stdout)?;
+        if let Some(stdin) = stdin { nonblocking(stdin)?; }
+        Ok(())
+    }
+
+    pub fn read(stdout: &mut ChildStdout, buffer: &mut [u8]) -> io::Result<usize> {
+        stdout.read(buffer)
+    }
+}
+
+/// One deadline covers input delivery, process exit and output EOF, including inherited pipes.
+/// Nonblocking I/O avoids both pipe-buffer deadlocks and abandoned reader/writer threads.
+fn wait_with_timeout(mut child: Child, input: Option<&[u8]>, timeout: Duration, max_stdout: u64) -> Result<Output, String> {
     let deadline = Instant::now() + timeout;
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) if Instant::now() >= deadline => {
-                let _ = child.kill();
-                let _ = child.wait();
+    let result = (|| {
+        let mut stdout = child.stdout.take().ok_or_else(|| "provider-command-failed".to_string())?;
+        let mut stdin = if input.is_some() {
+            Some(child.stdin.take().ok_or_else(|| "provider-command-failed".to_string())?)
+        } else {
+            None
+        };
+        command_pipe::prepare(&stdout, stdin.as_ref()).map_err(|_| "provider-command-failed".to_string())?;
+        let input = input.unwrap_or_default();
+        let mut sent = 0;
+        let mut output = Vec::new();
+        let mut buffer = [0_u8; 8192];
+        let mut eof = false;
+        let mut status = None;
+        loop {
+            if Instant::now() >= deadline {
                 return Err("provider-command-timeout".to_string());
             }
-            Ok(None) => std::thread::sleep(Duration::from_millis(15)),
-            Err(_) => return Err("provider-command-failed".to_string()),
+            let mut progressed = false;
+            if let Some(writer) = stdin.as_mut() {
+                if sent < input.len() {
+                    let end = input.len().min(sent + buffer.len());
+                    match writer.write(&input[sent..end]) {
+                        Ok(count) => { sent += count; progressed = count > 0; }
+                        Err(error) if matches!(error.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted) => {}
+                        Err(_) => return Err("provider-command-failed".to_string()),
+                    }
+                }
+                if sent == input.len() {
+                    drop(stdin.take()); // Deliver EOF to commands which read stdin to completion.
+                    progressed = true;
+                }
+            }
+            if !eof {
+                let limit = (max_stdout.saturating_sub(output.len() as u64).min(buffer.len() as u64 - 1) + 1) as usize;
+                match command_pipe::read(&mut stdout, &mut buffer[..limit]) {
+                    Ok(0) => { eof = true; progressed = true; }
+                    Ok(count) => {
+                        output.extend_from_slice(&buffer[..count]);
+                        if output.len() as u64 > max_stdout {
+                            return Err("provider-command-output-too-large".to_string());
+                        }
+                        progressed = true;
+                    }
+                    Err(error) if matches!(error.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted) => {}
+                    Err(_) => return Err("provider-command-failed".to_string()),
+                }
+            }
+            if status.is_none() {
+                status = child.try_wait().map_err(|_| "provider-command-failed".to_string())?;
+            }
+            if let Some(status) = status {
+                if stdin.is_some() { return Err("provider-command-failed".to_string()); }
+                if eof { return Ok(Output { status, stdout: output, stderr: Vec::new() }); }
+            }
+            if !progressed {
+                std::thread::sleep(Duration::from_millis(15).min(deadline.saturating_duration_since(Instant::now())));
+            }
         }
-    };
-    let stdout = reader
-        .join()
-        .map_err(|_| "provider-command-failed".to_string())?;
-    if stdout.len() as u64 > max_stdout {
-        return Err("provider-command-output-too-large".to_string());
+    })();
+    if result.is_err() {
+        // Reap the direct child on every failure, including pipe setup and output-limit errors.
+        let _ = child.kill();
+        let _ = child.wait();
     }
-    Ok(Output {
-        status,
-        stdout,
-        stderr: Vec::new(),
-    })
+    result
 }
 
 fn command_output(spec: &CommandSpec, args: &[&str]) -> Result<Output, String> {
@@ -1233,14 +1332,17 @@ fn run_previous_statusline(command: &str, input: &[u8]) -> Option<String> {
         shell.args(["-c", command]);
         shell
     };
-    let mut child = shell
+    run_statusline_command(&mut shell, input)
+}
+
+fn run_statusline_command(command: &mut Command, input: &[u8]) -> Option<String> {
+    let child = command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
         .ok()?;
-    child.stdin.take()?.write_all(input).ok()?;
-    let output = wait_with_timeout(child, STATUSLINE_COMMAND_TIMEOUT, MAX_STATUSLINE_OUTPUT_BYTES).ok()?;
+    let output = wait_with_timeout(child, Some(input), STATUSLINE_COMMAND_TIMEOUT, MAX_STATUSLINE_OUTPUT_BYTES).ok()?;
     if !output.status.success() {
         return None;
     }
@@ -1605,6 +1707,74 @@ mod tests {
         assert_eq!(command.get_program(), spec.path.as_os_str());
         let args: Vec<_> = command.get_args().collect();
         assert_eq!(args, [OsStr::new("app-server"), OsStr::new("--stdio")]);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn command_io_fixture() {
+        let Ok(mode) = env::var("SPECTRA_TEST_IO_MODE") else { return };
+        match mode.as_str() {
+            "hold-pipes" => std::thread::sleep(Duration::from_secs(4)),
+            "inherit-stdout" => {
+                let mut command = io_fixture_command("hold-pipes");
+                command.stdin(Stdio::null());
+                let _child = command.spawn().unwrap();
+            }
+            "duplex" => {
+                // More than a pipe buffer: input must be sent while output is drained.
+                std::io::stdout().write_all(&vec![b'o'; 32 * 1024]).unwrap();
+                let mut input = Vec::new();
+                std::io::stdin().read_to_end(&mut input).unwrap();
+                println!("received={}", input.len());
+            }
+            _ => panic!("unknown I/O fixture mode"),
+        }
+        std::process::exit(0);
+    }
+
+    #[cfg(target_os = "windows")]
+    fn io_fixture_command(mode: &str) -> Command {
+        let mut command = Command::new(env::current_exe().unwrap());
+        command.args(["--exact", "provider_usage::tests::command_io_fixture", "--nocapture"]);
+        command.env("SPECTRA_TEST_IO_MODE", mode);
+        hide_window(&mut command);
+        command
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn output_with_timeout_bounds_inherited_stdout() {
+        let mut child = io_fixture_command("inherit-stdout")
+            .stdout(Stdio::piped()).stderr(Stdio::null()).spawn().unwrap();
+        // The direct child is already gone; only its descendant holds stdout open.
+        assert!(child.wait().unwrap().success());
+        let started = Instant::now();
+        let result = wait_with_timeout(child, None, Duration::from_millis(250), 1024);
+        assert_eq!(result.unwrap_err(), "provider-command-timeout");
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn previous_statusline_times_out_when_stdin_is_not_consumed() {
+        let started = Instant::now();
+        let output = run_statusline_command(
+            &mut io_fixture_command("hold-pipes"),
+            &vec![b'x'; MAX_STATUSLINE_INPUT_BYTES as usize],
+        );
+        assert!(output.is_none());
+        assert!(started.elapsed() < Duration::from_millis(3500), "stdin exceeded the two-second deadline: {:?}", started.elapsed());
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn previous_statusline_sends_input_while_draining_stdout() {
+        let output = run_statusline_command(
+            &mut io_fixture_command("duplex"),
+            &vec![b'x'; MAX_STATUSLINE_INPUT_BYTES as usize],
+        ).expect("large bidirectional traffic must finish before the deadline");
+        assert!(output.contains(&"o".repeat(32 * 1024)));
+        assert!(output.ends_with("received=1048576"));
     }
 
     #[cfg(target_os = "windows")]

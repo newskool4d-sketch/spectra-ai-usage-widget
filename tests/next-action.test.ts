@@ -71,6 +71,80 @@ describe("computeNextAction", () => {
     assert.equal(result.headline, "지금은 Codex에서 작업");
   });
 
+  it("excludes a provider when its weekly limit is exhausted even with more rolling capacity", () => {
+    const result = computeNextAction({
+      codex: connected("codex", [window({ remainingPercent: 80 }), window({ id: "weekly", label: "주간 한도", remainingPercent: 0, usedPercent: 100 })]),
+      claude: connected("claude", [window({ remainingPercent: 30 }), window({ id: "weekly", label: "주간 한도", remainingPercent: 40 })])
+    }, base);
+    assert.equal(result.recommendedProvider, "claude");
+    assert.equal(result.chips[0], "Codex 주간 한도 0% 남음 · 2시간 후 초기화");
+  });
+
+  it("waits for a reset when all verified providers are exhausted", () => {
+    const result = computeNextAction({
+      codex: connected("codex", [window({ remainingPercent: 0, usedPercent: 100 })]),
+      claude: connected("claude", [window({ remainingPercent: 0, usedPercent: 100 })])
+    }, base);
+    assert.equal(result.recommendedProvider, null);
+    assert.equal(result.headline, "사용 가능한 한도가 없습니다 · 초기화를 기다려 주세요");
+  });
+
+  it("does not recommend the only verified provider when it is exhausted with an unknown reset", () => {
+    const result = computeNextAction({
+      codex: pending("codex"),
+      claude: connected("claude", [window({ remainingPercent: 0, resetsAt: null })])
+    }, base);
+    assert.equal(result.recommendedProvider, null);
+    assert.equal(result.headline, "사용 가능한 한도가 없습니다 · 초기화를 기다려 주세요");
+  });
+
+  it("requires fresh usage after any reset passes instead of assuming capacity was restored", () => {
+    for (const remainingPercent of [0, 80]) {
+      for (const resetsAt of [base - 1, base]) {
+        const result = computeNextAction({
+          codex: connected("codex", [window({ remainingPercent: 90 }), window({ id: "weekly", remainingPercent, resetsAt })]),
+          claude: pending("claude")
+        }, base);
+        assert.equal(result.recommendedProvider, null);
+        assert.equal(result.headline, "사용량을 새로고침한 뒤 권장 서비스를 확인해 주세요");
+      }
+    }
+  });
+
+  it("excludes invalid percentages or reset times without rendering NaN or Infinity", () => {
+    for (const invalid of [NaN, Infinity, -Infinity, -1, 101]) {
+      const result = computeNextAction({
+        codex: connected("codex", [window({ remainingPercent: invalid })]),
+        claude: connected("claude", [window({ remainingPercent: 30 })])
+      }, base);
+      assert.equal(result.recommendedProvider, "claude");
+      assert.equal(result.chips[0], "Codex 사용량 갱신 필요");
+    }
+    for (const resetsAt of [NaN, Infinity, -Infinity]) {
+      const result = computeNextAction({
+        codex: connected("codex", [window({ remainingPercent: 90, resetsAt })]),
+        claude: pending("claude")
+      }, base);
+      assert.equal(result.recommendedProvider, null);
+    }
+  });
+
+  it("preserves verified non-expired cache eligibility and the primary-window comparison policy", () => {
+    const result = computeNextAction({
+      codex: { ...connected("codex", [window({ remainingPercent: 80 }), window({ id: "weekly", remainingPercent: 1 })]), connectionState: "stale" },
+      claude: connected("claude", [window({ remainingPercent: 30 }), window({ id: "weekly", remainingPercent: 90 })])
+    }, base);
+    assert.equal(result.recommendedProvider, "codex");
+  });
+
+  it("accepts a single reported weekly window but does not treat missing usage as capacity", () => {
+    const result = computeNextAction({
+      codex: connected("codex", []),
+      claude: connected("claude", [window({ id: "weekly", label: "주간 한도", remainingPercent: 25 })])
+    }, base);
+    assert.equal(result.recommendedProvider, "claude");
+  });
+
   it("asks to connect when no provider has verified usage", () => {
     const result = computeNextAction({ codex: pending("codex"), claude: pending("claude") }, base);
     assert.equal(result.recommendedProvider, null);

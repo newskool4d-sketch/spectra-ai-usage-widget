@@ -5,6 +5,8 @@ export type NativeBootState = NativeUiPrefs & Readonly<{ mode: "mini" | "dashboa
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null;
 const knownProviders = new Set(["codex", "claude"]);
+// Match the native usage refresh interval so reopening does not prolong an old cache.
+const codexBootCacheMaxAgeMs = 120_000;
 
 function isWindow(value: unknown): boolean {
   return isRecord(value) && typeof value.id === "string" && typeof value.label === "string" && typeof value.usedPercent === "number" && typeof value.remainingPercent === "number";
@@ -38,15 +40,21 @@ export function providersMissingFromBoot<T extends string>(boot: NativeBootState
 }
 
 /**
- * Restored Claude usage must be checked again because its reset window can expire
- * while the WebView is asleep or the taskbar strip remains visible on its own.
+ * Claude always needs a fresh lookup. Codex can reuse a recent successful snapshot
+ * only while none of its quota windows have reset during WebView standby.
  */
-export function providersToRefreshAfterBoot<T extends string>(boot: NativeBootState | null, all: readonly T[]): T[] {
-  const pending = providersMissingFromBoot(boot, all);
-  if (!boot) return pending;
-  const claude = all.find(id => id === "claude");
-  if (claude && boot.snapshots.some(snapshot => snapshot.providerId === claude) && !pending.includes(claude)) {
-    return [...pending, claude];
-  }
-  return pending;
+export function providersToRefreshAfterBoot<T extends string>(boot: NativeBootState | null, all: readonly T[], now = Date.now()): T[] {
+  if (!boot) return [...all];
+  return all.filter(id => {
+    const snapshot = boot.snapshots.find(snapshot => snapshot.providerId === id);
+    if (!snapshot || id === "claude") return true;
+    if (id !== "codex") return false;
+    const captured = snapshot.lastSyncedAt == null ? NaN : snapshot.lastSyncedAt * 1000;
+    return snapshot.connectionState !== "connected"
+      || snapshot.windows.length === 0
+      || !Number.isFinite(captured)
+      || captured > now
+      || now - captured >= codexBootCacheMaxAgeMs
+      || snapshot.windows.some(window => window.resetsAt != null && window.resetsAt * 1000 <= now);
+  });
 }

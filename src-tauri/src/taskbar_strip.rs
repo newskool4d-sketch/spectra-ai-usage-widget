@@ -196,15 +196,25 @@ fn build_model_at(snapshots: &[ProviderUsageSnapshot], theme: StripTheme, now: u
 }
 
 /// 스트립을 트레이 왼쪽 가장자리에 오른쪽 정렬하고 작업표시줄 안에서 세로 중앙에 놓는다.
-/// 세로 작업표시줄은 v1 범위 밖이라 None(=띄우지 않음).
+/// 세로 작업표시줄이나 전체 스트립을 담을 공간이 없으면 None(=띄우지 않음).
 pub fn place_strip(taskbar: Rect, edge: TaskbarEdge, tray_left: i32, size: (i32, i32)) -> Option<(i32, i32)> {
     if matches!(edge, TaskbarEdge::Left | TaskbarEdge::Right) {
         return None;
     }
     let (width, height) = size;
-    let x = (tray_left - width).max(taskbar.left);
-    let y = taskbar.top + ((taskbar.bottom - taskbar.top) - height) / 2;
-    Some((x, y))
+    if width <= 0 || height <= 0 || taskbar.right <= taskbar.left || taskbar.bottom <= taskbar.top
+        || tray_left < taskbar.left || tray_left > taskbar.right {
+        return None;
+    }
+    // 가상 데스크톱은 음수 좌표를 포함한다. 차이는 i64로 계산해 경계값에서도 넘치지 않게 한다.
+    let available_width = i64::from(tray_left) - i64::from(taskbar.left);
+    let available_height = i64::from(taskbar.bottom) - i64::from(taskbar.top);
+    if i64::from(width) > available_width || i64::from(height) > available_height {
+        return None;
+    }
+    let x = i64::from(tray_left) - i64::from(width);
+    let y = i64::from(taskbar.top) + (available_height - i64::from(height)) / 2;
+    Some((i32::try_from(x).ok()?, i32::try_from(y).ok()?))
 }
 
 #[cfg(test)]
@@ -542,8 +552,60 @@ mod tests {
     }
 
     #[test]
-    fn place_strip_clamps_to_the_taskbar_left_edge_when_the_tray_is_huge() {
+    fn place_strip_hides_when_the_tray_leaves_insufficient_space_and_recovers() {
         let taskbar = Rect { left: 0, top: 1020, right: 1920, bottom: 1080 };
-        assert_eq!(place_strip(taskbar, TaskbarEdge::Bottom, 120, (200, 24)), Some((0, 1038)));
+        for (tray_left, expected) in [(120, None), (199, None), (200, Some((0, 1038))), (1425, Some((1225, 1038)))] {
+            assert_eq!(place_strip(taskbar, TaskbarEdge::Bottom, tray_left, (200, 24)), expected);
+        }
+    }
+
+    #[test]
+    fn place_strip_preserves_bounds_across_dpi_and_negative_monitor_coordinates() {
+        for dpi in [96, 120, 144] {
+            let size = (200 * dpi / 96, 24 * dpi / 96);
+            let taskbar = Rect { left: -1920, top: -60 * dpi / 96, right: 0, bottom: 0 };
+            for edge in [TaskbarEdge::Top, TaskbarEdge::Bottom] {
+                for tray in [taskbar.left + size.0 - 1, taskbar.left + size.0, -400, taskbar.right] {
+                    let position = place_strip(taskbar, edge, tray, size);
+                    if tray - taskbar.left < size.0 {
+                        assert_eq!(position, None);
+                    } else {
+                        let (x, y) = position.unwrap();
+                        assert_eq!(x + size.0, tray);
+                        assert!(x >= taskbar.left && x + size.0 <= taskbar.right);
+                        assert!(y >= taskbar.top && y + size.1 <= taskbar.bottom);
+                        assert_eq!(y - taskbar.top, (taskbar.bottom - taskbar.top - size.1) / 2);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn place_strip_rejects_invalid_dimensions_and_tray_coordinates() {
+        let taskbar = Rect { left: 0, top: 1020, right: 1920, bottom: 1080 };
+        for size in [(0, 24), (-1, 24), (200, 0), (200, -1), (200, 61), (i32::MAX, 24)] {
+            assert_eq!(place_strip(taskbar, TaskbarEdge::Bottom, 1425, size), None);
+        }
+        for tray in [-1, 0, 1921, i32::MIN, i32::MAX] {
+            assert_eq!(place_strip(taskbar, TaskbarEdge::Bottom, tray, (200, 24)), None);
+        }
+        for invalid in [
+            Rect { left: 0, top: 0, right: 0, bottom: 60 },
+            Rect { left: 10, top: 0, right: 0, bottom: 60 },
+            Rect { left: 0, top: 60, right: 1920, bottom: 60 },
+            Rect { left: 0, top: 61, right: 1920, bottom: 60 },
+        ] {
+            assert_eq!(place_strip(invalid, TaskbarEdge::Bottom, 0, (200, 24)), None);
+        }
+        assert_eq!(place_strip(taskbar, TaskbarEdge::Bottom, 200, (200, 60)), Some((0, 1020)));
+    }
+
+    #[test]
+    fn place_strip_avoids_overflow_at_coordinate_limits() {
+        let taskbar = Rect { left: i32::MIN, top: i32::MIN, right: i32::MAX, bottom: i32::MAX };
+        assert_eq!(place_strip(taskbar, TaskbarEdge::Bottom, i32::MIN + 199, (200, 24)), None);
+        assert_eq!(place_strip(taskbar, TaskbarEdge::Bottom, i32::MIN + 200, (200, 24)), Some((i32::MIN, -13)));
+        assert_eq!(place_strip(taskbar, TaskbarEdge::Bottom, i32::MAX, (200, 24)), Some((i32::MAX - 200, -13)));
     }
 }

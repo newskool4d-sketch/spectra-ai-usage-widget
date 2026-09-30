@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Icon, type IconName } from "./components/Icon";
 import { Sparkline } from "./components/Sparkline";
+import { UpdateNotice, type UpdateState } from "./components/UpdateNotice";
 import { computeNextAction, computeTimeProgress, hasVerifiedUsage, paceLabel } from "./data/next-action";
 import { createRefreshSequencer } from "./data/refresh-sequence";
 import { autoRefreshLabel, claudeFreshness } from "./data/usage-freshness";
@@ -55,9 +56,6 @@ type ProviderActionFeedback = Readonly<{
   status: NativeProviderActionResult["status"] | "refreshed" | "demo-only";
   message: string;
 }>;
-
-type UpdatePhase = "idle" | "checking" | "available" | "installing" | "up-to-date" | "unsupported" | "error";
-type UpdateState = Readonly<{ phase: UpdatePhase; version: string | null; message: string }>;
 
 type QuotaRecord = Readonly<Record<ProviderId, PlanQuota>>;
 type ProductView = "overview" | "services" | "trend" | "alerts" | "settings";
@@ -243,13 +241,6 @@ const TopActions = memo(function TopActions({ refreshedAt, refreshing, solid, th
   </div>;
 });
 
-const UpdateNotice = memo(function UpdateNotice({ version, onInstall, onDismiss }: Readonly<{ version: string; onInstall: () => void; onDismiss: () => void }>) {
-  return <aside className="update-notice" role="status" aria-live="polite">
-    <div className="update-notice-copy"><strong>SPECTRA 새 버전 {version}</strong><span>업데이트를 설치할 준비가 되었습니다.</span></div>
-    <div className="update-notice-actions"><button type="button" className="primary-action" onClick={onInstall}>지금 설치</button><button type="button" className="text-button" onClick={onDismiss}>나중에</button></div>
-  </aside>;
-});
-
 const NavRail = memo(function NavRail({ view, onView }: Readonly<{ view: ProductView; onView: (view: ProductView) => void }>) {
   const items: readonly Readonly<{ name: IconName; label: string; view: ProductView; notice?: boolean }>[] = [
     { name: "grid", label: "개요", view: "overview" },
@@ -330,7 +321,13 @@ const QuotaCell = memo(function QuotaCell({ provider, window, available, freshne
 });
 
 const NextActionStrip = memo(function NextActionStrip({ quotas, eyebrow }: Readonly<{ quotas: QuotaRecord; eyebrow?: string }>) {
-  const action = useMemo(() => computeNextAction(quotas, Date.now()), [quotas]);
+  const [, setNow] = useState(Date.now);
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 15_000);
+    return () => window.clearInterval(timer);
+  }, []);
+  // Reevaluate reset expiry without a new snapshot; read the clock on snapshot renders too.
+  const action = computeNextAction(quotas, Date.now());
   return <div className="next-action">
     {eyebrow ? <span className="eyebrow">{eyebrow}</span> : null}
     <h1>{action.headline}</h1>
@@ -604,8 +601,9 @@ export function App() {
   const [actionFeedback, setActionFeedback] = useState<ProviderActionFeedback | null>(null);
   const [loginPollingProviderId, setLoginPollingProviderId] = useState<ProviderId | null>(null);
   const [updateState, setUpdateState] = useState<UpdateState>({ phase: "idle", version: null, message: "업데이트 확인 전" });
-  const [updateDismissed, setUpdateDismissed] = useState(false);
+  const [updateNoticeVisible, setUpdateNoticeVisible] = useState(false);
   const pendingUpdate = useRef<AvailableAppUpdate | null>(null);
+  const updateOperationInFlight = useRef(false);
   const initialRefreshStarted = useRef(false);
   const refreshSequence = useRef(createRefreshSequencer<ProviderId>()).current;
   const activeProvider = useMemo(() => providers.find(provider => provider.id === activeProviderId) ?? providers[0], [activeProviderId]);
@@ -701,40 +699,53 @@ export function App() {
   }, [refreshProvider]);
 
   const checkForUpdates = useCallback(async () => {
+    if (updateOperationInFlight.current) return;
     if (!isTauriRuntime()) {
       setUpdateState({ phase: "unsupported", version: null, message: "설치된 앱에서만 업데이트를 확인할 수 있습니다." });
+      setUpdateNoticeVisible(false);
       return;
     }
+    updateOperationInFlight.current = true;
     setUpdateState({ phase: "checking", version: null, message: "새 버전을 확인하고 있습니다." });
-    setUpdateDismissed(false);
     try {
       const update = await checkForAppUpdate();
       pendingUpdate.current = update;
       if (!update) {
         setUpdateState({ phase: "up-to-date", version: null, message: "현재 최신 버전입니다." });
+        setUpdateNoticeVisible(false);
         return;
       }
       setUpdateState({ phase: "available", version: update.version, message: `새 버전 ${update.version}을 설치할 수 있습니다.` });
+      setUpdateNoticeVisible(true);
     } catch (error) {
       pendingUpdate.current = null;
       const detail = error instanceof Error ? error.message : "업데이트 서버에 연결하지 못했습니다.";
       setUpdateState({ phase: "error", version: null, message: `업데이트 확인 실패: ${detail}` });
+      setUpdateNoticeVisible(true);
+    } finally {
+      updateOperationInFlight.current = false;
     }
   }, []);
 
   const installUpdate = useCallback(async () => {
+    if (updateOperationInFlight.current) return;
     let update = pendingUpdate.current;
     if (!update) {
       await checkForUpdates();
       update = pendingUpdate.current;
     }
     if (!update) return;
+    updateOperationInFlight.current = true;
     setUpdateState({ phase: "installing", version: update.version, message: `버전 ${update.version}을 설치하고 있습니다.` });
+    setUpdateNoticeVisible(true);
     try {
       await update.install();
     } catch (error) {
       const detail = error instanceof Error ? error.message : "업데이트를 설치하지 못했습니다.";
       setUpdateState({ phase: "error", version: update.version, message: `업데이트 설치 실패: ${detail}` });
+      setUpdateNoticeVisible(true);
+    } finally {
+      updateOperationInFlight.current = false;
     }
   }, [checkForUpdates]);
 
@@ -752,8 +763,8 @@ export function App() {
       void refresh();
       return;
     }
-    // A standby reopen restored some providers from the boot cache; fetch only the rest so the
-    // Codex App Server is not relaunched for data that is already on screen.
+    // Recheck missing or stale snapshots after standby while reusing fresh Codex usage
+    // to avoid an unnecessary App Server launch.
     for (const id of pending) void refreshProvider(id);
   }, [boot, refresh, refreshProvider]);
 
@@ -884,5 +895,5 @@ export function App() {
     onInstallUpdate: () => void installUpdate()
   };
 
-  return <><div className={solid ? "solid-mode" : ""}>{windowMode === "mini" ? <MiniLayout quotas={quotas} onRefresh={refresh} refreshing={refreshing} /> : isMobile ? <VariantCMobile {...sharedProps} /> : <VariantADesktop {...sharedProps} />}</div>{updateState.phase === "available" && updateState.version && !updateDismissed ? <UpdateNotice version={updateState.version} onInstall={installUpdate} onDismiss={() => setUpdateDismissed(true)} /> : null}<OAuthDialog open={oauthOpen} provider={oauthProvider} quota={oauthQuota} startResult={actionFeedback} onClose={closeOAuth} onConnect={connectOAuth} onDisconnect={disconnectOAuth} /></>;
+  return <><div className={solid ? "solid-mode" : ""}>{windowMode === "mini" ? <MiniLayout quotas={quotas} onRefresh={refresh} refreshing={refreshing} /> : isMobile ? <VariantCMobile {...sharedProps} /> : <VariantADesktop {...sharedProps} />}</div><UpdateNotice state={updateState} visible={updateNoticeVisible} onInstall={installUpdate} onRetry={checkForUpdates} onDismiss={() => setUpdateNoticeVisible(false)} /><OAuthDialog open={oauthOpen} provider={oauthProvider} quota={oauthQuota} startResult={actionFeedback} onClose={closeOAuth} onConnect={connectOAuth} onDisconnect={disconnectOAuth} /></>;
 }

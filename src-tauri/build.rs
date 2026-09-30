@@ -105,6 +105,17 @@ fn main() {
         .expect("generated ICO could not be written");
 
     if env::var("CARGO_CFG_TARGET_OS").is_ok_and(|target| target == "windows") {
+        // Native integration tests use Tauri APIs that import Common Controls v6.
+        // Scope the manifest to MSVC test executables; production linkage is unchanged.
+        if env::var("CARGO_CFG_TARGET_ENV").is_ok_and(|target| target == "msvc") {
+            let test_manifest = manifest_dir.join("tests/windows-test.manifest");
+            println!("cargo:rerun-if-changed={}", test_manifest.display());
+            println!("cargo:rustc-link-arg-tests=/MANIFEST:EMBED");
+            println!(
+                "cargo:rustc-link-arg-tests=/MANIFESTINPUT:{}",
+                test_manifest.display()
+            );
+        }
         let windows = tauri_build::WindowsAttributes::new().window_icon_path(ico_path);
         let attributes = tauri_build::Attributes::new().windows_attributes(windows);
         tauri_build::try_build(attributes).expect("tauri build setup failed");

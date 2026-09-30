@@ -3847,10 +3847,11 @@ dependencies = [
 
 [[package]]
 name = "spectra-native"
-version = "0.2.6"
+version = "0.2.7"
 dependencies = [
  "base64 0.22.1",
  "keyring",
+ "libc",
  "png 0.17.16",
  "reqwest 0.12.28",
  "serde",
