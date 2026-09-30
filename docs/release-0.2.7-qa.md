@@ -25,6 +25,25 @@
 
 서명키 `TAURI_SIGNING_PRIVATE_KEY` 등록 상태를 확인했다. 키 값은 조회하거나 기록하지 않았다. 공개 배포는 태그 푸시로 기존 GitHub Actions를 실행하며, 서명된 NSIS·manifest·체크섬 자산을 별도로 검증한다.
 
+## 공개 배포 검증 (2026-09-30 KST)
+
+- 배포 소스: `0927fb7c5970530f1d1d6d0055751724daa993cd`. `main`과 `v0.2.7` 태그를 원격으로 함께 푸시했고, 태그의 커밋과 Actions 실행 커밋이 일치했다.
+- [GitHub Actions 36688891866](https://github.com/newskool4d-sketch/spectra-ai-usage-widget/actions/runs/36688891866): `completed / success`. Windows NSIS 빌드·서명·자산 검증·공개 단계 통과.
+- [공개 release v0.2.7](https://github.com/newskool4d-sketch/spectra-ai-usage-widget/releases/tag/v0.2.7): release ID `399847603`, `draft=false`, `prerelease=false`, 최신 release ID와 일치. 공개 시각은 2026-09-30 17:28:58 KST.
+- 공개 자산 4개를 내려받아 바이트 수와 SHA-256을 GitHub 자산 메타데이터의 `digest`와 각각 대조했다. `SHA256SUMS.txt`의 설치 파일·서명·manifest 해시도 일치했다.
+- 인증 헤더 없이 `releases/latest/download/latest.json`을 조회해 버전 `0.2.7` 및 다운로드한 manifest와의 내용 일치를 확인했다. 두 Windows 플랫폼 항목의 설치 파일 연결과 서명 문자열을 확인했다.
+- 앱의 공개키로 설치 파일 및 trusted comment 서명을 검증했고, 설치 파일의 첫 바이트를 변조한 사본은 서명 검증에서 거부됐다. 세 검사 모두 PASS.
+- 공개 자산에 `node scripts/verify-release.mjs`를 다시 적용해 PASS를 확인했다. Windows Authenticode는 `NotSigned`로, Tauri 업데이터 서명 검증과 별개다.
+
+| 공개 자산 | 바이트 수 | SHA-256 |
+|---|---:|---|
+| `SPECTRA_0.2.7_x64-setup.exe` | 2,837,812 | `3380fbf74c38dd3cff077e4c35e7d62885c908abacdbee0ebdefaa51036c17a3` |
+| `SPECTRA_0.2.7_x64-setup.exe.sig` | 416 | `5c9980579be9c836939df629b368c4f9fe29e7a530e13338b83838bd2495fdb3` |
+| `latest.json` | 1,382 | `5e46d2cfb7f4a2051a8a5c13d8089d5a3316a96ddea40253b9dd80a92d5eaa1f` |
+| `SHA256SUMS.txt` | 270 | `b5083532187c12aa36db8ee07cd7e9604a89c3f07981fd163f42d00ec6b872fb` |
+
+공개 배포와 자산 검증은 PASS다. 이 단계에서는 로컬 앱에 v0.2.7 공개 설치 파일을 설치하지 않았으며, 아래 실환경 검증 경계는 유지한다.
+
 ## 검증 경계
 
 - 실제 설치된 WebView의 네트워크 오류 화면과 설치 프로그램 실패 후 복구는 미검증이다. 브라우저 모의 응답 결과로 이를 대신하지 않는다.
