@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { CLAUDE_TOKEN_EXPIRED, autoRefreshLabel, claudeFreshness } from "../src/data/usage-freshness.ts";
+import { CLAUDE_TOKEN_EXPIRED, LOOKUP_DELAYED, autoRefreshLabel, claudeFreshness } from "../src/data/usage-freshness.ts";
 import { planQuotas, type PlanQuota } from "../src/data/providers.ts";
 
 const captured = 1_800_000_000_000;
@@ -44,12 +44,22 @@ describe("Claude freshness", () => {
   it("distinguishes login, first-use waiting, errors and installation without fake sync times", () => {
     for (const [state, label] of [
       ["signed_out", "로그인 필요"], ["waiting", "사용량 갱신 대기"],
-      ["error", "연결 상태 확인 필요"], ["not_installed", "Claude Code 설치 필요"]
+      ["error", "사용량 확인 지연"], ["not_installed", "Claude Code 설치 필요"]
     ] as const) {
       const result = claudeFreshness({ ...quota, connectionState: state, confidence: "unavailable", source: "unavailable", windows: [], lastSyncedAt: null, lastSyncedAtMs: null }, captured);
       assert.equal(result.label, label);
       assert.ok(result.tooltip.includes("마지막 동기화: 기록 없음"));
     }
+  });
+
+  it("reads a failed lookup as delayed, with the same text as the taskbar strip", () => {
+    // taskbar_strip::LOOKUP_DELAYED pins the same string on the Rust side.
+    assert.equal(LOOKUP_DELAYED, "사용량 확인 지연");
+    const failed = claudeFreshness({ ...quota, connectionState: "error", confidence: "unavailable", source: "unavailable", windows: [], liveFailure: "claude-auth-status-failed", statusMessage: "Claude Code 응답이 없어 이번 확인을 마치지 못했습니다." }, captured);
+    assert.equal(failed.label, LOOKUP_DELAYED);
+    assert.ok(!failed.tooltip.includes("계정 상태"));
+    const carried = claudeFreshness({ ...quota, connectionState: "stale", liveFailure: "claude-auth-status-failed", statusMessage: "Claude Code 응답이 없어 이번 확인을 마치지 못했습니다. 마지막 동기화 값을 표시합니다." }, captured + 30_000);
+    assert.equal(carried.label, "갱신 대기 (캐시)", "carried values keep the cache label");
   });
 
   it("keeps browser demo values explicitly labelled as demo", () => {

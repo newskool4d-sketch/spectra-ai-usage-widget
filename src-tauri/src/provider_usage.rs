@@ -14,7 +14,9 @@ const CLAUDE_BRIDGE_FLAG: &str = "--claude-statusline-bridge";
 const PROVIDER_SNAPSHOT_FLAG: &str = "--provider-snapshot";
 const RPC_TIMEOUT: Duration = Duration::from_secs(12);
 const STATUSLINE_COMMAND_TIMEOUT: Duration = Duration::from_secs(2);
-const CLAUDE_AUTH_TIMEOUT: Duration = Duration::from_secs(5);
+// `claude auth status` starts the whole Claude Code CLI: 3.5–5.5 s under load (2026-10-03).
+// It now runs only without a subscription login in the credentials file or after a 401/403.
+const CLAUDE_AUTH_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_COMMAND_OUTPUT_BYTES: u64 = 256 * 1024;
 const MAX_CODEX_RPC_STREAM_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_JSON_FILE_BYTES: u64 = 4 * 1024 * 1024;
@@ -38,6 +40,10 @@ pub struct ProviderUsageSnapshot {
     pub provider_id: String,
     pub runtime_available: bool,
     pub auth_state: String,
+    /// `"error"` is reserved for a lookup that failed by itself (a slow or crashed CLI, a
+    /// failed App Server RPC) and says nothing about the account. Account outcomes use
+    /// `signed-out`, `not-installed` or `waiting-for-usage`. `keep_last_good` and every
+    /// "사용량 확인 지연" label (strip, tray, window, next-action chip) rely on this split.
     pub connection_state: String,
     pub auth_method: Option<String>,
     pub plan_type: Option<String>,
@@ -145,7 +151,7 @@ fn resolve_windows_command(name: &str, directories: &[PathBuf]) -> Option<Comman
     None
 }
 
-fn unix_now() -> u64 {
+pub(crate) fn unix_now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -387,7 +393,7 @@ fn codex_snapshot() -> ProviderUsageSnapshot {
                     last_synced_at: None,
                     bridge_installed: false,
                     windows: Vec::new(),
-                    message: format!("Codex 계정 상태를 확인하지 못했습니다. ({reason})"),
+                    message: format!("Codex App Server 응답이 없어 이번 확인을 마치지 못했습니다. ({reason})"),
                     live_failure: Some(reason),
                 }
             }
@@ -603,7 +609,24 @@ fn unix_now_millis() -> u64 {
         .as_millis() as u64
 }
 
-fn read_claude_oauth_token_at(path: &Path, now_ms: u64) -> Result<String, String> {
+/// `auth_method` that `claude auth status` reports for a Claude.ai subscription login.
+const CLAUDE_SUBSCRIPTION_AUTH_METHOD: &str = "claude.ai";
+
+/// The subscription login Claude Code keeps in its credentials file. When it is present it
+/// already answers what `claude auth status` would (signed in through Claude.ai, plan
+/// `subscriptionType`), so the per-cycle CLI probe is skipped (spec 2026-09-18 §2-7,
+/// corrected 2026-10-03).
+#[derive(Debug, PartialEq)]
+struct ClaudeOAuth {
+    /// Access token, or `Err(CLAUDE_TOKEN_EXPIRED)` once it has expired.
+    token: Result<String, String>,
+    subscription_type: Option<String>,
+}
+
+/// `Err` means no readable subscription login: the file or the `claudeAiOauth` entry is
+/// missing (API key or signed out) or the file was caught mid-rewrite. The caller then asks
+/// the CLI instead of concluding signed-out.
+fn read_claude_oauth_at(path: &Path, now_ms: u64) -> Result<ClaudeOAuth, String> {
     let value = read_json(path)?;
     let oauth = value
         .get("claudeAiOauth")
@@ -613,12 +636,18 @@ fn read_claude_oauth_token_at(path: &Path, now_ms: u64) -> Result<String, String
         .and_then(Value::as_str)
         .filter(|token| !token.trim().is_empty())
         .ok_or_else(|| "claude-oauth-token-missing".to_string())?;
-    if let Some(expires_at) = oauth.get("expiresAt").and_then(Value::as_u64) {
-        if expires_at <= now_ms {
-            return Err(CLAUDE_TOKEN_EXPIRED.to_string());
-        }
-    }
-    Ok(token.to_string())
+    let expired = oauth
+        .get("expiresAt")
+        .and_then(Value::as_u64)
+        .is_some_and(|expires_at| expires_at <= now_ms);
+    Ok(ClaudeOAuth {
+        token: if expired { Err(CLAUDE_TOKEN_EXPIRED.to_string()) } else { Ok(token.to_string()) },
+        subscription_type: oauth
+            .get("subscriptionType")
+            .and_then(Value::as_str)
+            .filter(|plan| !plan.trim().is_empty())
+            .map(str::to_string),
+    })
 }
 
 /// Parses an RFC 3339 timestamp such as `2026-08-23T19:10:00Z`,
@@ -947,47 +976,55 @@ fn claude_live_failure_hint(error: Option<&str>) -> Option<&'static str> {
     }
 }
 
+/// Runs `claude auth status`. `Err` when the CLI did not answer (spawn failure or timeout);
+/// `Ok(None)` when it answered that no account is signed in.
+fn probe_claude_auth(spec: &CommandSpec) -> Result<Option<ClaudeAuthStatus>, ()> {
+    let output = command_output(spec, &["auth", "status"]).map_err(|_| ())?;
+    Ok(serde_json::from_slice::<ClaudeAuthStatus>(&output.stdout)
+        .ok()
+        .filter(|status| status.logged_in && output.status.success()))
+}
+
+/// The CLI probe itself failed. This is a lookup failure, not an account state, so it is
+/// `"error"` and `keep_last_good` keeps the last verified windows on screen.
+fn claude_probe_failed_snapshot(bridge_installed: bool) -> ProviderUsageSnapshot {
+    ProviderUsageSnapshot {
+        provider_id: "claude".to_string(),
+        runtime_available: true,
+        auth_state: "unknown".to_string(),
+        connection_state: "error".to_string(),
+        auth_method: None,
+        plan_type: None,
+        source: None,
+        last_synced_at: None,
+        bridge_installed,
+        windows: Vec::new(),
+        message: "Claude Code 응답이 없어 이번 확인을 마치지 못했습니다. 잠시 뒤 다시 확인합니다.".to_string(),
+        live_failure: Some("claude-auth-status-failed".to_string()),
+    }
+}
+
+fn claude_signed_out_snapshot(bridge_installed: bool) -> ProviderUsageSnapshot {
+    ProviderUsageSnapshot {
+        provider_id: "claude".to_string(),
+        runtime_available: true,
+        auth_state: "signed-out".to_string(),
+        connection_state: "signed-out".to_string(),
+        auth_method: None,
+        plan_type: None,
+        source: None,
+        last_synced_at: None,
+        bridge_installed,
+        windows: Vec::new(),
+        message: "Claude Pro/Max 계정 로그인이 필요합니다.".to_string(),
+        live_failure: Some("claude-signed-out".to_string()),
+    }
+}
+
 fn claude_snapshot() -> ProviderUsageSnapshot {
     let Some(spec) = resolve_command("claude") else {
         return unavailable_snapshot("claude", "Claude Code를 찾지 못했습니다.");
     };
-    let output = match command_output(&spec, &["auth", "status"]) {
-        Ok(output) => output,
-        Err(_) => {
-            return ProviderUsageSnapshot {
-                provider_id: "claude".to_string(),
-                runtime_available: true,
-                auth_state: "unknown".to_string(),
-                connection_state: "error".to_string(),
-                auth_method: None,
-                plan_type: None,
-                source: None,
-                last_synced_at: None,
-                bridge_installed: claude_bridge_installed(),
-                windows: Vec::new(),
-                message: "Claude 계정 상태를 확인하지 못했습니다.".to_string(),
-                live_failure: Some("claude-auth-status-failed".to_string()),
-            }
-        }
-    };
-    let status = serde_json::from_slice::<ClaudeAuthStatus>(&output.stdout).ok();
-    let Some(status) = status.filter(|status| status.logged_in && output.status.success()) else {
-        return ProviderUsageSnapshot {
-            provider_id: "claude".to_string(),
-            runtime_available: true,
-            auth_state: "signed-out".to_string(),
-            connection_state: "signed-out".to_string(),
-            auth_method: None,
-            plan_type: None,
-            source: None,
-            last_synced_at: None,
-            bridge_installed: claude_bridge_installed(),
-            windows: Vec::new(),
-            message: "Claude Pro/Max 계정 로그인이 필요합니다.".to_string(),
-            live_failure: Some("claude-signed-out".to_string()),
-        };
-    };
-
     let bridge_installed = claude_bridge_installed();
 
     // Prefer a direct lookup so the refresh button works even when no terminal
@@ -995,10 +1032,31 @@ fn claude_snapshot() -> ProviderUsageSnapshot {
     // is written to the same cache the statusline bridge uses, so both paths
     // stay consistent; on failure we fall back to whatever the bridge last
     // recorded and surface the reason.
-    let live_result = claude_credentials_path()
+    let login = claude_credentials_path()
         .ok_or_else(|| "claude-credentials-path-unavailable".to_string())
-        .and_then(|path| read_claude_oauth_token_at(&path, unix_now_millis()))
-        .and_then(|token| fetch_claude_usage_live(&token));
+        .and_then(|path| read_claude_oauth_at(&path, unix_now_millis()));
+    let (auth_method, plan_type, live_result) = match login {
+        // The credentials file already says signed in through Claude.ai and names the plan,
+        // so no CLI start is needed on this two-minute path.
+        Ok(oauth) => {
+            let live_result = oauth.token.and_then(|token| fetch_claude_usage_live(&token));
+            // A rejected token can mean the login ended elsewhere; only the CLI can tell.
+            // A slow or failed probe keeps the cache fallback below.
+            if live_result.as_ref().err().map(String::as_str) == Some("claude-usage-unauthorized")
+                && matches!(probe_claude_auth(&spec), Ok(None))
+            {
+                return claude_signed_out_snapshot(bridge_installed);
+            }
+            (Some(CLAUDE_SUBSCRIPTION_AUTH_METHOD.to_string()), oauth.subscription_type, live_result)
+        }
+        // No readable subscription login (API key, signed out, or a file caught mid-rewrite):
+        // the CLI decides, and the lookup falls back to the cache with this reason.
+        Err(reason) => match probe_claude_auth(&spec) {
+            Err(()) => return claude_probe_failed_snapshot(bridge_installed),
+            Ok(None) => return claude_signed_out_snapshot(bridge_installed),
+            Ok(Some(status)) => (status.auth_method, status.subscription_type, Err(reason)),
+        },
+    };
     let live_error = live_result.as_ref().err().cloned();
     let source_is_live = live_result.is_ok();
     let cache = match live_result {
@@ -1076,8 +1134,8 @@ fn claude_snapshot() -> ProviderUsageSnapshot {
         runtime_available: true,
         auth_state: "signed-in".to_string(),
         connection_state: connection_state.to_string(),
-        auth_method: status.auth_method,
-        plan_type: status.subscription_type,
+        auth_method,
+        plan_type,
         source: has_usage.then(|| {
             if source_is_live {
                 "claude-usage-api".to_string()
@@ -1099,6 +1157,43 @@ pub fn snapshot(provider_id: &str) -> ProviderUsageSnapshot {
         "claude" => claude_snapshot(),
         _ => unavailable_snapshot(provider_id, "지원하지 않는 공급자입니다."),
     }
+}
+
+/// A lookup that failed by itself (`connection_state == "error"`) says nothing about the
+/// account or the plan, so the last verified windows stay on screen as `stale` instead of
+/// blanking the strip, the tray badge and the window. Account outcomes (signed-out,
+/// not-installed, waiting-for-usage) still replace them. `live_failure` keeps the new code so
+/// the refresh scheduler backs off, and `last_synced_at` keeps the capture time of the
+/// carried windows across repeated failures.
+pub(crate) fn keep_last_good(previous: Option<&ProviderUsageSnapshot>, fresh: ProviderUsageSnapshot) -> ProviderUsageSnapshot {
+    if fresh.connection_state != "error" || !fresh.windows.is_empty() {
+        return fresh;
+    }
+    let Some(previous) = previous.filter(|previous| previous.provider_id == fresh.provider_id && !previous.windows.is_empty()) else {
+        return fresh;
+    };
+    let ProviderUsageSnapshot { provider_id, runtime_available, auth_state, auth_method, plan_type, bridge_installed, message, live_failure, .. } = fresh;
+    ProviderUsageSnapshot {
+        provider_id,
+        runtime_available,
+        auth_state: if auth_state == "unknown" { previous.auth_state.clone() } else { auth_state },
+        connection_state: "stale".to_string(),
+        auth_method: auth_method.or_else(|| previous.auth_method.clone()),
+        plan_type: plan_type.or_else(|| previous.plan_type.clone()),
+        source: previous.source.clone(),
+        last_synced_at: previous.last_synced_at,
+        bridge_installed,
+        windows: previous.windows.clone(),
+        message: format!("{message} 마지막 동기화 값을 표시합니다."),
+        live_failure,
+    }
+}
+
+/// A carried (`stale`) value whose window has already reset is not today's value: the strip,
+/// the tray badge and the window show "—" for it until a new lookup succeeds. Fresh
+/// (`connected`) values are refreshed at the reset boundary and stay as they are.
+pub(crate) fn stale_window_reset_passed(snapshot: &ProviderUsageSnapshot, window: &ProviderQuotaWindow, now: u64) -> bool {
+    snapshot.connection_state == "stale" && window.resets_at.is_some_and(|reset| reset <= now)
 }
 
 pub fn start_login(provider_id: &str) -> ProviderActionResult {
@@ -1569,39 +1664,146 @@ mod tests {
     }
 
     #[test]
-    fn reads_claude_oauth_token_only_while_unexpired() {
+    fn subscription_login_in_the_credentials_file_replaces_the_cli_probe() {
         let root = temp_dir("claude-oauth");
         let path = root.join(".credentials.json");
         let now_ms: u64 = 1_787_483_484_000;
-        write_json(
-            &path,
-            &json!({ "claudeAiOauth": { "accessToken": "sk-ant-test", "expiresAt": now_ms + 600_000 } }),
-        )
-        .unwrap();
-        let token = read_claude_oauth_token_at(&path, now_ms).unwrap();
-        assert_eq!(token, "sk-ant-test");
 
-        write_json(
-            &path,
-            &json!({ "claudeAiOauth": { "accessToken": "sk-ant-old", "expiresAt": now_ms - 1 } }),
-        )
-        .unwrap();
-        assert_eq!(
-            read_claude_oauth_token_at(&path, now_ms).unwrap_err(),
-            "claude-oauth-token-expired"
-        );
+        // Valid token: no probe, plan from the file.
+        write_json(&path, &json!({ "claudeAiOauth": {
+            "accessToken": "sk-ant-test", "expiresAt": now_ms + 600_000, "subscriptionType": "max" } })).unwrap();
+        assert_eq!(read_claude_oauth_at(&path, now_ms).unwrap(),
+            ClaudeOAuth { token: Ok("sk-ant-test".into()), subscription_type: Some("max".into()) });
 
+        // Expired token: still signed in (no probe), the token-expired path keeps the plan.
+        write_json(&path, &json!({ "claudeAiOauth": {
+            "accessToken": "sk-ant-old", "expiresAt": now_ms - 1, "subscriptionType": "pro" } })).unwrap();
+        assert_eq!(read_claude_oauth_at(&path, now_ms).unwrap(),
+            ClaudeOAuth { token: Err(CLAUDE_TOKEN_EXPIRED.into()), subscription_type: Some("pro".into()) });
+
+        // Older Claude Code without a plan field: the login still counts, the plan is unknown.
+        write_json(&path, &json!({ "claudeAiOauth": { "accessToken": "sk-ant-test", "subscriptionType": " " } })).unwrap();
+        assert_eq!(read_claude_oauth_at(&path, now_ms).unwrap().subscription_type, None);
+
+        // No readable subscription login: the caller asks the CLI instead of concluding signed-out.
         write_json(&path, &json!({ "mcpOAuth": {} })).unwrap();
-        assert_eq!(
-            read_claude_oauth_token_at(&path, now_ms).unwrap_err(),
-            "claude-oauth-token-missing"
-        );
-
-        assert_eq!(
-            read_claude_oauth_token_at(&root.join("nope.json"), now_ms).unwrap_err(),
-            "json-read-failed"
-        );
+        assert_eq!(read_claude_oauth_at(&path, now_ms).unwrap_err(), "claude-oauth-token-missing");
+        write_json(&path, &json!({ "claudeAiOauth": { "accessToken": "  " } })).unwrap();
+        assert_eq!(read_claude_oauth_at(&path, now_ms).unwrap_err(), "claude-oauth-token-missing");
+        fs::write(&path, br#"{"claudeAiOauth":{"accessToken":"sk-ant-te"#).unwrap();
+        assert_eq!(read_claude_oauth_at(&path, now_ms).unwrap_err(), "json-invalid", "a file caught mid-rewrite");
+        assert_eq!(read_claude_oauth_at(&root.join("nope.json"), now_ms).unwrap_err(), "json-read-failed");
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_failed_probe_is_a_lookup_error_and_signed_out_is_an_account_state() {
+        let failed = claude_probe_failed_snapshot(true);
+        assert_eq!(failed.connection_state, "error", "keep_last_good must treat it as transient");
+        assert_eq!(failed.live_failure.as_deref(), Some("claude-auth-status-failed"));
+        assert!(failed.windows.is_empty());
+        assert!(failed.bridge_installed);
+        assert!(!failed.message.contains("계정"), "a slow CLI must not read as an account problem");
+        let signed_out = claude_signed_out_snapshot(false);
+        assert_eq!(signed_out.connection_state, "signed-out");
+        assert_eq!(signed_out.live_failure.as_deref(), Some("claude-signed-out"));
+    }
+
+    fn snapshot_with(provider: &str, state: &str, windows: Vec<ProviderQuotaWindow>) -> ProviderUsageSnapshot {
+        ProviderUsageSnapshot {
+            provider_id: provider.into(),
+            runtime_available: true,
+            auth_state: "signed-in".into(),
+            connection_state: state.into(),
+            auth_method: Some("chatgpt".into()),
+            plan_type: Some("plus".into()),
+            source: Some("codex-app-server".into()),
+            last_synced_at: Some(1_000),
+            bridge_installed: false,
+            windows,
+            message: "Codex 공식 요금제 한도를 동기화했습니다.".into(),
+            live_failure: None,
+        }
+    }
+
+    fn quota(id: &str, remaining: f64, resets_at: Option<u64>) -> ProviderQuotaWindow {
+        ProviderQuotaWindow {
+            id: id.into(),
+            label: id.into(),
+            used_percent: 100.0 - remaining,
+            remaining_percent: remaining,
+            resets_at,
+            window_duration_mins: None,
+        }
+    }
+
+    fn lookup_failure(provider: &str, code: &str) -> ProviderUsageSnapshot {
+        ProviderUsageSnapshot {
+            auth_state: "unknown".into(),
+            auth_method: None,
+            plan_type: None,
+            source: None,
+            last_synced_at: None,
+            message: "Codex App Server 응답이 없어 이번 확인을 마치지 못했습니다. (codex-app-server-timeout)".into(),
+            live_failure: Some(code.into()),
+            ..snapshot_with(provider, "error", Vec::new())
+        }
+    }
+
+    #[test]
+    fn a_failed_lookup_keeps_the_last_verified_windows_as_stale() {
+        let good = snapshot_with("codex", "connected", vec![quota("rolling", 72.0, Some(5_000)), quota("weekly", 55.0, None)]);
+        let merged = keep_last_good(Some(&good), lookup_failure("codex", "codex-app-server-timeout"));
+        assert_eq!(merged.connection_state, "stale");
+        assert_eq!(merged.windows.iter().map(|w| w.remaining_percent).collect::<Vec<_>>(), [72.0, 55.0]);
+        assert_eq!(merged.last_synced_at, Some(1_000), "the age stays the capture time, not the failed attempt");
+        assert_eq!(merged.source.as_deref(), Some("codex-app-server"));
+        assert_eq!(merged.auth_state, "signed-in", "the connect flow must not start a login for a slow CLI");
+        assert_eq!((merged.auth_method.as_deref(), merged.plan_type.as_deref()), (Some("chatgpt"), Some("plus")));
+        assert_eq!(merged.live_failure.as_deref(), Some("codex-app-server-timeout"), "the scheduler still backs off");
+        assert!(merged.message.ends_with("마지막 동기화 값을 표시합니다."));
+        assert!(merged.message.contains("codex-app-server-timeout"));
+
+        // Repeated failures keep the original capture time and never stack the suffix.
+        let again = keep_last_good(Some(&merged), lookup_failure("codex", "codex-app-server-start-failed"));
+        assert_eq!(again.last_synced_at, Some(1_000));
+        assert_eq!(again.live_failure.as_deref(), Some("codex-app-server-start-failed"));
+        assert_eq!(again.message.matches("마지막 동기화 값을 표시합니다.").count(), 1);
+
+        // A Claude probe failure is the same kind of lookup error.
+        let claude = ProviderUsageSnapshot { provider_id: "claude".into(), source: Some("claude-usage-api".into()), ..good.clone() };
+        let merged = keep_last_good(Some(&claude), claude_probe_failed_snapshot(true));
+        assert_eq!((merged.connection_state.as_str(), merged.windows.len()), ("stale", 2));
+        assert_eq!(merged.live_failure.as_deref(), Some("claude-auth-status-failed"));
+    }
+
+    #[test]
+    fn account_outcomes_and_missing_history_still_replace_the_snapshot() {
+        let good = snapshot_with("codex", "connected", vec![quota("weekly", 55.0, None)]);
+        for state in ["signed-out", "not-installed", "waiting-for-usage"] {
+            let fresh = ProviderUsageSnapshot { live_failure: Some("codex-signed-out".into()), ..snapshot_with("codex", state, Vec::new()) };
+            assert_eq!(keep_last_good(Some(&good), fresh).connection_state, state, "{state} is an account answer, not a lookup failure");
+        }
+        let failure = lookup_failure("codex", "codex-app-server-timeout");
+        assert_eq!(keep_last_good(None, failure.clone()).connection_state, "error");
+        let empty = snapshot_with("codex", "waiting-for-usage", Vec::new());
+        assert_eq!(keep_last_good(Some(&empty), failure.clone()).connection_state, "error");
+        let other_provider = ProviderUsageSnapshot { provider_id: "claude".into(), ..good.clone() };
+        assert_eq!(keep_last_good(Some(&other_provider), failure).connection_state, "error");
+        let success = snapshot_with("codex", "connected", vec![quota("weekly", 40.0, None)]);
+        assert_eq!(keep_last_good(Some(&good), success.clone()).windows[0].remaining_percent, 40.0);
+    }
+
+    #[test]
+    fn only_carried_windows_past_their_reset_are_outdated() {
+        let window = quota("rolling", 9.0, Some(2_000));
+        let stale = snapshot_with("claude", "stale", vec![window.clone()]);
+        assert!(!stale_window_reset_passed(&stale, &window, 1_999));
+        assert!(stale_window_reset_passed(&stale, &window, 2_000));
+        let connected = snapshot_with("claude", "connected", vec![window.clone()]);
+        assert!(!stale_window_reset_passed(&connected, &window, 2_000), "fresh values refresh at the boundary themselves");
+        let unknown_reset = quota("weekly", 9.0, None);
+        assert!(!stale_window_reset_passed(&stale, &unknown_reset, u64::MAX));
     }
 
     #[test]

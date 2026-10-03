@@ -245,7 +245,7 @@ pub(crate) fn update_tray_badge<R: Runtime>(app: &AppHandle<R>) {
         .lock()
         .map(|list| list.clone())
         .unwrap_or_default();
-    match crate::tray_badge::min_remaining_percent(&snapshots) {
+    match crate::tray_badge::min_remaining_percent(&snapshots, crate::provider_usage::unix_now()) {
         Some((provider_id, percent)) => {
             let image = Image::new_owned(crate::tray_badge::render(percent), crate::tray_badge::BADGE_SIZE, crate::tray_badge::BADGE_SIZE);
             let _ = tray.set_icon(Some(image));

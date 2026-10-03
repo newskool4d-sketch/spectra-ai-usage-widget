@@ -3,6 +3,13 @@ import type { PlanQuota } from "./providers.ts";
 /** Native lookup failure code for an expired Claude Code access token (provider_usage::CLAUDE_TOKEN_EXPIRED). */
 export const CLAUDE_TOKEN_EXPIRED = "claude-oauth-token-expired";
 
+/**
+ * Label for connectionState "error" without data: the CLI or App Server lookup itself failed,
+ * so it must not read as a login or connection problem. Same text as taskbar_strip::LOOKUP_DELAYED,
+ * App.tsx connectionLabel and the next-action chip.
+ */
+export const LOOKUP_DELAYED = "사용량 확인 지연";
+
 // Keep the labels and expiry boundary aligned with taskbar_strip::claude_status.
 export function claudeFreshness(quota: PlanQuota, now: number): Readonly<{ label: string; tooltip: string }> {
   let label: string;
@@ -15,7 +22,8 @@ export function claudeFreshness(quota: PlanQuota, now: number): Readonly<{ label
   else if (quota.connectionState === "not_installed") label = "Claude Code 설치 필요";
   else if (quota.connectionState === "signed_out") label = "로그인 필요";
   else if (quota.liveFailure === CLAUDE_TOKEN_EXPIRED) label = "로그인 갱신 필요";
-  else if (quota.connectionState === "error" && !hasUsage) label = "연결 상태 확인 필요";
+  // "error" is a lookup that failed by itself, never an account state (provider_usage.rs).
+  else if (quota.connectionState === "error" && !hasUsage) label = LOOKUP_DELAYED;
   else if (!hasUsage) label = "사용량 갱신 대기";
   else if (quota.connectionState !== "connected" || expired || !capturedRecently || quota.source !== "claude-usage-api") label = "갱신 대기 (캐시)";
   else label = "동기화됨";

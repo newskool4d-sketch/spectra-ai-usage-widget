@@ -1,9 +1,12 @@
-use crate::provider_usage::ProviderUsageSnapshot;
+use crate::provider_usage::{stale_window_reset_passed, ProviderQuotaWindow, ProviderUsageSnapshot};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// 표시 순서와 사람이 읽는 이름. 스냅샷 도착 순서와 무관하게 이 순서로 그린다.
 const PROVIDERS: [(&str, &str); 2] = [("codex", "Codex"), ("claude", "Claude")];
 const NO_VALUE: &str = "—";
+/// 이전 값이 없을 때 조회 자체가 실패한 상태(`connection_state == "error"`)의 표기.
+/// 창의 claudeFreshness·connectionLabel·next-action 칩과 같은 문구를 쓴다.
+const LOOKUP_DELAYED: &str = "사용량 확인 지연";
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum StripTheme { Light, Dark }
@@ -52,16 +55,22 @@ fn usable(snapshot: &ProviderUsageSnapshot) -> bool {
     matches!(snapshot.connection_state.as_str(), "connected" | "stale") && !snapshot.windows.is_empty()
 }
 
+/// 이어받은(stale) 값 중 초기화 시각이 지난 창은 오늘 값이 아니므로 "—"로 둔다.
+fn window_percent(snapshot: &ProviderUsageSnapshot, window: &ProviderQuotaWindow, now: u64) -> Option<u8> {
+    (!stale_window_reset_passed(snapshot, window, now))
+        .then(|| window.remaining_percent.round().clamp(0.0, 100.0) as u8)
+}
+
 /// Codex의 기존 단일 값은 먼저 막히는 창의 잔여율을 유지한다.
 /// Claude와 5시간 창이 있는 Codex는 build_model_at에서 5시간·주간을 각각 고정 표시한다(스펙 §3-3).
-pub fn provider_remaining(snapshot: &ProviderUsageSnapshot) -> Option<u8> {
+pub fn provider_remaining(snapshot: &ProviderUsageSnapshot, now: u64) -> Option<u8> {
     if !usable(snapshot) {
         return None;
     }
     snapshot
         .windows
         .iter()
-        .map(|w| w.remaining_percent.round().clamp(0.0, 100.0) as u8)
+        .filter_map(|w| window_percent(snapshot, w, now))
         .min()
 }
 
@@ -99,7 +108,7 @@ fn claude_status(snapshot: &ProviderUsageSnapshot, now: u64) -> &'static str {
         return "로그인 갱신 필요";
     }
     if snapshot.connection_state == "error" && snapshot.windows.is_empty() {
-        return "연결 상태 확인 필요";
+        return LOOKUP_DELAYED;
     }
     if snapshot.windows.is_empty() {
         return "사용량 갱신 대기";
@@ -158,22 +167,36 @@ fn build_model_at(snapshots: &[ProviderUsageSnapshot], theme: StripTheme, now: u
         if id == "claude" || codex_has_short_window {
             // 데이터 순서·잔여량 크기·누락 여부에 따라 표시 기준이 바뀌지 않는다.
             for (window_id, label) in [("rolling", "5h"), ("weekly", "7d")] {
-                let remaining = snapshot.filter(|s| usable(s))
-                    .and_then(|s| s.windows.iter().find(|window| window.id == window_id))
-                    .map(|window| window.remaining_percent.round().clamp(0.0, 100.0) as u8);
+                let remaining = snapshot.filter(|s| usable(s)).and_then(|s| {
+                    s.windows.iter().find(|window| window.id == window_id)
+                        .and_then(|window| window_percent(s, window, now))
+                });
                 append_segment(Some(label), remaining);
             }
         } else {
-            append_segment(None, snapshot.and_then(provider_remaining));
+            append_segment(None, snapshot.and_then(|s| provider_remaining(s, now)));
         }
         if let Some(snapshot) = snapshot.filter(|s| usable(s)) {
             let detail = snapshot.windows.iter()
-                .map(|w| format!("{} {}%", w.label, w.remaining_percent.round().clamp(0.0, 100.0) as u8))
+                .map(|w| match window_percent(snapshot, w, now) {
+                    Some(percent) => format!("{} {percent}%", w.label),
+                    None => format!("{} {NO_VALUE}", w.label),
+                })
                 .collect::<Vec<_>>()
                 .join(" · ");
             tooltip_lines.push(format!("{name}  {detail}"));
         } else if id != "claude" || snapshot.is_none() {
-            tooltip_lines.push(format!("{name}  연결되지 않음"));
+            // "error"는 조회 자체의 실패라 계정 연결 문제로 표기하지 않는다.
+            let status = if snapshot.is_some_and(|s| s.connection_state == "error") { LOOKUP_DELAYED } else { "연결되지 않음" };
+            tooltip_lines.push(format!("{name}  {status}"));
+        }
+        // 조회 실패를 넘기며 이어받은 Codex 값에도 Claude와 같은 최신성·수집 시각을 붙인다.
+        if let Some(snapshot) = snapshot.filter(|s| id == "codex" && usable(s) && s.connection_state == "stale") {
+            tooltip_lines.push("Codex · 갱신 대기 (캐시)".to_string());
+            tooltip_lines.push(format!("마지막 동기화: {} (데이터 수집 기준)", last_sync_label(snapshot.last_synced_at, now)));
+            if !snapshot.message.is_empty() {
+                tooltip_lines.push(snapshot.message.clone());
+            }
         }
         if let Some(snapshot) = snapshot.filter(|_| id == "claude") {
             let status = claude_status(snapshot, now);
@@ -273,14 +296,14 @@ mod tests {
     #[test]
     fn provider_remaining_takes_the_binding_window_not_the_first() {
         let s = snapshot("codex", "connected", vec![window("rolling", 59.0), window("weekly", 31.4)]);
-        assert_eq!(provider_remaining(&s), Some(31));
+        assert_eq!(provider_remaining(&s, 0), Some(31));
     }
 
     #[test]
     fn provider_remaining_accepts_stale_but_not_disconnected() {
-        assert_eq!(provider_remaining(&snapshot("codex", "stale", vec![window("weekly", 55.0)])), Some(55));
-        assert_eq!(provider_remaining(&snapshot("codex", "signed-out", vec![window("weekly", 55.0)])), None);
-        assert_eq!(provider_remaining(&snapshot("codex", "connected", vec![])), None);
+        assert_eq!(provider_remaining(&snapshot("codex", "stale", vec![window("weekly", 55.0)]), 0), Some(55));
+        assert_eq!(provider_remaining(&snapshot("codex", "signed-out", vec![window("weekly", 55.0)]), 0), None);
+        assert_eq!(provider_remaining(&snapshot("codex", "connected", vec![]), 0), None);
     }
 
     #[test]
@@ -474,7 +497,7 @@ mod tests {
     #[test]
     fn claude_tooltip_shows_login_waiting_and_error_without_inventing_a_sync_time() {
         for (state, label) in [("signed-out", "로그인 필요"), ("waiting-for-usage", "사용량 갱신 대기"),
-            ("error", "연결 상태 확인 필요"), ("not-installed", "Claude Code 설치 필요")] {
+            ("error", "사용량 확인 지연"), ("not-installed", "Claude Code 설치 필요")] {
             let model = build_model_at(&[
                 snapshot("codex", "connected", vec![window("weekly", 55.0)]),
                 snapshot("claude", state, vec![]),
@@ -522,6 +545,62 @@ mod tests {
         assert!(model.tooltip.contains("Claude · 로그인 갱신 필요"));
         assert!(model.tooltip.contains("토큰이 만료되어"));
         assert_eq!(model.segments[1].value, "72%", "cached usage stays visible");
+    }
+
+    #[test]
+    fn carried_values_past_their_reset_show_a_dash_until_a_new_lookup() {
+        let mut claude = snapshot("claude", "stale", vec![window("rolling", 9.0), window("weekly", 40.0)]);
+        claude.windows[0].resets_at = Some(1_000);
+        let mut codex = snapshot("codex", "stale", vec![window("rolling", 12.0), window("weekly", 55.0)]);
+        codex.windows[0].resets_at = Some(1_000);
+        let values = |model: &StripModel| model.segments.iter().map(|s| s.value.clone()).collect::<Vec<_>>();
+
+        let before = build_model_at(&[codex.clone(), claude.clone()], StripTheme::Dark, 999).unwrap();
+        assert_eq!(values(&before), ["12%", "55%", "9%", "40%"]);
+        let after = build_model_at(&[codex.clone(), claude.clone()], StripTheme::Dark, 1_000).unwrap();
+        assert_eq!(values(&after), ["—", "55%", "—", "40%"], "a pre-reset value is not today's value");
+        assert_eq!(after.segments.len(), 4, "the layout does not change at the reset");
+        assert!(after.tooltip.contains("Claude  rolling — · weekly 40%"));
+
+        // A weekly-only Codex plan has a single value; it also turns into a dash.
+        let mut weekly_only = snapshot("codex", "stale", vec![window("weekly", 55.0)]);
+        weekly_only.windows[0].resets_at = Some(1_000);
+        assert_eq!(provider_remaining(&weekly_only, 1_000), None);
+
+        // Fresh values are refreshed at the boundary by the scheduler and stay untouched.
+        claude.connection_state = "connected".into();
+        let fresh = build_model_at(&[claude], StripTheme::Dark, 1_000).unwrap();
+        assert_eq!(fresh.segments[1].value, "9%");
+    }
+
+    #[test]
+    fn a_lookup_error_without_history_reads_as_delayed_not_disconnected() {
+        let mut codex_error = snapshot("codex", "error", vec![]);
+        codex_error.live_failure = Some("codex-app-server-timeout".into());
+        let mut claude_error = snapshot("claude", "error", vec![]);
+        claude_error.live_failure = Some("claude-auth-status-failed".into());
+        let model = build_model_at(&[codex_error, snapshot("claude", "connected", vec![window("rolling", 40.0)])], StripTheme::Light, 1_000).unwrap();
+        assert!(model.tooltip.contains("Codex  사용량 확인 지연"));
+        assert!(!model.tooltip.contains("연결되지 않음"));
+        assert_eq!(claude_status(&claude_error, 1_000), "사용량 확인 지연");
+        let missing = build_model_at(&[snapshot("claude", "connected", vec![window("rolling", 40.0)])], StripTheme::Light, 1_000).unwrap();
+        assert!(missing.tooltip.contains("Codex  연결되지 않음"), "a provider with no snapshot is still not connected");
+    }
+
+    #[test]
+    fn carried_codex_values_show_their_capture_age_like_claude() {
+        let mut codex = snapshot("codex", "stale", vec![window("weekly", 55.0)]);
+        codex.last_synced_at = Some(1_000);
+        codex.live_failure = Some("codex-app-server-timeout".into());
+        codex.message = "Codex App Server 응답이 없어 이번 확인을 마치지 못했습니다. (codex-app-server-timeout) 마지막 동기화 값을 표시합니다.".into();
+        let model = build_model_at(&[codex.clone()], StripTheme::Dark, 1_300).unwrap();
+        assert_eq!(model.segments[0].value, "55%", "the carried value stays visible");
+        assert!(model.tooltip.contains("Codex · 갱신 대기 (캐시)"));
+        assert!(model.tooltip.contains("마지막 동기화: 5분 전 (데이터 수집 기준)"));
+        assert!(model.tooltip.contains("마지막 동기화 값을 표시합니다."));
+        codex.connection_state = "connected".into();
+        let fresh = build_model_at(&[codex], StripTheme::Dark, 1_300).unwrap();
+        assert!(!fresh.tooltip.contains("Codex · 갱신 대기"), "fresh Codex values carry no stale marker");
     }
 
     #[test]

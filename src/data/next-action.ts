@@ -27,8 +27,23 @@ function needsUsageRefresh(quota: PlanQuota, now: number): boolean {
     || (window.resetsAt != null && (!Number.isFinite(window.resetsAt) || window.resetsAt <= now)));
 }
 
+/**
+ * A carried ("stale") window whose reset time has passed is not today's value; the board shows
+ * "—" for it until a new lookup succeeds. Mirrors provider_usage::stale_window_reset_passed.
+ */
+export function staleWindowResetPassed(quota: PlanQuota, window: QuotaWindow, now: number): boolean {
+  return quota.connectionState === "stale" && window.resetsAt != null && window.resetsAt <= now;
+}
+
+function unverifiedChip(id: ProviderId, quota: PlanQuota): string {
+  if (quota.connectionState === "waiting") return `${providerNames[id]} 첫 사용량 대기`;
+  // "error" is a lookup that failed by itself; keep the LOOKUP_DELAYED wording of usage-freshness.ts.
+  if (quota.connectionState === "error") return `${providerNames[id]} 사용량 확인 지연`;
+  return `${providerNames[id]} 연결 필요`;
+}
+
 function chipText(id: ProviderId, quota: PlanQuota, now: number): string {
-  if (!hasVerifiedUsage(quota)) return quota.connectionState === "waiting" ? `${providerNames[id]} 첫 사용량 대기` : `${providerNames[id]} 연결 필요`;
+  if (!hasVerifiedUsage(quota)) return unverifiedChip(id, quota);
   if (quota.windows.some(invalidRemaining)) return `${providerNames[id]} 사용량 갱신 필요`;
   // Show the binding limit, so a full rolling window cannot hide an exhausted week.
   const window = quota.windows.find(window => window.remainingPercent === 0 && (window.resetsAt == null || window.resetsAt > now))

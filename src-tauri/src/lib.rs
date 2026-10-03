@@ -58,11 +58,35 @@ impl AppState {
         standby::BootState { theme: prefs.theme, solid: prefs.solid, standby: prefs.standby, strip: prefs.strip, mode: mode.slug(), snapshots }
     }
 
-    pub(crate) fn remember_snapshot(&self, snapshot: &provider_usage::ProviderUsageSnapshot) {
-        if let Ok(mut list) = self.last_snapshots.lock() {
-            list.retain(|s| s.provider_id != snapshot.provider_id);
-            list.push(snapshot.clone());
-        }
+    /// Stores the newest snapshot for its provider and returns what was stored. A failed lookup
+    /// keeps the previous verified windows (`provider_usage::keep_last_good`), so the strip,
+    /// the tray badge, the WebView event and the command result all see the same value.
+    pub(crate) fn remember_snapshot(
+        &self,
+        snapshot: provider_usage::ProviderUsageSnapshot,
+    ) -> provider_usage::ProviderUsageSnapshot {
+        let Ok(mut list) = self.last_snapshots.lock() else { return snapshot };
+        let previous = list
+            .iter()
+            .position(|s| s.provider_id == snapshot.provider_id)
+            .map(|index| list.remove(index));
+        let stored = provider_usage::keep_last_good(previous.as_ref(), snapshot);
+        list.push(stored.clone());
+        stored
+    }
+
+    /// The value a superseded request reports without storing it. The connect flow still reads
+    /// its `authState`, so a slow CLI must not look signed-out there either.
+    pub(crate) fn with_last_good(
+        &self,
+        snapshot: provider_usage::ProviderUsageSnapshot,
+    ) -> provider_usage::ProviderUsageSnapshot {
+        let previous = self
+            .last_snapshots
+            .lock()
+            .ok()
+            .and_then(|list| list.iter().find(|s| s.provider_id == snapshot.provider_id).cloned());
+        provider_usage::keep_last_good(previous.as_ref(), snapshot)
     }
 
     /// Numbers a snapshot request for one provider; only the newest number stays current.
@@ -259,15 +283,17 @@ pub(crate) async fn refresh_provider(
         .await
         .map_err(|_| "provider usage worker failed".to_string())?;
     // A newer request for the same provider may have finished first; the standby cache, the
-    // tray badge, the strip and the WebView follow the newest request only.
+    // tray badge, the strip and the WebView follow the newest request only. Either way the
+    // caller receives the snapshot after `keep_last_good`, never the raw failed lookup.
     let state = app.state::<AppState>();
-    if state.snapshot_request_is_current(&provider_id, ticket) {
-        state.remember_snapshot(&snapshot);
-        desktop_shell::update_tray_badge(&app);
-        desktop_shell::update_taskbar_strip(&app);
-        if let Err(error) = app.emit(PROVIDER_USAGE_EVENT, &snapshot) {
-            eprintln!("spectra: provider usage event was not delivered: {error}");
-        }
+    if !state.snapshot_request_is_current(&provider_id, ticket) {
+        return Ok(state.with_last_good(snapshot));
+    }
+    let snapshot = state.remember_snapshot(snapshot);
+    desktop_shell::update_tray_badge(&app);
+    desktop_shell::update_taskbar_strip(&app);
+    if let Err(error) = app.emit(PROVIDER_USAGE_EVENT, &snapshot) {
+        eprintln!("spectra: provider usage event was not delivered: {error}");
     }
     Ok(snapshot)
 }
@@ -469,12 +495,61 @@ mod app_state_tests {
     #[test]
     fn remember_snapshot_replaces_same_provider_with_newer_payload() {
         let state = AppState::default();
-        state.remember_snapshot(&make_snapshot("codex", "first sync"));
-        state.remember_snapshot(&make_snapshot("codex", "second sync"));
+        state.remember_snapshot(make_snapshot("codex", "first sync"));
+        state.remember_snapshot(make_snapshot("codex", "second sync"));
 
         let snapshots = state.last_snapshots.lock().unwrap();
         assert_eq!(snapshots.len(), 1);
         assert_eq!(snapshots[0].message, "second sync");
+    }
+
+    fn usage_window(remaining: f64) -> provider_usage::ProviderQuotaWindow {
+        provider_usage::ProviderQuotaWindow {
+            id: "weekly".to_string(),
+            label: "주간 한도".to_string(),
+            used_percent: 100.0 - remaining,
+            remaining_percent: remaining,
+            resets_at: None,
+            window_duration_mins: Some(10_080),
+        }
+    }
+
+    fn failed_lookup() -> provider_usage::ProviderUsageSnapshot {
+        provider_usage::ProviderUsageSnapshot {
+            auth_state: "unknown".to_string(),
+            connection_state: "error".to_string(),
+            source: None,
+            last_synced_at: None,
+            live_failure: Some("codex-app-server-timeout".to_string()),
+            ..make_snapshot("codex", "Codex App Server 응답이 없어 이번 확인을 마치지 못했습니다.")
+        }
+    }
+
+    #[test]
+    fn remember_snapshot_stores_and_returns_the_same_last_good_value() {
+        let state = AppState::default();
+        state.remember_snapshot(provider_usage::ProviderUsageSnapshot { windows: vec![usage_window(55.0)], ..make_snapshot("codex", "synced") });
+
+        let returned = state.remember_snapshot(failed_lookup());
+        let stored = state.last_snapshots.lock().unwrap()[0].clone();
+        assert_eq!(serde_json::to_value(&returned).unwrap(), serde_json::to_value(&stored).unwrap(),
+            "the strip, the badge, the WebView event and the command result must agree");
+        assert_eq!(returned.connection_state, "stale");
+        assert_eq!(returned.windows[0].remaining_percent, 55.0);
+        assert_eq!(returned.live_failure.as_deref(), Some("codex-app-server-timeout"));
+        assert_eq!(state.last_snapshots.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_superseded_request_reports_the_last_good_value_without_storing_it() {
+        let state = AppState::default();
+        state.remember_snapshot(provider_usage::ProviderUsageSnapshot { windows: vec![usage_window(55.0)], ..make_snapshot("codex", "synced") });
+
+        let reported = state.with_last_good(failed_lookup());
+        assert_eq!(reported.connection_state, "stale");
+        assert_eq!(reported.auth_state, "authenticated");
+        let stored = state.last_snapshots.lock().unwrap()[0].clone();
+        assert_eq!(stored.connection_state, "connected", "only the newest request may store");
     }
 
     #[test]
@@ -486,7 +561,7 @@ mod app_state_tests {
             standby: true,
             strip: true,
         };
-        state.remember_snapshot(&make_snapshot("codex", "codex snapshot"));
+        state.remember_snapshot(make_snapshot("codex", "codex snapshot"));
 
         let boot = state.boot_state(desktop_shell::WindowMode::Dashboard);
 

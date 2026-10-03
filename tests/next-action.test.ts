@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { computeNextAction } from "../src/data/next-action.ts";
+import { computeNextAction, staleWindowResetPassed } from "../src/data/next-action.ts";
 import type { PlanQuota, ProviderId, QuotaWindow } from "../src/data/providers.ts";
 
 const base = 1_700_000_000_000;
@@ -173,6 +173,23 @@ describe("computeNextAction", () => {
       claude: connected("claude")
     }, base);
     assert.equal(result.chips[0], "Codex 첫 사용량 대기");
+  });
+
+  it("labels a failed lookup without history as delayed, not as a missing connection", () => {
+    const result = computeNextAction({
+      codex: { ...pending("codex"), connectionState: "error" },
+      claude: { ...pending("claude"), connectionState: "error" }
+    }, base);
+    assert.deepEqual(result.chips, ["Codex 사용량 확인 지연", "Claude 사용량 확인 지연"]);
+  });
+
+  it("marks only carried windows past their reset as outdated", () => {
+    const passed = window({ resetsAt: base });
+    const stale: PlanQuota = { ...connected("claude", [passed]), connectionState: "stale" };
+    assert.equal(staleWindowResetPassed(stale, passed, base - 1), false);
+    assert.equal(staleWindowResetPassed(stale, passed, base), true);
+    assert.equal(staleWindowResetPassed(connected("claude", [passed]), passed, base), false, "fresh values stay");
+    assert.equal(staleWindowResetPassed(stale, window({ resetsAt: null }), base), false);
   });
 
   it("does not append 초기화 to sentinel reset labels", () => {

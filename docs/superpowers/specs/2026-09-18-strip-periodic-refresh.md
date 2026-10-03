@@ -87,6 +87,7 @@
 ### 2-7. 보류 항목과 사유
 
 - `claude auth status` 생략(진단 보고의 A.5): `plan_type`·`auth_method`가 그 출력에 의존해 창의 "Claude Max" 표기가 사라진다 → 미채택. 주기당 비용 1.1초는 감수한다.
+  - **정정(2026-10-03): 채택.** 근거 ① `~/.claude/.credentials.json`의 `claudeAiOauth.subscriptionType`(실측 `max`)으로 요금제 표기 유지 가능 ② 부하 시 `auth status` 단독 3.5~5.5초(5회 중 2회가 당시 5초 제한 초과) → 시간 초과마다 `connection_state: error`·창 0개 스냅샷이 캐시를 건너뛰고 스트립·창의 Claude 값을 지움(점검·재현 기록 `docs/release-0.2.8-qa.md`). 현재 규칙: 자격 증명에 구독 로그인이 있으면 프로브 없이 실시간 조회, 프로브는 로그인 정보 부재·판독 실패 또는 401·403 응답 때만(제한 15초). 일시 실패 스냅샷은 `keep_last_good`가 직전 정상값으로 대체.
 - strip OFF + 창 열림 상태의 주기 갱신: 요청 범위(작업표시줄) 밖.
 - 브리지 값 신선도 라벨(B3): 터미널 사용자만 영향 → 이번 범위 밖.
 

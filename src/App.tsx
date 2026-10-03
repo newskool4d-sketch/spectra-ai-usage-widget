@@ -2,9 +2,9 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProper
 import { Icon, type IconName } from "./components/Icon";
 import { Sparkline } from "./components/Sparkline";
 import { UpdateNotice, type UpdateState } from "./components/UpdateNotice";
-import { computeNextAction, computeTimeProgress, hasVerifiedUsage, paceLabel } from "./data/next-action";
+import { computeNextAction, computeTimeProgress, hasVerifiedUsage, paceLabel, staleWindowResetPassed } from "./data/next-action";
 import { createRefreshSequencer } from "./data/refresh-sequence";
-import { autoRefreshLabel, claudeFreshness } from "./data/usage-freshness";
+import { LOOKUP_DELAYED, autoRefreshLabel, claudeFreshness } from "./data/usage-freshness";
 import { metricLabels, planQuotas, providers, rangeLabels, type AuthMethod, type Metric, type PlanQuota, type Provider, type ProviderId, type QuotaWindow, type QuotaWindowId, type UsageRange } from "./data/providers";
 import { checkForAppUpdate, type AvailableAppUpdate } from "./integrations/app-updater";
 import { providersToRefreshAfterBoot } from "./integrations/boot-state";
@@ -182,7 +182,7 @@ function connectionLabel(quota: PlanQuota) {
   if (quota.connectionState === "waiting") return quota.bridgeInstalled ? "로그인됨 · 첫 사용량 대기" : "로그인됨 · 동기화 설정 필요";
   if (quota.connectionState === "stale") return "연결됨 · 데이터 갱신 필요";
   if (quota.connectionState === "unsupported") return "OAuth 지원 확인 필요";
-  if (quota.connectionState === "error") return "연결 상태 확인 필요";
+  if (quota.connectionState === "error") return LOOKUP_DELAYED;
   if (quota.connectionState === "connected") return "공식 요금제 사용량 연결됨";
   return "공식 계정 연결 필요";
 }
@@ -308,12 +308,12 @@ const emptyQuotaWindow = (id: QuotaWindowId, providerId: ProviderId): QuotaWindo
   kindLabel: "실제 데이터 대기"
 });
 
-const QuotaCell = memo(function QuotaCell({ provider, window, available, freshness }: Readonly<{ provider: Provider; window: QuotaWindow; available: boolean; freshness?: ReturnType<typeof claudeFreshness> }>) {
+const QuotaCell = memo(function QuotaCell({ provider, window, available, pendingLabel = "연결 후 표시", freshness }: Readonly<{ provider: Provider; window: QuotaWindow; available: boolean; pendingLabel?: string; freshness?: ReturnType<typeof claudeFreshness> }>) {
   const progress = available ? computeTimeProgress(window, Date.now()) : null;
   return <div className="quota-cell" style={providerStyle(provider.color)} title={freshness?.tooltip}>
     <div className="quota-cell-top"><span className="quota-cell-pill">{provider.name}</span><span className="quota-cell-window">{window.label}</span></div>
     <div className="quota-cell-value">{available ? Math.round(window.remainingPercent) : "—"}{available ? <span>%</span> : null}</div>
-    <div className="quota-cell-meta">{available ? `초기화 · ${window.resetLabel}` : "연결 후 표시"}</div>
+    <div className="quota-cell-meta">{available ? `초기화 · ${window.resetLabel}` : pendingLabel}</div>
     {freshness ? <div className="quota-cell-meta">{freshness.label}</div> : null}
     <div className="quota-cell-meter" aria-label={available ? `${provider.name} ${window.label} ${Math.round(window.remainingPercent)}% 남음` : `${provider.name} ${window.label} 데이터 대기`}><i style={{ width: `${available ? window.remainingPercent : 0}%` }} /></div>
     {progress ? <div className="quota-cell-time"><i style={{ "--progress": `${progress.timePercent}%` } as CSSProperties} aria-label={`시간 진행 ${Math.round(progress.timePercent)}%`} />{progress.pace !== "even" ? <span className={`quota-cell-pace ${progress.pace}`}>{paceLabel(progress.pace)}</span> : null}</div> : null}
@@ -342,15 +342,18 @@ const QuotaBoard = memo(function QuotaBoard({ quotas }: Readonly<{ quotas: Quota
     return () => window.clearInterval(timer);
   }, []);
   // Read the clock on snapshot renders too: a response may arrive between timer ticks.
-  const freshness = claudeFreshness(quotas.claude, Date.now());
+  const now = Date.now();
+  const freshness = claudeFreshness(quotas.claude, now);
   const windowIds: readonly QuotaWindowId[] = ["rolling", "weekly"];
   return <div className="quota-board span-2" role="group" aria-label="공급자별 한도 현황">
     {providers.flatMap(provider => windowIds.map(id => {
       const quota = quotas[provider.id];
       const found = quota.windows.find(candidate => candidate.id === id);
       const window = found ?? emptyQuotaWindow(id, provider.id);
-      const available = hasDisplayValue(quota) && found !== undefined;
-      return <QuotaCell key={`${provider.id}-${id}`} provider={provider} window={window} available={available} freshness={provider.id === "claude" ? freshness : undefined} />;
+      // A carried value whose window already reset shows "—" like the taskbar strip.
+      const outdated = found !== undefined && staleWindowResetPassed(quota, found, now);
+      const available = hasDisplayValue(quota) && found !== undefined && !outdated;
+      return <QuotaCell key={`${provider.id}-${id}`} provider={provider} window={window} available={available} pendingLabel={outdated ? "초기화 후 갱신 대기" : undefined} freshness={provider.id === "claude" ? freshness : undefined} />;
     }))}
   </div>;
 });

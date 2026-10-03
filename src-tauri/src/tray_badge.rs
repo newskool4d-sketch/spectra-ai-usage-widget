@@ -40,12 +40,15 @@ fn usable(snapshot: &ProviderUsageSnapshot) -> bool {
     matches!(snapshot.connection_state.as_str(), "connected" | "stale") && !snapshot.windows.is_empty()
 }
 
-pub fn min_remaining_percent(snapshots: &[ProviderUsageSnapshot]) -> Option<(String, u8)> {
+pub fn min_remaining_percent(snapshots: &[ProviderUsageSnapshot], now: u64) -> Option<(String, u8)> {
     snapshots
         .iter()
         .filter(|snapshot| usable(snapshot))
         .filter_map(|snapshot| {
-            let window = snapshot.windows.iter().find(|w| w.id == "rolling").or_else(|| snapshot.windows.first())?;
+            // A carried value whose window already reset is not shown as a percentage.
+            let mut current = snapshot.windows.iter()
+                .filter(|w| !crate::provider_usage::stale_window_reset_passed(snapshot, w, now));
+            let window = current.clone().find(|w| w.id == "rolling").or_else(|| current.next())?;
             let percent = window.remaining_percent.round().clamp(0.0, 100.0) as u8;
             Some((snapshot.provider_id.clone(), percent))
         })
@@ -154,13 +157,26 @@ mod tests {
             snapshot("claude", "stale", vec![("rolling", 32.0)]),
             snapshot("gemini", "signed-out", vec![("rolling", 1.0)]),
         ];
-        assert_eq!(min_remaining_percent(&snapshots), Some(("codex".to_string(), 24)));
+        assert_eq!(min_remaining_percent(&snapshots, 0), Some(("codex".to_string(), 24)));
     }
 
     #[test]
     fn min_remaining_is_none_without_usable_windows() {
-        assert_eq!(min_remaining_percent(&[]), None);
-        assert_eq!(min_remaining_percent(&[snapshot("codex", "not-installed", vec![])]), None);
+        assert_eq!(min_remaining_percent(&[], 0), None);
+        assert_eq!(min_remaining_percent(&[snapshot("codex", "not-installed", vec![])], 0), None);
+    }
+
+    #[test]
+    fn min_remaining_skips_a_carried_window_that_already_reset() {
+        let mut claude = snapshot("claude", "stale", vec![("rolling", 9.0), ("weekly", 40.0)]);
+        claude.windows[0].resets_at = Some(1_000);
+        assert_eq!(min_remaining_percent(&[claude.clone()], 999), Some(("claude".to_string(), 9)));
+        assert_eq!(min_remaining_percent(&[claude.clone()], 1_000), Some(("claude".to_string(), 40)),
+            "the pre-reset 9% is not today's value");
+        claude.windows[1].resets_at = Some(1_000);
+        assert_eq!(min_remaining_percent(&[claude.clone()], 1_000), None);
+        claude.connection_state = "connected".to_string();
+        assert_eq!(min_remaining_percent(&[claude], 1_000), Some(("claude".to_string(), 9)), "fresh values stay");
     }
 
     #[test]
