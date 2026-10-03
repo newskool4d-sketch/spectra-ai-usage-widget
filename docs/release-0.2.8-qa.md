@@ -85,4 +85,22 @@
 - 로컬 0.2.8 설치 후 공개 0.2.8이 나와도 업데이터는 같은 버전으로 판단 → 이전 릴리스의 앱 내 업그레이드 검증은 이번에 반복 불가. 공개 설치 파일 재설치로 대체 가능.
 - 설치본 실행 파일 SHA-256은 `target/release` 산출물과 다름(크기 동일, 번들 단계의 실행 파일 패치). 공개 릴리스는 CI가 같은 커밋에서 다시 빌드하므로 로컬 설치 파일 해시를 공개 자산 해시로 쓰지 않음.
 - Claude 쪽 실앱 병합(CLI 프로브 실패 시 직전 값 유지)은 실앱에서 재현하지 않음. 구독 로그인이 있으면 프로브가 실행되지 않아 경로 자체가 드묾. 단위 테스트로 확인.
-- 공개 배포(push + `v0.2.8` 태그) 미실시.
+
+## 공개 배포 검증 (2026-10-03 KST)
+
+- 배포 소스: `6b8e14c05a305bc65bed7b778d99f5f411210f4a`. `main`과 주석 태그 `v0.2.8`을 원자적으로 함께 푸시(15:41:50), 태그 커밋과 Actions 실행 커밋 일치.
+- [GitHub Actions 37103901145](https://github.com/newskool4d-sketch/spectra-ai-usage-widget/actions/runs/37103901145): `completed / success`, 15:41:55~15:52:19(10분 24초). 버전·서명 키 존재·프런트엔드·네이티브 테스트·NSIS 빌드·서명·자산 검증·공개 단계 통과. Node.js 20 지원 종료 안내 주석 1건(`actions/checkout@v4`·`actions/setup-node@v4`가 Node 24로 실행), 실패 아님.
+- [공개 release v0.2.8](https://github.com/newskool4d-sketch/spectra-ai-usage-widget/releases/tag/v0.2.8): release ID `402374671`, `draft=false`, `prerelease=false`, 최신 release ID와 일치, 공개 시각 2026-10-03 15:52:11 KST. 본문은 `docs/releases/v0.2.8.md`.
+- 공개 자산 4개를 내려받아 바이트 수와 SHA-256을 GitHub 자산 메타데이터의 `digest`와 각각 대조. `SHA256SUMS.txt`의 설치 파일·서명·manifest 해시도 일치.
+- 인증 헤더 없이 `releases/latest/download/latest.json`을 조회해 버전 `0.2.8`, 내려받은 manifest와의 내용 일치, Windows 두 플랫폼 항목의 설치 파일 연결과 서명 문자열 확인.
+- 앱의 공개키(키 ID `2b2190fae1b3f640`)로 설치 파일 및 trusted comment 서명 검증 PASS, 설치 파일 첫 바이트를 변조한 사본은 거부.
+- 공개 자산에 `node scripts/verify-release.mjs`를 다시 적용해 PASS. Windows Authenticode는 `NotSigned`로, Tauri 업데이터 서명 검증과 별개.
+
+| 공개 자산 | 바이트 수 | SHA-256 |
+|---|---:|---|
+| `SPECTRA_0.2.8_x64-setup.exe` | 2,839,202 | `a61e3a28ce9d208ed902340ff8b17df7ea66411c495c09e7bf50f71d7120d979` |
+| `SPECTRA_0.2.8_x64-setup.exe.sig` | 416 | `745fff80fb7baa4af1a21ad595220e6ee52f22a084d36d490ce66e35e97b9f99` |
+| `latest.json` | 1,382 | `6ef5473c62a302995a3e88510a1d5790a9097e8471b6368cb145a789cfe06f67` |
+| `SHA256SUMS.txt` | 270 | `24819b0eab4d8fe011e6375a3c3632104152ba140d3a79c77055598c930c5273` |
+
+- 이 PC의 설치본은 로컬 빌드 0.2.8(설치 파일 2,845,762 B)로, 공개 설치 파일과 해시가 다름. 업데이터는 같은 버전으로 판단해 안내하지 않음. 공개 빌드로 맞추려면 공개 설치 파일 재설치 필요(미실시).
