@@ -39,9 +39,13 @@ $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $arguments = '-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + (Join-Path $destination 'start-spectra-taskbar-keeper.ps1') + '"'
 $action = New-ScheduledTaskAction -Execute $pwsh -Argument $arguments -WorkingDirectory $destination
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $sid
+# RestartCount only covers launches that fail. A launcher that is closed or killed is not
+# restarted (verified 2026-10-29: exit code 0xC000013A, no restart). Repeating the trigger
+# brings a lost launcher back within 5 minutes while IgnoreNew leaves a running one alone.
+$trigger.Repetition = (New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 5)).Repetition
 $principal = New-ScheduledTaskPrincipal -UserId $sid -LogonType Interactive -RunLevel Limited
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
-Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description 'Start the confirmed SPECTRA v0.2.8 taskbar keeper at Windows logon.' | Out-Null
+Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description 'Start the confirmed SPECTRA v0.2.8 taskbar keeper at Windows logon and bring it back within 5 minutes if it stops.' | Out-Null
 Start-ScheduledTask -TaskName $taskName
 Start-Sleep -Seconds 4
 if ((Get-ScheduledTask -TaskName $taskName).State -ne 'Running') { throw 'The keeper task did not start.' }

@@ -23,3 +23,24 @@
 ## 미검증
 
 실제 재부팅과 다른 PC 새 설치는 수행하지 않았습니다. 앱 내부 실험 수정의 테스트 통과는 이 배포물의 실제 메뉴 검증 근거로 사용하지 않습니다.
+
+## 2026-10-29 종료 기록·자동 재시작 보정
+
+정기 점검에서 `SPECTRA Taskbar Keeper` 작업이 로그온 08:18:46 실행 뒤 결과 `0xC000013A`로 끝났고 재시작되지 않았으며 `startup.log`에 종료 기록이 없는 것을 확인했습니다. 앱 프로세스(08:19:17 시작)는 그대로 살아 있었으므로 로그오프가 아닌 외부 콘솔 종료 신호였습니다.
+
+확인한 사실:
+
+- pwsh 7.6.9에서 `exit`와 예외는 `finally`를 실행하지만, `/F` 없는 `taskkill`(콘솔 종료 신호)은 같은 결과 `0xC000013A`를 내면서 `finally`를 실행하지 않고, `Stop-Process`(`0xFFFFFFFF`)도 실행하지 않습니다.
+- 임시 작업 2개로 비교한 결과, `-RestartCount 3 -RestartInterval 1분`만 있는 작업은 `0xC000013A` 종료 뒤 3분 동안 재시작되지 않았고, 트리거 반복(1분)이 있는 작업은 매 분 다시 실행되었습니다. 임시 작업은 확인 후 바로 등록 해제했습니다.
+
+변경:
+
+- `start-spectra-taskbar-keeper.ps1`: 시작(`LAUNCHER_STARTED pid= mode=logon|relaunch`)과 `finally` 종료(`LAUNCHER_EXIT pid= reason=DUPLICATE_LAUNCHER|ERROR …|INTERRUPTED`)를 기록하고, 종료 기록 없이 끝난 직전 실행기를 다음 실행기가 `PREVIOUS_LAUNCHER_LOST pid=`로 남깁니다. 로그온 이후 실행기 기록이 있는 재실행은 앱이 꺼져 있어도 앱을 켜지 않고 `RELAUNCH_WAITING_FOR_SPECTRA`로 기다립니다.
+- `install-taskbar-keeper.ps1`: 로그온 트리거에 5분 반복을 추가해 끝난 실행기를 다시 시작합니다. `MultipleInstances IgnoreNew`와 뮤텍스가 중복 실행을 막습니다.
+- 유지 모듈 `keep-spectra-taskbar.ps1`은 바꾸지 않았으므로 공개 사본 SHA-256 `03CC3025F1294C7F240845382ABEF56BC5EE9A632E4509164C2106C7F442A3BB`도 그대로입니다.
+
+검증:
+
+- 스크립트 3개의 구문 검증을 통과했고 수정한 두 스크립트는 ASCII·LF입니다.
+- 격리 폴더에서 가짜 `LOCALAPPDATA`와 `cmd.exe` 사본을 앱으로 두고 7단계를 확인했습니다: 로그온 모드 시작과 앱 실행, `taskkill` 종료 뒤 재실행의 `PREVIOUS_LAUNCHER_LOST`·`mode=relaunch`·기존 앱 유지, 중복 실행기의 `DUPLICATE_LAUNCHER`, 앱 종료 뒤 대기, 앱이 꺼진 상태의 재실행이 앱을 켜지 않음, 실행 파일 누락 때 `ERROR` 종료 사유 기록과 종료 코드 1.
+- 현재 PC에 설치된 원본 모듈, 실행기, 예약 작업은 교체하거나 다시 시작하지 않았습니다. 공개 ZIP(`SPECTRA_0.2.8_taskbar-keeper.zip`)은 아직 이전 스크립트이며 재배포는 별도 작업입니다.

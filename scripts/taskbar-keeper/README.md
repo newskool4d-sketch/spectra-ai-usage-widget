@@ -15,7 +15,7 @@ Windows x64, SPECTRA v0.2.8, PowerShell 7이 필요합니다. 이 모듈은 SHA-
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\install-taskbar-keeper.ps1
 ```
 
-현재 사용자용 `SPECTRA Taskbar Keeper` 작업을 등록하며 관리자 권한이나 비밀번호 저장은 필요하지 않습니다. 기존 작업 또는 유지 모듈 폴더가 있으면 덮어쓰지 않고 중단합니다. 이미 유지 모듈을 적용한 PC에서는 다시 설치할 필요가 없습니다.
+현재 사용자용 `SPECTRA Taskbar Keeper` 작업을 등록하며 관리자 권한이나 비밀번호 저장은 필요하지 않습니다. 기존 작업 또는 유지 모듈 폴더가 있으면 덮어쓰지 않고 중단합니다. 이미 유지 모듈을 적용한 PC는 그대로 동작합니다. 2026-10-29의 종료 기록·자동 재시작 보정을 그 PC에도 적용하려면 작업 스케줄러에서 `SPECTRA Taskbar Keeper` 작업을 삭제하고 `%LOCALAPPDATA%\SPECTRA\taskbar-keeper` 폴더를 지운 뒤 다시 설치합니다.
 
 ## 실행
 
@@ -23,8 +23,12 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\install-taskbar-keeper.ps1
 
 유지 모듈은 `%LOCALAPPDATA%\SPECTRA\taskbar-keeper`에 설치됩니다. Windows 작업 스케줄러에서 `SPECTRA Taskbar Keeper`를 사용 안 함으로 바꾸면 다음 로그인부터 자동 실행을 중단할 수 있습니다.
 
+실행기가 외부에서 끝나면(예: `/F` 없는 `taskkill`이 보내는 콘솔 종료 신호, 작업 결과 `0xC000013A`) 작업의 반복 트리거가 5분 안에 실행기를 다시 시작합니다. 다시 시작된 실행기는 앱이 실행 중이면 유지 모듈만 다시 연결하고, 앱이 꺼져 있으면 앱을 켜지 않고 다음 앱 실행을 기다립니다. 작업 스케줄러의 `RestartCount` 설정은 시작 실패에만 적용되어 이 경우를 보완하지 못합니다(2026-10-29 확인).
+
+`startup.log`에는 실행기 시작(`LAUNCHER_STARTED pid=… mode=logon|relaunch`)과 종료(`LAUNCHER_EXIT pid=… reason=…`)가 남습니다. 콘솔 종료 신호와 강제 종료는 종료 기록을 남길 수 없으므로 다음 실행기가 `PREVIOUS_LAUNCHER_LOST pid=…`로 표시합니다.
+
 ## 검증 범위
 
-현재 PC에서 볼륨 메뉴를 닫은 뒤 숫자가 계속 보이는 것을 사용자에게 확인받았습니다. 로그인 트리거 등록, 실제 작업 실행, 기존 앱 프로세스 유지와 파일 해시 보존을 확인했습니다. 실제 재부팅, 다른 PC의 새 설치는 아직 검증하지 않았습니다.
+현재 PC에서 볼륨 메뉴를 닫은 뒤 숫자가 계속 보이는 것을 사용자에게 확인받았습니다. 로그인 트리거 등록, 실제 작업 실행, 기존 앱 프로세스 유지와 파일 해시 보존을 확인했습니다. 2026-10-29의 종료 기록과 반복 재시작은 임시 작업과 격리 폴더에서 확인했으며 현재 PC에 설치된 모듈과 작업은 교체하지 않았습니다. 실제 재부팅, 다른 PC의 새 설치는 아직 검증하지 않았습니다.
 
 이 배포물은 현재 성공한 외부 유지 방식입니다. 앱 내부 수정으로 해결됐다고 주장하지 않습니다.
