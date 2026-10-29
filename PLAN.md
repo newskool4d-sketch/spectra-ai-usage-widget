@@ -15,7 +15,8 @@
 - [x] 4단계 Claude 수용 QA: opt-in 브리지 설치·첫 실제 5시간/7일 값·화면 동기화 검증
 - [x] GitHub 소스 공개: 검증된 `main` 2커밋 push 및 저장소 Public 전환
 - [x] v0.2.0 unsigned 공개 Release: Public prerelease와 SHA-256 검증 asset 업로드
-- [ ] Windows 코드 서명·자동 업데이트: 서명 체계와 업데이트 경로 구성
+- [x] Windows 자동 업데이트: 서명된 업데이트 manifest와 앱 내 새 버전 안내·설치 경로 구성
+- [ ] Windows 코드 서명: 실행 파일·설치 파일 서명 체계 구성
 - [ ] 5단계: macOS 메뉴 막대 앱과 iOS SwiftUI/WidgetKit 동기화
 
 ## 제품이 바로 답해야 할 것

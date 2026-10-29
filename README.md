@@ -92,7 +92,7 @@ npm run verify:tokens
 
 Codex는 로그아웃 상태에서 `codex login`을 시작하고, 로그인 뒤 `codex app-server --stdio`의 `account/read`와 `account/rateLimits/read`를 호출합니다. App Server는 요청 때만 실행하며 응답 또는 제한 시간 뒤 종료합니다. API key 로그인은 ChatGPT 개인 요금제 한도로 취급하지 않습니다.
 
-Claude는 `claude auth status`로 로그인 상태를 확인합니다. 사용자가 `사용량 브리지 설치`를 선택하면 공식 status line 입력의 5시간·7일 `rate_limits` 필드만 정제해 저장합니다. 첫 Claude 응답 전에는 `첫 사용량 대기`로 표시될 수 있으며, 브리지 제거 시 기존 상태선 설정을 복원합니다.
+Claude는 Claude Code 자격 증명에 구독 로그인이 있으면 `claude auth status`를 실행하지 않고 공식 OAuth 사용량 endpoint에서 5시간·7일 한도를 바로 조회합니다. `claude auth status`는 로그인 정보를 읽지 못했거나 조회가 401·403으로 거부될 때만 15초 제한으로 실행합니다. 사용자가 `사용량 브리지 설치`를 선택하면 공식 status line 입력의 5시간·7일 `rate_limits` 필드만 정제해 저장합니다. 첫 Claude 응답 전에는 `첫 사용량 대기`로 표시될 수 있으며, 브리지 제거 시 기존 상태선 설정을 복원합니다.
 
 공급자별 공식 인터페이스와 호환성 범위는 [`docs/integrations/provider-capability-matrix.md`](./docs/integrations/provider-capability-matrix.md), 데이터·자격 증명 경계는 [`docs/integrations/native-oauth.md`](./docs/integrations/native-oauth.md)에 기록합니다. 현재 활성 흐름은 별도 client ID나 SPECTRA 소유 token vault를 요구하지 않습니다. 공식 CLI가 자격 증명을 계속 관리합니다.
 
@@ -113,7 +113,7 @@ Claude는 `claude auth status`로 로그인 상태를 확인합니다. 사용자
 
 - OpenAI Codex·Claude의 비공개 웹 세션·스크래핑·잔여량 추정
 - 조직 API 사용량과 ChatGPT/Claude 개인 구독 잔여량의 동일시
-- 과거 사용량 분석·코드 서명·자동 업데이트
+- 과거 사용량 분석·코드 서명
 - 모든 AI 서비스가 공식 한도 API를 제공한다는 전제
 - macOS 메뉴 막대 앱과 iOS SwiftUI/WidgetKit 실구현
 

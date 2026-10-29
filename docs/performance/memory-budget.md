@@ -7,7 +7,7 @@ SPECTRA는 트레이에 오래 머무는 앱이므로 사용량 연결 뒤에도
 - 차트 라이브러리, `requestAnimationFrame`, `localStorage`, `sessionStorage`, 상시 `setInterval`을 사용하지 않습니다.
 - 네이티브 앱은 과거 사용량 시계열을 저장하지 않고 현재 한도 스냅샷만 보관합니다.
 - Codex App Server는 새로고침 요청 때만 실행하며 응답 또는 12초 제한 뒤 자식 프로세스를 종료합니다.
-- Claude 조회는 짧은 `claude auth status` 프로세스와 작은 정제 JSON 캐시만 사용합니다.
+- Claude 조회는 자격 증명에 구독 로그인이 있으면 10초 제한의 공식 사용량 endpoint 요청과 작은 정제 JSON 캐시만 사용하고, 로그인 정보를 읽지 못했거나 조회가 401·403으로 거부될 때만 `claude auth status` 프로세스를 15초 제한으로 실행합니다(v0.2.8).
 - Codex JSONL은 총 2MiB, JSON 파일은 4MiB, Claude 상태선 입력은 1MiB로 제한합니다.
 - 기존 Claude 상태선 명령은 2초, 출력은 64KiB로 제한합니다.
 - 로그인 직후 확인은 대화상자가 열린 동안 단일 재귀 `setTimeout`으로만 수행하며 성공·닫기·30회 제한에서 종료합니다.
@@ -32,7 +32,7 @@ npm run verify:memory
 - 닫기 후 트레이 숨김 3초: 작업 집합 437.5MB, private 203.6MB
 - 네이티브 호스트 자체: 작업 집합 32.4MB, private 6.3MB
 
-대부분은 WebView2의 브라우저·렌더러·GPU 프로세스입니다. 현재는 빠른 재표시를 위해 닫기 시 창을 숨기므로 WebView2가 유지됩니다. 릴리스 프로필에는 size 최적화, thin LTO, 단일 codegen unit, 심볼 제거, abort panic을 적용합니다.
+대부분은 WebView2의 브라우저·렌더러·GPU 프로세스입니다. 현재는 빠른 재표시를 위해 닫기 시 창을 숨기므로 WebView2가 유지됩니다. 릴리스 프로필에는 size 최적화, fat LTO, 단일 codegen unit, 심볼 제거, abort panic을 적용합니다.
 
 더 줄여야 한다면 닫을 때 WebView 창을 파기하고 트레이 클릭 시 재생성하는 선택형 저메모리 대기 모드를 별도 기능으로 검토합니다. 재표시 지연과 화면 상태 초기화가 대가이며, WebView2 보안 격리를 약화하는 비공식 single-process 플래그는 사용하지 않습니다.
 
