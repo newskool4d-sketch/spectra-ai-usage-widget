@@ -6,7 +6,7 @@
 
 ## 설치
 
-Windows x64, SPECTRA v0.2.8 또는 v0.2.9, PowerShell 7이 필요합니다. 설치 스크립트는 앱 실행 파일의 ProductVersion이 `0.2.8` 또는 `0.2.9`인지 확인합니다. 공개 CI 빌드는 빌드마다 SHA-256이 다르고 실행 파일에 Authenticode 서명이 없어 해시를 고정하지 않습니다(2026-10-29 변경). 검증 PC의 로컬 빌드 SHA-256은 `A67DC7BA19B5F245EC23C8450899093438F5DDCDF2A7E8FEA982A7F2007C8C20`입니다.
+Windows x64, SPECTRA v0.2.8 또는 v0.2.9, PowerShell 7이 필요합니다. 설치 스크립트는 앱 실행 파일의 ProductVersion이 `0.2.8` 또는 `0.2.9`인지 확인합니다. 공개 CI 빌드는 빌드마다 SHA-256이 다르고 실행 파일에 Authenticode 서명이 없어 해시를 고정하지 않습니다(2026-10-29 변경). 참고 해시(SHA-256): v0.2.8 공개 CI 빌드 `348EBCDE8126637DA8240461990313B219430B171892CD2CA02B4C8E62C0EB96`, v0.2.9 공개 CI 빌드 `B4EFA178E9F721908B052297B89ED4C932835DC5803090958E8F0DB70BAD7636`, 검증 PC의 v0.2.8 로컬 빌드 `A67DC7BA19B5F245EC23C8450899093438F5DDCDF2A7E8FEA982A7F2007C8C20`.
 
 1. 릴리스의 `SPECTRA_0.2.8_taskbar-keeper.zip`을 다운로드하고 압축을 풉니다.
 2. 압축을 푼 폴더에서 다음 명령을 실행합니다.
