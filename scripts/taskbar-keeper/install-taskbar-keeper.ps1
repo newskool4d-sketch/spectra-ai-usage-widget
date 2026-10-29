@@ -3,7 +3,10 @@ $taskName = 'SPECTRA Taskbar Keeper'
 $installed = Join-Path $env:LOCALAPPDATA 'SPECTRA\spectra-native.exe'
 $destination = Join-Path $env:LOCALAPPDATA 'SPECTRA\taskbar-keeper'
 $pwsh = Join-Path $env:ProgramFiles 'PowerShell\7\pwsh.exe'
-$expectedExeHash = 'A67DC7BA19B5F245EC23C8450899093438F5DDCDF2A7E8FEA982A7F2007C8C20'
+# Every public CI build hashes differently from the local build the keeper was verified
+# against (A67DC7BA...), and the executable carries no Authenticode signature, so the check
+# reads the product version instead. v0.2.9 rebuilt the same app source as v0.2.8.
+$supportedVersions = @('0.2.8', '0.2.9')
 $expectedKeeperHash = '03CC3025F1294C7F240845382ABEF56BC5EE9A632E4509164C2106C7F442A3BB'
 
 # Existing working installations are never overwritten or restarted.
@@ -13,9 +16,10 @@ if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) {
 if (Test-Path -LiteralPath $destination) {
     throw 'The keeper directory already exists. Existing files were preserved.'
 }
-if (-not (Test-Path -LiteralPath $installed -PathType Leaf)) { throw 'Install SPECTRA v0.2.8 first.' }
-if ((Get-FileHash -LiteralPath $installed -Algorithm SHA256).Hash -ne $expectedExeHash) {
-    throw 'This add-on requires the verified SPECTRA v0.2.8 executable.'
+if (-not (Test-Path -LiteralPath $installed -PathType Leaf)) { throw 'Install SPECTRA v0.2.8 or later first.' }
+$installedVersion = (Get-Item -LiteralPath $installed).VersionInfo.ProductVersion
+if ($installedVersion -notin $supportedVersions) {
+    throw ('This add-on supports SPECTRA ' + ($supportedVersions -join ', ') + "; found '" + $installedVersion + "'.")
 }
 if (-not (Test-Path -LiteralPath $pwsh -PathType Leaf)) { throw 'PowerShell 7 is required.' }
 $keeper = Join-Path $PSScriptRoot 'keep-spectra-taskbar.ps1'
@@ -45,7 +49,7 @@ $trigger = New-ScheduledTaskTrigger -AtLogOn -User $sid
 $trigger.Repetition = (New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 5)).Repetition
 $principal = New-ScheduledTaskPrincipal -UserId $sid -LogonType Interactive -RunLevel Limited
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
-Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description 'Start the confirmed SPECTRA v0.2.8 taskbar keeper at Windows logon and bring it back within 5 minutes if it stops.' | Out-Null
+Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description 'Start the SPECTRA taskbar keeper at Windows logon and bring it back within 5 minutes if it stops.' | Out-Null
 Start-ScheduledTask -TaskName $taskName
 Start-Sleep -Seconds 4
 if ((Get-ScheduledTask -TaskName $taskName).State -ne 'Running') { throw 'The keeper task did not start.' }
