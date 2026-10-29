@@ -15,7 +15,8 @@ const PROVIDER_SNAPSHOT_FLAG: &str = "--provider-snapshot";
 const RPC_TIMEOUT: Duration = Duration::from_secs(12);
 const STATUSLINE_COMMAND_TIMEOUT: Duration = Duration::from_secs(2);
 // `claude auth status` starts the whole Claude Code CLI: 3.5–5.5 s under load (2026-10-03).
-// It now runs only without a subscription login in the credentials file or after a 401/403.
+// It now runs only without a subscription login in the credentials file, with an expired
+// access token (the probe renews it), or after a 401/403.
 const CLAUDE_AUTH_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_COMMAND_OUTPUT_BYTES: u64 = 256 * 1024;
 const MAX_CODEX_RPC_STREAM_BYTES: u64 = 2 * 1024 * 1024;
@@ -1038,7 +1039,26 @@ fn claude_snapshot() -> ProviderUsageSnapshot {
     let (auth_method, plan_type, live_result) = match login {
         // The credentials file already says signed in through Claude.ai and names the plan,
         // so no CLI start is needed on this two-minute path.
-        Ok(oauth) => {
+        Ok(mut oauth) => {
+            // The access token lasts eight hours and only a Claude Code process renews it.
+            // When none has run, the file stays expired for hours and the values freeze, so
+            // ask the CLI once: `claude auth status` rewrites the credentials with a fresh
+            // token (about 1 s, verified 2026-10-29) and the live lookup continues on this
+            // same pass instead of holding for the token-expired window. A CLI that does not
+            // answer keeps the hold and the cache fallback below.
+            if oauth.token.as_ref().err().map(String::as_str) == Some(CLAUDE_TOKEN_EXPIRED) {
+                match probe_claude_auth(&spec) {
+                    Ok(None) => return claude_signed_out_snapshot(bridge_installed),
+                    Ok(Some(_)) => {
+                        if let Some(refreshed) =
+                            claude_credentials_path().and_then(|path| read_claude_oauth_at(&path, unix_now_millis()).ok())
+                        {
+                            oauth = refreshed;
+                        }
+                    }
+                    Err(()) => {}
+                }
+            }
             let live_result = oauth.token.and_then(|token| fetch_claude_usage_live(&token));
             // A rejected token can mean the login ended elsewhere; only the CLI can tell.
             // A slow or failed probe keeps the cache fallback below.
