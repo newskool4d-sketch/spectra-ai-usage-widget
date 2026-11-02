@@ -5,8 +5,8 @@ $destination = Join-Path $env:LOCALAPPDATA 'SPECTRA\taskbar-keeper'
 $pwsh = Join-Path $env:ProgramFiles 'PowerShell\7\pwsh.exe'
 # Every public CI build hashes differently from the local build the keeper was verified
 # against (A67DC7BA...), and the executable carries no Authenticode signature, so the check
-# reads the product version instead. v0.2.9 rebuilt the same app source as v0.2.8.
-$supportedVersions = @('0.2.8', '0.2.9')
+# reads the product version instead. v0.3.0 preserves the installed path and strip class.
+$supportedVersions = @('0.2.8', '0.2.9', '0.3.0')
 $expectedKeeperHash = '03CC3025F1294C7F240845382ABEF56BC5EE9A632E4509164C2106C7F442A3BB'
 
 # Existing working installations are never overwritten or restarted.
