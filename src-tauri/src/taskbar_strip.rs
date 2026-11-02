@@ -2,7 +2,7 @@ use crate::provider_usage::{stale_window_reset_passed, ProviderQuotaWindow, Prov
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// 표시 순서와 사람이 읽는 이름. 스냅샷 도착 순서와 무관하게 이 순서로 그린다.
-const PROVIDERS: [(&str, &str); 2] = [("codex", "Codex"), ("claude", "Claude")];
+const PROVIDERS: [(&str, &str); 3] = [("codex", "Codex"), ("claude", "Claude"), ("antigravity", "Antigravity")];
 const NO_VALUE: &str = "—";
 /// 이전 값이 없을 때 조회 자체가 실패한 상태(`connection_state == "error"`)의 표기.
 /// 창의 claudeFreshness·connectionLabel·next-action 칩과 같은 문구를 쓴다.
@@ -53,12 +53,18 @@ fn value_color(percent: u8, palette: Palette) -> [u8; 3] {
 
 fn usable(snapshot: &ProviderUsageSnapshot) -> bool {
     matches!(snapshot.connection_state.as_str(), "connected" | "stale") && !snapshot.windows.is_empty()
+        && (snapshot.provider_id != "antigravity" || snapshot.source.as_deref() == Some("antigravity-statusline"))
 }
 
 /// 이어받은(stale) 값 중 초기화 시각이 지난 창은 오늘 값이 아니므로 "—"로 둔다.
 fn window_percent(snapshot: &ProviderUsageSnapshot, window: &ProviderQuotaWindow, now: u64) -> Option<u8> {
-    (!stale_window_reset_passed(snapshot, window, now))
-        .then(|| window.remaining_percent.round().clamp(0.0, 100.0) as u8)
+    let valid = window.remaining_percent.is_finite() && (0.0..=100.0).contains(&window.remaining_percent);
+    // CLI 캐시를 읽는 사이에도 초기화가 지나면 AG 값을 즉시 비운다.
+    let valid_ag_window = snapshot.provider_id != "antigravity"
+        || (matches!(window.id.as_str(), "rolling" | "weekly")
+            && !window.resets_at.is_some_and(|reset| reset <= now));
+    (valid && valid_ag_window && !stale_window_reset_passed(snapshot, window, now))
+        .then(|| window.remaining_percent.round() as u8)
 }
 
 /// Codex의 기존 단일 값은 먼저 막히는 창의 잔여율을 유지한다.
@@ -80,6 +86,7 @@ pub struct StripSegment {
     pub window_label: Option<&'static str>,
     pub value: String,
     pub value_color: [u8; 3],
+    pub stale: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -89,12 +96,47 @@ pub struct StripModel { pub segments: Vec<StripSegment>, pub tooltip: String }
 pub fn retheme_model(model: &mut StripModel, theme: StripTheme) {
     let colors = palette(theme);
     for segment in &mut model.segments {
-        segment.value_color = segment.value.strip_suffix('%')
+        segment.value_color = segment.value.strip_suffix('%').filter(|_| !segment.stale)
             .and_then(|value| value.parse::<u8>().ok())
             .filter(|percent| *percent <= 100)
             .map(|percent| value_color(percent, colors))
             .unwrap_or(colors.label);
     }
+}
+
+/// 좁은 작업표시줄에서는 기간별 칸을 서비스별 최소값 하나로 줄인다.
+/// 누락값은 0으로 바꾸지 않고, 상세 기간·모델군은 원래 tooltip에 남긴다.
+pub fn compact_model(model: &StripModel) -> StripModel {
+    let mut segments: Vec<StripSegment> = Vec::new();
+    for segment in &model.segments {
+        let percent = |value: &str| value.strip_suffix('%').and_then(|n| n.parse::<u8>().ok()).filter(|n| *n <= 100);
+        if let Some(existing) = segments.iter_mut().find(|s| s.label == segment.label) {
+            if percent(&segment.value).is_some_and(|value| percent(&existing.value).map_or(true, |old| value < old)) {
+                existing.value = segment.value.clone();
+                existing.value_color = segment.value_color;
+            }
+            existing.stale |= segment.stale;
+        } else {
+            segments.push(StripSegment { window_label: None, ..segment.clone() });
+        }
+    }
+    StripModel { segments, tooltip: format!("간결 표시 · 서비스별 최소 잔여율\n{}", model.tooltip) }
+}
+
+fn antigravity_stale(snapshot: &ProviderUsageSnapshot, now: u64) -> bool {
+    snapshot.connection_state != "connected"
+        || !snapshot.last_synced_at.is_some_and(|captured| captured > 0 && captured <= now && now - captured < 300)
+        || snapshot.windows.iter().any(|w| w.resets_at.is_some_and(|reset| reset <= now))
+}
+
+fn antigravity_status(snapshot: Option<&ProviderUsageSnapshot>, now: u64) -> &'static str {
+    let Some(snapshot) = snapshot else { return "CLI 첫 수집 대기" };
+    if !snapshot.runtime_available || snapshot.connection_state == "not-installed" { return "Antigravity CLI 설치 필요"; }
+    if !snapshot.bridge_installed { return "CLI 사용량 연결 필요"; }
+    if snapshot.auth_state == "signed-out" || snapshot.connection_state == "signed-out" { return "CLI 로그인 필요"; }
+    if snapshot.connection_state == "error" { return LOOKUP_DELAYED; }
+    if !usable(snapshot) { return "CLI 첫 수집 대기"; }
+    if antigravity_stale(snapshot, now) { "갱신 대기 (CLI 캐시)" } else { "CLI 수집값 · 최신" }
 }
 
 fn claude_status(snapshot: &ProviderUsageSnapshot, now: u64) -> &'static str {
@@ -151,13 +193,15 @@ fn build_model_at(snapshots: &[ProviderUsageSnapshot], theme: StripTheme, now: u
 
     for (id, name) in PROVIDERS {
         let snapshot = snapshots.iter().find(|s| s.provider_id == id);
+        let stale = id == "antigravity" && snapshot.is_some_and(|s| antigravity_stale(s, now));
         let mut append_segment = |window_label, remaining: Option<u8>| {
             any_value |= remaining.is_some();
             segments.push(StripSegment {
                 label: name.to_string(),
                 window_label,
                 value: remaining.map(|percent| format!("{percent}%")).unwrap_or_else(|| NO_VALUE.to_string()),
-                value_color: remaining.map(|percent| value_color(percent, colors)).unwrap_or(colors.label),
+                value_color: remaining.filter(|_| !stale).map(|percent| value_color(percent, colors)).unwrap_or(colors.label),
+                stale,
             });
         };
         // Codex는 5시간 창이 있는 요금제(Plus 등)일 때만 두 기간을 나눠 표시하고,
@@ -178,17 +222,27 @@ fn build_model_at(snapshots: &[ProviderUsageSnapshot], theme: StripTheme, now: u
         }
         if let Some(snapshot) = snapshot.filter(|s| usable(s)) {
             let detail = snapshot.windows.iter()
-                .map(|w| match window_percent(snapshot, w, now) {
-                    Some(percent) => format!("{} {percent}%", w.label),
-                    None => format!("{} {NO_VALUE}", w.label),
+                .map(|w| {
+                    let label = if id == "antigravity" {
+                        format!("{} / {}", w.model_group_label.as_deref().or(w.model_group_id.as_deref()).unwrap_or("모델군 확인 대기"), w.label)
+                    } else { w.label.clone() };
+                    match window_percent(snapshot, w, now) {
+                    Some(percent) => format!("{label} {percent}%"),
+                    None => format!("{label} {NO_VALUE}"),
+                    }
                 })
                 .collect::<Vec<_>>()
                 .join(" · ");
             tooltip_lines.push(format!("{name}  {detail}"));
-        } else if id != "claude" || snapshot.is_none() {
+        } else if id != "antigravity" && (id != "claude" || snapshot.is_none()) {
             // "error"는 조회 자체의 실패라 계정 연결 문제로 표기하지 않는다.
             let status = if snapshot.is_some_and(|s| s.connection_state == "error") { LOOKUP_DELAYED } else { "연결되지 않음" };
             tooltip_lines.push(format!("{name}  {status}"));
+        }
+        if id == "antigravity" {
+            tooltip_lines.push(format!("Antigravity · 최소 잔여율 · {}", antigravity_status(snapshot, now)));
+            tooltip_lines.push(format!("마지막 CLI 수집: {}", last_sync_label(snapshot.and_then(|s| s.last_synced_at), now)));
+            tooltip_lines.push("Antigravity CLI 실행 시 갱신 · agy /usage · 직접 Claude 구독과 별도".to_string());
         }
         // 조회 실패를 넘기며 이어받은 Codex 값에도 Claude와 같은 최신성·수집 시각을 붙인다.
         if let Some(snapshot) = snapshot.filter(|s| id == "codex" && usable(s) && s.connection_state == "stale") {
@@ -208,7 +262,7 @@ fn build_model_at(snapshots: &[ProviderUsageSnapshot], theme: StripTheme, now: u
         }
     }
 
-    // 두 공급자 모두 값이 없으면 빈 막대를 띄우지 않는다.
+    // 모든 공급자에 값이 없으면 빈 막대를 띄우지 않는다.
     if !any_value {
         return None;
     }
@@ -249,7 +303,7 @@ mod tests {
     fn theme_changes_recolor_cached_values_without_changing_text_or_tooltip() {
         let mut model = StripModel {
             segments: ["0%", "19%", "20%", "49%", "50%", "100%", "—"].into_iter()
-                .map(|value| StripSegment { label: "Claude".into(), window_label: Some("5h"), value: value.into(), value_color: [0; 3] })
+                .map(|value| StripSegment { label: "Claude".into(), window_label: Some("5h"), value: value.into(), value_color: [0; 3], stale: false })
                 .collect(),
             tooltip: "SPECTRA · 캐시된 실제 잔여량".into(),
         };
@@ -295,6 +349,88 @@ mod tests {
         }
     }
 
+    fn antigravity(windows: Vec<ProviderQuotaWindow>) -> ProviderUsageSnapshot {
+        ProviderUsageSnapshot {
+            source: Some("antigravity-statusline".into()), last_synced_at: Some(1_000), bridge_installed: true,
+            ..snapshot("antigravity", "connected", windows)
+        }
+    }
+
+    #[test]
+    fn antigravity_keeps_model_groups_separate_from_the_direct_claude_subscription() {
+        let mut gemini = window("weekly", 83.0);
+        gemini.model_group_id = Some("gemini".into());
+        gemini.model_group_label = Some("Gemini Models".into());
+        let mut bundled = window("weekly", 31.0);
+        bundled.model_group_label = Some("Claude and GPT models".into());
+        let model = build_model_at(&[
+            antigravity(vec![gemini, bundled]),
+            snapshot("claude", "connected", vec![window("rolling", 96.0), window("weekly", 95.0)]),
+            snapshot("codex", "connected", vec![window("weekly", 47.0)]),
+        ], StripTheme::Dark, 1_100).unwrap();
+        assert_eq!(model.segments.iter().map(|s| (s.label.as_str(), s.value.as_str())).collect::<Vec<_>>(),
+            [("Codex", "47%"), ("Claude", "96%"), ("Claude", "95%"), ("Antigravity", "31%")]);
+        assert!(model.tooltip.contains("Gemini Models / weekly 83%"));
+        assert!(model.tooltip.contains("Claude and GPT models / weekly 31%"));
+        assert!(model.tooltip.contains("직접 Claude 구독과 별도"));
+        assert_eq!(model.segments.last().unwrap().value_color, palette(StripTheme::Dark).mid);
+    }
+
+    #[test]
+    fn antigravity_cache_turns_gray_at_five_minutes_and_stays_gray_after_retheme() {
+        let ag = antigravity(vec![window("weekly", 83.0)]);
+        for (now, stale) in [(1_299, false), (1_300, true), (1_600, true), (999, true)] {
+            let mut model = build_model_at(&[ag.clone()], StripTheme::Light, now).unwrap();
+            for theme in [StripTheme::Light, StripTheme::Dark] {
+                retheme_model(&mut model, theme);
+                let segment = model.segments.last().unwrap();
+                assert_eq!(segment.value, "83%", "cached values retain their actual number");
+                assert_eq!(segment.stale, stale);
+                assert_eq!(segment.value_color, if stale { palette(theme).label } else { palette(theme).high });
+                assert_eq!(model.tooltip.contains("갱신 대기 (CLI 캐시)"), stale);
+            }
+        }
+    }
+
+    #[test]
+    fn antigravity_rejects_invalid_or_expired_windows_without_inventing_zero() {
+        let mut expired = window("rolling", 3.0);
+        expired.resets_at = Some(1_100);
+        let ag = antigravity(vec![expired, window("weekly", 83.0), window("other", 0.0),
+            window("rolling", f64::NAN), window("weekly", -1.0), window("weekly", 101.0), window("weekly", f64::INFINITY)]);
+        assert_eq!(provider_remaining(&ag, 1_099), Some(3));
+        assert_eq!(provider_remaining(&ag, 1_100), Some(83), "reset is enforced even before the next CLI cache refresh");
+        let mut model = build_model_at(&[ag.clone()], StripTheme::Light, 1_100).unwrap();
+        assert_eq!(model.segments.last().unwrap().value, "83%");
+        assert!(model.segments.last().unwrap().stale);
+        let invalid = antigravity(ag.windows.into_iter().filter(|w| w.remaining_percent != 83.0).collect());
+        assert!(build_model_at(&[invalid], StripTheme::Dark, 1_100).is_none());
+        let mut unsupported = antigravity(vec![window("weekly", 0.0)]);
+        unsupported.source = None;
+        assert_eq!(provider_remaining(&unsupported, 1_100), None);
+        model = build_model_at(&[antigravity(vec![window("weekly", 0.0)])], StripTheme::Dark, 1_100).unwrap();
+        assert_eq!(model.segments.last().unwrap().value, "0%", "a real zero remains valid");
+    }
+
+    #[test]
+    fn antigravity_waiting_states_and_compact_values_do_not_turn_missing_into_zero() {
+        let mut pending = antigravity(vec![]);
+        assert_eq!(antigravity_status(Some(&pending), 1_100), "CLI 첫 수집 대기");
+        pending.bridge_installed = false;
+        assert_eq!(antigravity_status(Some(&pending), 1_100), "CLI 사용량 연결 필요");
+        pending.runtime_available = false;
+        assert_eq!(antigravity_status(Some(&pending), 1_100), "Antigravity CLI 설치 필요");
+        let model = build_model_at(&[
+            snapshot("codex", "connected", vec![window("rolling", 72.0), window("weekly", 55.0)]),
+            snapshot("claude", "connected", vec![window("weekly", 0.0)]), pending,
+        ], StripTheme::Dark, 1_100).unwrap();
+        let compact = compact_model(&model);
+        assert_eq!(compact.segments.iter().map(|s| (s.label.as_str(), s.value.as_str(), s.window_label)).collect::<Vec<_>>(),
+            [("Codex", "55%", None), ("Claude", "0%", None), ("Antigravity", "—", None)]);
+        assert!(compact.tooltip.contains(&model.tooltip));
+        assert!(compact.tooltip.starts_with("간결 표시 · 서비스별 최소 잔여율"));
+    }
+
     #[test]
     fn provider_remaining_takes_the_binding_window_not_the_first() {
         let s = snapshot("codex", "connected", vec![window("rolling", 59.0), window("weekly", 31.4)]);
@@ -318,7 +454,7 @@ mod tests {
             StripTheme::Light,
         )
         .expect("both providers are usable");
-        assert_eq!(model.segments.len(), 3);
+        assert_eq!(model.segments.len(), 4);
         assert_eq!(model.segments[0].label, "Codex");
         assert_eq!(model.segments[0].window_label, None);
         assert_eq!(model.segments[0].value, "55%");
@@ -383,7 +519,7 @@ mod tests {
                     snapshot("codex", state, windows.clone()),
                     snapshot("claude", "connected", vec![window("rolling", 40.0), window("weekly", 30.0)]),
                 ], StripTheme::Light).unwrap();
-                assert_eq!(model.segments.len(), 4);
+                assert_eq!(model.segments.len(), 5);
                 let codex = &model.segments[..2];
                 assert_eq!(codex.iter().map(|s| (s.label.as_str(), s.window_label)).collect::<Vec<_>>(),
                     [("Codex", Some("5h")), ("Codex", Some("7d"))]);
@@ -401,7 +537,7 @@ mod tests {
         assert_eq!(model.segments[0].label, "Codex");
         assert_eq!(model.segments[0].window_label, None);
         assert_eq!(model.segments[0].value, "55%");
-        assert_eq!(model.segments.len(), 3);
+        assert_eq!(model.segments.len(), 4);
     }
 
     #[test]
@@ -558,10 +694,10 @@ mod tests {
         let values = |model: &StripModel| model.segments.iter().map(|s| s.value.clone()).collect::<Vec<_>>();
 
         let before = build_model_at(&[codex.clone(), claude.clone()], StripTheme::Dark, 999).unwrap();
-        assert_eq!(values(&before), ["12%", "55%", "9%", "40%"]);
+        assert_eq!(values(&before), ["12%", "55%", "9%", "40%", "—"]);
         let after = build_model_at(&[codex.clone(), claude.clone()], StripTheme::Dark, 1_000).unwrap();
-        assert_eq!(values(&after), ["—", "55%", "—", "40%"], "a pre-reset value is not today's value");
-        assert_eq!(after.segments.len(), 4, "the layout does not change at the reset");
+        assert_eq!(values(&after), ["—", "55%", "—", "40%", "—"], "a pre-reset value is not today's value");
+        assert_eq!(after.segments.len(), 5, "the layout does not change at the reset");
         assert!(after.tooltip.contains("Claude  rolling — · weekly 40%"));
 
         // A weekly-only Codex plan has a single value; it also turns into a dash.

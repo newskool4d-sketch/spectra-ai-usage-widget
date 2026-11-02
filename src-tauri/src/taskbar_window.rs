@@ -30,7 +30,7 @@ use windows_sys::Win32::UI::Shell::{
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
-use crate::taskbar_strip::{palette, place_strip, retheme_model, Rect as StripRect, StripModel, StripTheme, TaskbarEdge};
+use crate::taskbar_strip::{compact_model, palette, place_strip, retheme_model, Rect as StripRect, StripModel, StripTheme, TaskbarEdge};
 
 const CLASS_NAME: &str = "SpectraTaskbarStrip";
 const WM_STRIP_REDRAW: u32 = WM_APP + 1;
@@ -738,6 +738,9 @@ fn measure_layout(model: &StripModel, theme: StripTheme, font: HFONT, dpi: u32) 
         if index == 0 || model.segments[index - 1].label != segment.label {
             if let Some(ci) = ProviderCi::for_label(&segment.label) {
                 append(RunContent::Ci(ci), ci.color(theme))?;
+            } else if segment.label == "Antigravity" {
+                let color = match theme { StripTheme::Light => [0x71, 0x51, 0xAC], StripTheme::Dark => [0xB5, 0x8A, 0xF0] };
+                append(RunContent::Text("AG".into()), color)?;
             } else {
                 append(RunContent::Text(segment.label.clone()), colors.label)?;
             }
@@ -925,12 +928,20 @@ fn render_at_geometry(
     let font = state.font_for_dpi(dpi)?;
     let theme = current_theme();
     retheme_model(model, theme);
-    let rendered = render_model(model, theme, font, dpi)?;
+    let mut rendered = render_model(model, theme, font, dpi)?;
+    let mut tooltip = model.tooltip.clone();
+    if place_strip(taskbar, edge, tray, (rendered.layout.width, rendered.layout.height)).is_none() {
+        let mut compact = compact_model(model);
+        retheme_model(&mut compact, theme);
+        rendered = render_model(&compact, theme, font, dpi)?;
+        tooltip = compact.tooltip;
+    }
     let (width, height) = (rendered.layout.width, rendered.layout.height);
     let Some((x, y)) = place_strip(taskbar, edge, tray, (width, height)) else {
         hide_strip(hwnd);
         return Ok(());
     };
+    state.sync_tooltip(&tooltip);
     let surface = &rendered.surface;
     unsafe {
         let mut position = POINT { x, y };
@@ -1000,7 +1011,7 @@ mod tests {
             assert!(StripTooltip::new(std::ptr::null_mut()).is_err());
             let initial = "Claude · 갱신 대기 (캐시)\n마지막 동기화: 5분 전 (데이터 수집 기준)";
             let make_model = |text: &str| StripModel {
-                segments: vec![StripSegment { label: "Claude".into(), window_label: Some("5h"), value: "72%".into(), value_color: [80, 180, 160] }],
+                segments: vec![StripSegment { label: "Claude".into(), window_label: Some("5h"), value: "72%".into(), value_color: [80, 180, 160], stale: false }],
                 tooltip: text.into(),
             };
             let shared = Arc::new(Mutex::new(Some(make_model(initial))));
@@ -1214,9 +1225,9 @@ mod tests {
             let tip = state.tooltip.borrow().as_ref().unwrap().hwnd;
             let mut model = StripModel {
                 segments: [("Codex", "5h", "100%"), ("Codex", "7d", "20%"),
-                    ("Claude", "5h", "8%"), ("Claude", "7d", "—")].into_iter()
+                    ("Claude", "5h", "8%"), ("Claude", "7d", "—"), ("Antigravity", "", "83%")].into_iter()
                     .map(|(label, period, value)| StripSegment {
-                        label: label.into(), window_label: Some(period), value: value.into(), value_color: [0; 3],
+                        label: label.into(), window_label: (!period.is_empty()).then_some(period), value: value.into(), value_color: [0; 3], stale: false,
                     }).collect(),
                 tooltip: "SPECTRA synthetic geometry test".into(),
             };
@@ -1242,6 +1253,24 @@ mod tests {
                 }
             }
             assert_eq!(clicks.load(Ordering::Relaxed), 2, "click callback survives hide/recover cycles");
+            let font = state.font_for_dpi(dpi).unwrap();
+            let full_width = measure_layout(&model, current_theme(), font, dpi).unwrap().width;
+            let compact = compact_model(&model);
+            assert_eq!(compact.segments.iter().map(|s| s.label.as_str()).collect::<Vec<_>>(), ["Codex", "Claude", "Antigravity"]);
+            let compact_width = measure_layout(&compact, current_theme(), font, dpi).unwrap().width;
+            assert!(compact_width < full_width);
+            for (available, expected_width) in [(compact_width, compact_width), (full_width, full_width)] {
+                render_at_geometry(hwnd, state, &mut model, taskbar, edge, taskbar.left + available, dpi).unwrap();
+                assert_ne!(IsWindowVisible(hwnd), 0, "three providers remain visible in narrow and wide layouts");
+                let mut rect: RECT = std::mem::zeroed();
+                assert_ne!(GetWindowRect(hwnd, &mut rect), 0);
+                assert_eq!(rect.right - rect.left, expected_width);
+                assert_eq!(rect.left, taskbar.left, "no horizontal clipping at the exact fit boundary");
+                let tooltip = state.tooltip.borrow();
+                let text = String::from_utf16_lossy(&tooltip.as_ref().unwrap().text);
+                assert_eq!(text.starts_with("간결 표시 · 서비스별 최소 잔여율"), available == compact_width);
+                assert!(text.contains(&model.tooltip), "detailed model and period context survives compression");
+            }
             let font = state.font_for_dpi(96).unwrap();
             let compact_height = render_model(&model, current_theme(), font, 96).unwrap().layout.height;
             let compact_taskbar = StripRect { bottom: taskbar.top + compact_height, ..taskbar };
@@ -1350,34 +1379,34 @@ mod tests {
     #[test]
     #[ignore = "requires Windows GDI; run with --ignored --test-threads=1"]
     fn ci_rendering_preserves_values_colors_transparency_and_reduces_width() {
+        const SINGLE_CODEX: &[(&str, Option<&str>)] = &[("Codex", None), ("Claude", Some("5h")), ("Claude", Some("7d"))];
+        const DUAL_CODEX: &[(&str, Option<&str>)] = &[("Codex", Some("5h")), ("Codex", Some("7d")), ("Claude", Some("5h")), ("Claude", Some("7d"))];
         let state = StripState::new(Arc::new(Mutex::new(None)), Box::new(|| {}));
         for theme in [StripTheme::Light, StripTheme::Dark] {
             let colors = palette(theme);
-            for (values, value_colors) in [
-                (vec!["55%", "72%", "31%"], vec![colors.high, colors.high, colors.mid]),
-                (vec!["0%", "100%", "0%"], vec![colors.low, colors.high, colors.low]),
-                (vec!["—", "—", "31%"], vec![colors.label, colors.label, colors.mid]),
-                (vec!["8%", "72%", "—"], vec![colors.low, colors.high, colors.label]),
-                (vec!["8%", "—", "—"], vec![colors.low, colors.label, colors.label]),
-                (vec!["72%", "55%", "31%", "8%"], vec![colors.high, colors.high, colors.mid, colors.low]),
-                (vec!["0%", "100%", "100%", "0%"], vec![colors.low, colors.high, colors.high, colors.low]),
-                (vec!["100%", "—", "0%", "—"], vec![colors.high, colors.label, colors.low, colors.label]),
-                (vec!["—", "—", "72%", "31%"], vec![colors.label, colors.label, colors.high, colors.mid]),
-                (vec!["8%", "20%", "—", "—"], vec![colors.low, colors.mid, colors.label, colors.label]),
+            for (labels, values, value_colors) in [
+                (SINGLE_CODEX, vec!["55%", "72%", "31%"], vec![colors.high, colors.high, colors.mid]),
+                (SINGLE_CODEX, vec!["0%", "100%", "0%"], vec![colors.low, colors.high, colors.low]),
+                (SINGLE_CODEX, vec!["—", "—", "31%"], vec![colors.label, colors.label, colors.mid]),
+                (SINGLE_CODEX, vec!["8%", "72%", "—"], vec![colors.low, colors.high, colors.label]),
+                (SINGLE_CODEX, vec!["8%", "—", "—"], vec![colors.low, colors.label, colors.label]),
+                (DUAL_CODEX, vec!["72%", "55%", "31%", "8%"], vec![colors.high, colors.high, colors.mid, colors.low]),
+                (DUAL_CODEX, vec!["0%", "100%", "100%", "0%"], vec![colors.low, colors.high, colors.high, colors.low]),
+                (DUAL_CODEX, vec!["100%", "—", "0%", "—"], vec![colors.high, colors.label, colors.low, colors.label]),
+                (DUAL_CODEX, vec!["—", "—", "72%", "31%"], vec![colors.label, colors.label, colors.high, colors.mid]),
+                (DUAL_CODEX, vec!["8%", "20%", "—", "—"], vec![colors.low, colors.mid, colors.label, colors.label]),
             ] {
-                let dual_codex = values.len() == 4;
-                let labels = if dual_codex {
-                    vec![("Codex", Some("5h")), ("Codex", Some("7d")), ("Claude", Some("5h")), ("Claude", Some("7d"))]
-                } else {
-                    vec![("Codex", None), ("Claude", Some("5h")), ("Claude", Some("7d"))]
-                };
-                let model = StripModel {
+                let mut model = StripModel {
                     segments: labels
-                        .into_iter().enumerate().map(|(index, (label, window_label))| StripSegment {
-                        label: label.into(), window_label, value: values[index].into(), value_color: value_colors[index],
+                        .iter().copied().enumerate().map(|(index, (label, window_label))| StripSegment {
+                        label: label.into(), window_label, value: values[index].into(), value_color: value_colors[index], stale: false,
                     }).collect(),
                     tooltip: String::new(),
                 };
+                // 공급자 수가 늘어도 Codex 기간 계약은 provider/window 쌍으로 판단한다.
+                let dual_codex = model.segments.iter().any(|s| s.label == "Codex" && s.window_label == Some("5h"));
+                let ag_color = match theme { StripTheme::Light => [0x71, 0x51, 0xAC], StripTheme::Dark => [0xB5, 0x8A, 0xF0] };
+                model.segments.push(StripSegment { label: "Antigravity".into(), window_label: None, value: "83%".into(), value_color: colors.label, stale: true });
                 let mut previous_size = (0, 0);
                 for dpi in [96, 120, 144] {
                     let font = state.font_for_dpi(dpi).unwrap();
@@ -1390,7 +1419,7 @@ mod tests {
                     let pixels = unsafe {
                         std::slice::from_raw_parts(rendered.surface.pixels as *const u8, width * height * 4)
                     };
-                    let expected_runs = if dual_codex { vec![
+                    let mut expected_runs = if dual_codex { vec![
                         (RunContent::Ci(ProviderCi::Codex), ProviderCi::Codex.color(theme)),
                         (RunContent::Text(" ".into()), colors.label),
                         (RunContent::Text("5h ".into()), colors.label),
@@ -1419,6 +1448,12 @@ mod tests {
                         (RunContent::Text("7d ".into()), colors.label),
                         (RunContent::Text(values[2].into()), value_colors[2]),
                     ] };
+                    expected_runs.extend([
+                        (RunContent::Text(" · ".into()), colors.separator),
+                        (RunContent::Text("AG".into()), ag_color),
+                        (RunContent::Text(" ".into()), colors.label),
+                        (RunContent::Text("83%".into()), colors.label),
+                    ]);
                     assert_eq!(layout.runs.len(), expected_runs.len());
                     let mut x = 0;
                     for (run, (content, rgb)) in layout.runs.iter().zip(expected_runs) {
@@ -1464,7 +1499,7 @@ mod tests {
                     };
                     let measure = DibSurface::for_size(1, 1).unwrap();
                     let _font = measure.select_font(font).unwrap();
-                    let legacy_width = measure_run(measure.dc, &legacy).unwrap().0;
+                    let legacy_width = measure_run(measure.dc, &format!("{legacy} · Antigravity 83%")).unwrap().0;
                     assert!(layout.width < legacy_width, "CI layout must be narrower than service names");
                     eprintln!("{theme:?} {dpi} DPI: {values:?} = {width}x{height}, names={legacy_width}px");
                     if values == ["55%", "72%", "31%"] || values == ["72%", "55%", "31%", "8%"] {
