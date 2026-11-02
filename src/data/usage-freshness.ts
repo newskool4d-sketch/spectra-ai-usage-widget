@@ -10,6 +10,19 @@ export const CLAUDE_TOKEN_EXPIRED = "claude-oauth-token-expired";
  */
 export const LOOKUP_DELAYED = "사용량 확인 지연";
 
+export function antigravityFreshness(quota: PlanQuota, now: number): string {
+  if (quota.source === "example") return "예시 데이터";
+  if (quota.connectionState === "not_installed") return "CLI 설치 필요";
+  if (!quota.bridgeInstalled) return "CLI 연결 설정 필요";
+  if (quota.connectionState === "signed_out") return "로그인 필요";
+  if (quota.confidence !== "verified" || !quota.windows.length) return "CLI 첫 실행 대기";
+  const captured = quota.lastSyncedAtMs;
+  if (quota.connectionState !== "connected" || captured == null || !Number.isFinite(captured)
+    || captured > now || now - captured >= 300_000
+    || quota.windows.some(window => window.resetsAt != null && window.resetsAt <= now)) return "CLI 실행 후 갱신 필요";
+  return "CLI 수집값 · 최신";
+}
+
 // Keep the labels and expiry boundary aligned with taskbar_strip::claude_status.
 export function claudeFreshness(quota: PlanQuota, now: number): Readonly<{ label: string; tooltip: string }> {
   let label: string;

@@ -48,7 +48,11 @@ pub fn min_remaining_percent(snapshots: &[ProviderUsageSnapshot], now: u64) -> O
             // A carried value whose window already reset is not shown as a percentage.
             let mut current = snapshot.windows.iter()
                 .filter(|w| !crate::provider_usage::stale_window_reset_passed(snapshot, w, now));
-            let window = current.clone().find(|w| w.id == "rolling").or_else(|| current.next())?;
+            let window = if snapshot.provider_id == "antigravity" {
+                current.min_by(|a, b| a.remaining_percent.total_cmp(&b.remaining_percent))
+            } else {
+                current.clone().find(|w| w.id == "rolling").or_else(|| current.next())
+            }?;
             let percent = window.remaining_percent.round().clamp(0.0, 100.0) as u8;
             Some((snapshot.provider_id.clone(), percent))
         })
@@ -120,7 +124,7 @@ mod tests {
             last_synced_at: None,
             bridge_installed: false,
             windows: windows.into_iter().map(|(id, remaining)| ProviderQuotaWindow {
-                id: id.to_string(), label: id.to_string(), used_percent: 100.0 - remaining, remaining_percent: remaining, resets_at: None, window_duration_mins: None,
+                id: id.to_string(), label: id.to_string(), used_percent: 100.0 - remaining, remaining_percent: remaining, resets_at: None, window_duration_mins: None, model_group_id: None, model_group_label: None,
             }).collect(),
             message: String::new(),
             live_failure: None,

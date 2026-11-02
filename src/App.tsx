@@ -1,33 +1,14 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Icon, type IconName } from "./components/Icon";
-import { Sparkline } from "./components/Sparkline";
+import { historyForWindow, historySegments, modelGroups, rangeStart, selectedModelGroup, summaryWindow, windowAvailable, type ModelGroup } from "./data/focus-dock";
 import { UpdateNotice, type UpdateState } from "./components/UpdateNotice";
-import { computeNextAction, computeTimeProgress, hasVerifiedUsage, paceLabel, staleWindowResetPassed } from "./data/next-action";
 import { createRefreshSequencer } from "./data/refresh-sequence";
-import { LOOKUP_DELAYED, autoRefreshLabel, claudeFreshness } from "./data/usage-freshness";
+import { LOOKUP_DELAYED, autoRefreshLabel, claudeFreshness, antigravityFreshness } from "./data/usage-freshness";
 import { metricLabels, planQuotas, providers, rangeLabels, type AuthMethod, type Metric, type PlanQuota, type Provider, type ProviderId, type QuotaWindow, type QuotaWindowId, type UsageRange } from "./data/providers";
 import { checkForAppUpdate, type AvailableAppUpdate } from "./integrations/app-updater";
 import { providersToRefreshAfterBoot } from "./integrations/boot-state";
-import { providerCapabilities, type ProviderCapability } from "./integrations/provider-capabilities";
-import { getNativeProviderUsage, installNativeProviderBridge, isTauriRuntime, listenNativeProviderUsage, readBootState, removeNativeProviderBridge, setNativeStandby, setNativeStrip, setNativeUiPrefs, startNativeProviderLogin, type NativeProviderActionResult, type NativeProviderUsageSnapshot, type TauriUnlisten } from "./integrations/tauri-native-bridge";
-
-const mobileBreakpoint = "(max-width: 820px)";
-const mobileClockFormatter = new Intl.DateTimeFormat("ko-KR", { hour: "2-digit", minute: "2-digit", hour12: false });
-const mobileDateFormatter = new Intl.DateTimeFormat("ko-KR", { month: "long", day: "numeric" });
-
-function useIsMobile() {
-  const [isMobile, setIsMobile] = useState(() => typeof window !== "undefined" && window.matchMedia(mobileBreakpoint).matches);
-
-  useEffect(() => {
-    const media = window.matchMedia(mobileBreakpoint);
-    const handleChange = (event: MediaQueryListEvent) => setIsMobile(event.matches);
-    setIsMobile(media.matches);
-    media.addEventListener("change", handleChange);
-    return () => media.removeEventListener("change", handleChange);
-  }, []);
-
-  return isMobile;
-}
+import { nextConnectionAction } from "./integrations/provider-connect";
+import { getNativeUsageHistory, setNativeWindowMode, setNativeWindowPinned, type UsageHistoryPoint, getNativeProviderUsage, installNativeProviderBridge, isTauriRuntime, listenNativeProviderUsage, readBootState, removeNativeProviderBridge, setNativeStandby, setNativeStrip, setNativeUiPrefs, startNativeProviderLogin, type NativeProviderActionResult, type NativeProviderUsageSnapshot, type TauriUnlisten } from "./integrations/tauri-native-bridge";
 
 type WindowMode = "mini" | "dashboard" | "browser";
 
@@ -87,6 +68,7 @@ function formatSyncedAt(epochSeconds: number | null) {
 }
 
 function planName(providerId: ProviderId, planType: string | null) {
+  if (providerId === "antigravity") return planType || "Antigravity 구독";
   if (!planType) return providerId === "codex" ? "ChatGPT · Codex" : "Claude";
   const normalized = planType.toLowerCase();
   const knownPlans: Readonly<Record<string, string>> = {
@@ -113,19 +95,21 @@ function quotaFromSnapshot(snapshot: NativeProviderUsageSnapshot, fallback: Plan
       : snapshot.connectionState === "waiting-for-usage"
         ? "waiting"
         : snapshot.connectionState;
-  const verified = snapshot.windows.length > 0 && (snapshot.source === "codex-app-server" || snapshot.source === "claude-statusline" || snapshot.source === "claude-usage-api");
+  const verified = snapshot.windows.length > 0 && (snapshot.source === "codex-app-server" || snapshot.source === "claude-statusline" || snapshot.source === "claude-usage-api" || snapshot.source === "antigravity-statusline");
   const windows = snapshot.windows.length > 0
     ? snapshot.windows.map(window => ({
         id: window.id,
+        modelGroupId: window.modelGroupId,
+        modelGroupLabel: window.modelGroupLabel,
         label: window.label,
         usedPercent: window.usedPercent,
         remainingPercent: window.remainingPercent,
         resetLabel: formatReset(window.resetsAt),
-        kindLabel: snapshot.source === "codex-app-server" ? "Codex 요금제 사용량" : "Claude.ai 공유 사용량",
+        kindLabel: "구독 한도",
         resetsAt: window.resetsAt ? window.resetsAt * 1000 : null,
         windowDurationMins: window.windowDurationMins
       }))
-    : fallback.windows.map(window => ({ ...window, usedPercent: 0, remainingPercent: 0, resetLabel: "연결 후 표시", kindLabel: "실제 데이터 대기" }));
+    : fallback.providerId === "antigravity" ? [] : fallback.windows.map(window => ({ ...window, usedPercent: 0, remainingPercent: 0, resetLabel: "연결 후 표시", kindLabel: "실제 데이터 대기" }));
   return {
     ...fallback,
     planName: planName(snapshot.providerId, snapshot.planType),
@@ -153,8 +137,8 @@ function nativePendingQuota(fallback: PlanQuota): PlanQuota {
     lastSyncedAt: null,
     lastSyncedAtMs: null,
     bridgeInstalled: false,
-    statusMessage: "공식 도구의 계정 및 사용량 상태를 확인하고 있습니다.",
-    windows: fallback.windows.map(window => ({
+    statusMessage: "연결 상태를 확인하고 있습니다.",
+    windows: fallback.providerId === "antigravity" ? [] : fallback.windows.map(window => ({
       ...window,
       usedPercent: 0,
       remainingPercent: 0,
@@ -167,15 +151,14 @@ function nativePendingQuota(fallback: PlanQuota): PlanQuota {
 function initialQuotaRecord(snapshots: readonly NativeProviderUsageSnapshot[] = []): QuotaRecord {
   if (!isTauriRuntime()) return planQuotas;
   const restored = new Map(snapshots.map(snapshot => [snapshot.providerId, snapshot] as const));
-  const codex = restored.get("codex");
-  const claude = restored.get("claude");
-  return {
-    codex: codex ? quotaFromSnapshot(codex, planQuotas.codex) : nativePendingQuota(planQuotas.codex),
-    claude: claude ? quotaFromSnapshot(claude, planQuotas.claude) : nativePendingQuota(planQuotas.claude)
-  };
+  return Object.fromEntries(providers.map(provider => {
+    const snapshot = restored.get(provider.id);
+    return [provider.id, snapshot ? quotaFromSnapshot(snapshot, planQuotas[provider.id]) : nativePendingQuota(planQuotas[provider.id])];
+  })) as QuotaRecord;
 }
 
 function connectionLabel(quota: PlanQuota) {
+  if (quota.providerId === "antigravity") return antigravityFreshness(quota, Date.now());
   if (quota.providerId === "claude" && quota.source !== "example") return claudeFreshness(quota, Date.now()).label;
   if (quota.connectionState === "not_installed") return "공식 CLI 설치 필요";
   if (quota.connectionState === "signed_out") return "계정 로그인 필요";
@@ -188,6 +171,7 @@ function connectionLabel(quota: PlanQuota) {
 }
 
 function sourceLabel(quota: PlanQuota) {
+  if (quota.source === "antigravity-statusline") return "Antigravity CLI 상태선 · 실행 시 갱신";
   if (quota.source === "codex-app-server") return "Codex 공식 App Server";
   if (quota.source === "claude-statusline") return "Claude Code 공식 상태선";
   if (quota.source === "claude-usage-api") return "Claude 공식 사용량 조회";
@@ -195,196 +179,165 @@ function sourceLabel(quota: PlanQuota) {
   return "브라우저 데모 수치";
 }
 
-function authMethodLabel(method: AuthMethod) {
-  if (method === "oauth-pkce") return "OAuth · PKCE 흐름";
-  if (method === "provider-delegated") return "공급자 공식 도구 관리";
-  return "공식 로그인 경로 확인 필요";
-}
-
-function connectionCapabilityLabel(status: ProviderCapability["connectionStatus"]) {
-  if (status === "supported") return "공식 계정 연결 가능";
-  if (status === "client-id-required") return "앱 등록 client ID 필요";
-  if (status === "api-key-only") return "API 키 전용";
-  return "공식 연결 경로 미공개";
-}
-
-function quotaEndpointStatusLabel(status: ProviderCapability["quotaEndpointStatus"]) {
-  if (status === "remaining-published") return "요금제 사용률·초기화 조회 가능";
-  if (status === "limit-metadata-only") return "프로젝트 한도 메타데이터만";
-  if (status === "organization-usage-only") return "조직 사용량만";
-  if (status === "api-key-only") return "API 키 범위만";
-  return "개인 잔여량 조회 경로 미공개";
-}
-
 const Brand = memo(function Brand() {
-  return <div className="brand-lockup"><span className="brand-mark" aria-hidden="true"><i /><i /><i /></span><div><strong>SPECTRA</strong><small>AI 사용 현황</small></div></div>;
+  return <div className="brand-lockup"><span className="brand-mark" aria-hidden="true"><i /><i /><i /></span><strong>SPECTRA</strong></div>;
 });
 
-const ProviderLogo = memo(function ProviderLogo({ provider, size = "md" }: Readonly<{ provider: Provider; size?: "xs" | "sm" | "md" | "lg" | "xl" }>) {
-  return <span className={`provider-logo ${size}`} style={providerStyle(provider.color)} aria-hidden="true">{provider.short}</span>;
+const ProviderLogo = memo(function ProviderLogo({ provider }: Readonly<{ provider: Provider; size?: string }>) {
+  return <span className="provider-dot" style={providerStyle(provider.color)} aria-hidden="true" />;
 });
 
-const TopActions = memo(function TopActions({ refreshedAt, refreshing, solid, theme, onRefresh, onSolid, onTheme }: Readonly<{
-  refreshedAt: string;
-  refreshing: boolean;
-  solid: boolean;
-  theme: ThemeMode;
-  onRefresh: () => void;
-  onSolid: () => void;
-  onTheme: () => void;
-}>) {
-  return <div className="top-actions">
-    <span className="sync-state"><i /> 조회 시도 · {refreshedAt}</span>
-    <button type="button" className={`icon-button ${refreshing ? "spinning" : ""}`} onClick={onRefresh} aria-label="데이터 새로고침"><Icon name="refresh" size={17} /></button>
-    <button type="button" className="icon-button" onClick={onSolid} aria-label="투명도 전환" title={solid ? "유리 모드" : "가독성용 불투명 모드"}><Icon name="eye" size={17} /></button>
-    <button type="button" className="icon-button" onClick={onTheme} aria-label="테마 전환" title={theme === "dark" ? "일반 모드" : "다크 모드"}><Icon name={theme === "dark" ? "sun" : "moon"} size={17} /></button>
+type LayoutActions = Readonly<{
+  refreshedAt: string; refreshing: boolean; solid: boolean; theme: ThemeMode;
+  standby: boolean; strip: boolean; stripPending: boolean;
+  onRefresh: () => void; onSolid: () => void; onTheme: () => void;
+  onStandby: () => void; onStrip: () => void;
+  updateState: UpdateState; onCheckForUpdate: () => void; onInstallUpdate: () => void;
+}>;
+type SharedViewProps = LayoutActions & Readonly<{
+  view: ProductView; onView: (view: ProductView) => void;
+  activeProvider: Provider; activeProviderId: ProviderId; activeQuota: PlanQuota; quotas: QuotaRecord;
+  metric: Metric; range: UsageRange; onProvider: (id: ProviderId) => void;
+  onMetric: (metric: Metric) => void; onRange: (range: UsageRange) => void;
+  onOpenOAuth: (id: ProviderId) => void;
+  group: ModelGroup | undefined; onGroup: (id: string) => void;
+  quotaWindow: QuotaWindow | undefined; onWindow: (id: QuotaWindowId) => void;
+  history: readonly UsageHistoryPoint[]; historyState: "loading" | "ready" | "error";
+  now: number; pinned: boolean; onPin: () => void;
+  onOpenDashboard: (view?: ProductView) => void; onOpenMini: () => void;
+  uiError: string | null;
+}>;
+
+const ThemeButton = memo(function ThemeButton({ theme, onTheme }: Pick<LayoutActions, "theme" | "onTheme">) {
+  return <button type="button" className="icon-button theme-button" onClick={onTheme} aria-label={theme === "dark" ? "라이트 모드로 전환" : "다크 모드로 전환"} title={theme === "dark" ? "라이트 모드로 전환" : "다크 모드로 전환"}><Icon name={theme === "dark" ? "sun" : "moon"} size={17} /><span>테마</span></button>;
+});
+
+const MetricTabs = memo(function MetricTabs({ metric, onMetric }: Pick<SharedViewProps, "metric" | "onMetric">) {
+  return <div className="segmented" role="tablist" aria-label="사용 현황 보기">{(Object.keys(metricLabels) as Metric[]).map(value => <button type="button" role="tab" aria-selected={metric === value} className={metric === value ? "active" : ""} onClick={() => onMetric(value)} key={value}>{metricLabels[value]}</button>)}</div>;
+});
+
+const RangeTabs = memo(function RangeTabs({ range, onRange }: Pick<SharedViewProps, "range" | "onRange">) {
+  return <div className="range-tabs" role="tablist" aria-label="조회 기간">{(Object.keys(rangeLabels) as UsageRange[]).map(value => <button type="button" role="tab" aria-selected={range === value} className={range === value ? "active" : ""} onClick={() => onRange(value)} key={value}>{rangeLabels[value]}</button>)}</div>;
+});
+
+function percentFor(quota: PlanQuota, window: QuotaWindow | undefined, now: number) {
+  return windowAvailable(quota, window, now) ? `${Math.round(window!.remainingPercent)}%` : "—";
+}
+
+const ProviderTabs = memo(function ProviderTabs({ activeProviderId, onProvider }: Pick<SharedViewProps, "activeProviderId" | "onProvider">) {
+  return <div className="provider-tabs" role="tablist" aria-label="서비스 선택">{providers.map(provider => <button key={provider.id} type="button" role="tab" aria-selected={provider.id === activeProviderId} className={provider.id === activeProviderId ? "active" : ""} style={providerStyle(provider.color)} onClick={() => onProvider(provider.id)}>{provider.name}</button>)}</div>;
+});
+
+const ModelSelector = memo(function ModelSelector({ activeQuota, group, onGroup, quotaWindow, onWindow, compact = false }: Pick<SharedViewProps, "activeQuota" | "group" | "onGroup" | "quotaWindow" | "onWindow"> & Readonly<{ compact?: boolean }>) {
+  const groups = modelGroups(activeQuota);
+  return <div className={`model-controls ${compact ? "compact" : ""}`}>
+    {compact ? <label className="model-select"><span>{activeQuota.planName}</span><select aria-label="모델군 선택" disabled={!groups.length} value={group?.id ?? ""} onChange={event => onGroup(event.target.value)}>{!groups.length ? <option value="">모델군 확인 대기</option> : null}{groups.map(item => <option value={item.id} key={item.id}>{item.label}</option>)}</select></label>
+      : groups.length > 1 ? <div className="model-tabs" role="tablist" aria-label="모델군 선택">{groups.map(item => <button type="button" role="tab" aria-selected={group?.id === item.id} className={group?.id === item.id ? "active" : ""} key={item.id} onClick={() => onGroup(item.id)}>{item.label}</button>)}</div> : null}
+    {(group?.windows.length ?? 0) > 1 ? <div className="window-tabs" role="tablist" aria-label="한도 창 선택">{group!.windows.map(window => <button type="button" role="tab" aria-selected={quotaWindow?.id === window.id} className={quotaWindow?.id === window.id ? "active" : ""} key={window.id} onClick={() => onWindow(window.id)}>{window.label}</button>)}</div> : null}
   </div>;
 });
 
-const NavRail = memo(function NavRail({ view, onView }: Readonly<{ view: ProductView; onView: (view: ProductView) => void }>) {
-  const items: readonly Readonly<{ name: IconName; label: string; view: ProductView; notice?: boolean }>[] = [
-    { name: "grid", label: "개요", view: "overview" },
-    { name: "list", label: "서비스", view: "services" },
-    { name: "pulse", label: "추이", view: "trend" },
-    { name: "bell", label: "알림", view: "alerts", notice: true }
+const QuotaHero = memo(function QuotaHero({ activeQuota, group, quotaWindow, now, compact = false }: Pick<SharedViewProps, "activeQuota" | "group" | "quotaWindow" | "now"> & Readonly<{ compact?: boolean }>) {
+  const available = windowAvailable(activeQuota, quotaWindow, now);
+  const percent = available ? Math.round(quotaWindow!.remainingPercent) : null;
+  return <section className={`quota-hero ${compact ? "compact" : ""}`} aria-label="선택한 모델군 잔여량">
+    {!compact ? <h2>{group?.label ?? activeQuota.planName} · {quotaWindow?.label ?? "한도"}</h2> : null}
+    <div className="hero-reading"><div className="hero-value">{percent ?? "—"}{percent !== null ? <span>%</span> : null}</div><span>{quotaWindow?.label ?? "한도"} {available ? "남음" : "확인 대기"}</span></div>
+    <div className="quota-meter" role="meter" aria-label={quotaWindow?.label ?? "잔여량"} aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent ?? undefined} aria-valuetext={percent === null ? "확인된 데이터 없음" : `${percent}% 남음`}><i style={{ width: `${percent ?? 0}%` }} /></div>
+    <div className="hero-reset"><Icon name="refresh" size={15} /><span>{available ? quotaWindow?.resetsAt ? `${formatReset(quotaWindow.resetsAt / 1000)} 초기화` : quotaWindow?.resetLabel : quotaWindow?.resetsAt && quotaWindow.resetsAt <= now ? "초기화 후 새 데이터 대기" : activeQuota.statusMessage}</span></div>
+    {activeQuota.connectionState === "stale" || activeQuota.connectionState === "error" || (activeQuota.providerId === "antigravity" && activeQuota.confidence === "verified" && antigravityFreshness(activeQuota, now) === "CLI 실행 후 갱신 필요") ? <p className="freshness-note">{connectionLabel(activeQuota)} · 마지막 수집값입니다.</p> : null}
+  </section>;
+});
+
+const OtherLimits = memo(function OtherLimits({ activeQuota, group, quotaWindow, now, compact = false }: Pick<SharedViewProps, "activeQuota" | "group" | "quotaWindow" | "now"> & Readonly<{ compact?: boolean }>) {
+  const groups = modelGroups(activeQuota);
+  const otherGroups = groups.filter(item => item.id !== group?.id);
+  const otherWindows = group?.windows.filter(window => window.id !== quotaWindow?.id) ?? [];
+  if (!otherGroups.length && !otherWindows.length) return null;
+  return <section className={`other-limits ${compact ? "compact" : ""}`}><h2>{otherGroups.length ? "다른 모델군" : "다른 한도"}</h2>
+    {otherGroups.map(item => <div className="other-limit-row" key={item.id}><strong>{item.label}</strong><div>{item.windows.map(window => <span key={window.id}>{window.label.replace(" 한도", "")} <b>{percentFor(activeQuota, window, now)}</b></span>)}</div></div>)}
+    {otherWindows.map(window => <div className="other-limit-row" key={window.id}><strong>{window.label}</strong><div><b>{percentFor(activeQuota, window, now)}</b><span>{window.resetsAt ? formatReset(window.resetsAt / 1000) : window.resetLabel}</span></div></div>)}
+  </section>;
+});
+
+const HistoryPanel = memo(function HistoryPanel({ history, historyState, activeProvider, group, quotaWindow, range, now }: Pick<SharedViewProps, "history" | "historyState" | "activeProvider" | "group" | "quotaWindow" | "range" | "now">) {
+  const points = historyForWindow(history, activeProvider.id, group?.id ?? "default", quotaWindow?.id ?? "weekly", range, now);
+  const start = rangeStart(range, now);
+  const end = Math.max(start + 1, now);
+  const dateLabel = (ms: number) => new Intl.DateTimeFormat("ko-KR", { month: "2-digit", day: "2-digit" }).format(ms);
+  const x = (point: UsageHistoryPoint) => 44 + (point.capturedAt * 1000 - start) / (end - start) * 620;
+  const y = (point: UsageHistoryPoint) => 150 - point.remainingPercent * 1.2;
+  const stride = Math.max(1, Math.ceil(points.length / 300));
+  const sampled = points.filter((_, index) => index % stride === 0 || index === points.length - 1);
+  return <section className="history-panel" aria-label={`${rangeLabels[range]} 잔여량 기록`}>
+    <div className="section-heading"><div><h2>{range === "24H" ? "오늘" : `최근 ${rangeLabels[range]}`} 잔여량</h2><p>{activeProvider.name} · {group?.label ?? "모델군"} · {quotaWindow?.label ?? "한도"}</p></div><span className="subtle-badge">{points.length}회 기록</span></div>
+    <div className="history-period">{dateLabel(start)} — {dateLabel(now)}</div>
+    {points.length ? <><svg className="history-chart" viewBox="0 0 700 184" role="img" aria-label={`${dateLabel(start)}부터 ${dateLabel(now)}까지 ${points.length}회 수집, 최신 잔여량 ${Math.round(points[points.length - 1].remainingPercent)}%`}>
+      {[0, 25, 50, 75, 100].map(percent => <g key={percent}><text x="0" y={154 - percent * 1.2}>{percent}%</text><line x1="44" x2="664" y1={150 - percent * 1.2} y2={150 - percent * 1.2} /></g>)}
+      {historySegments(sampled).map((segment, index) => segment.length > 1 ? <polyline className="history-line" key={index} points={segment.map(point => `${x(point)},${y(point)}`).join(" ")} /> : null)}
+      {sampled.map((point, index) => <circle cx={x(point)} cy={y(point)} r="3.5" key={`${point.capturedAt}-${index}`} />)}
+      <text x="44" y="179">{dateLabel(start)}</text><text x="664" y="179" textAnchor="end">{dateLabel(now)}</text>
+    </svg><details className="history-details"><summary>최근 수집 기록 보기</summary><table><thead><tr><th>수집 시각</th><th>잔여량</th></tr></thead><tbody>{points.slice(-8).reverse().map((point, index) => <tr key={`${point.capturedAt}-${index}`}><td>{formatSyncedAt(point.capturedAt)}</td><td>{Math.round(point.remainingPercent)}%</td></tr>)}</tbody></table></details></>
+      : <div className="empty-state"><Icon name="pulse" size={24} /><strong>{historyState === "loading" ? "기록을 불러오는 중입니다" : historyState === "error" ? "기록을 불러오지 못했습니다" : "이 기간에 수집된 기록이 없습니다"}</strong><p>{historyState === "error" ? "새로고침을 눌러 다시 확인해 주세요." : "실제 수집 시점부터 기록됩니다. 이전 기록은 없습니다."}</p></div>}
+    <p className="history-note">기기 내 수집 기록입니다. 빈 구간은 미수집, 값의 상승은 초기화일 수 있습니다.</p>
+  </section>;
+});
+
+const SubscriptionPanel = memo(function SubscriptionPanel({ activeProvider, activeQuota, now, onOpenOAuth }: Pick<SharedViewProps, "activeProvider" | "activeQuota" | "now" | "onOpenOAuth">) {
+  const groups = modelGroups(activeQuota);
+  return <section className="subscription-panel"><div className="section-heading"><div><span className="eyebrow">연결된 구독 모델</span><h2>{activeQuota.planName}</h2><p>{activeQuota.accountLabel}</p></div><button type="button" className="secondary-action" onClick={() => onOpenOAuth(activeProvider.id)}>연결 관리</button></div>
+    <dl className="subscription-meta"><div><dt>서비스</dt><dd>{activeProvider.name}</dd></div><div><dt>데이터 출처</dt><dd>{sourceLabel(activeQuota)}</dd></div><div><dt>마지막 수집</dt><dd>{activeQuota.lastSyncedAt ?? "아직 수집되지 않음"}</dd></div><div><dt>연결 상태</dt><dd>{connectionLabel(activeQuota)}</dd></div></dl>
+    <div className="subscription-groups">{groups.map(item => <section key={item.id}><h3>{item.label}</h3>{item.windows.map(window => <div className="subscription-window" key={window.id}><span>{window.label}</span><strong>{percentFor(activeQuota, window, now)}</strong><small>{window.resetsAt ? `${formatReset(window.resetsAt / 1000)} 초기화` : window.resetLabel}</small></div>)}</section>)}</div>
+    {activeProvider.id === "antigravity" ? <p className="view-description">Claude 직접 구독과 별도 한도입니다. Antigravity CLI 실행 시 갱신됩니다.</p> : null}
+  </section>;
+});
+
+const SettingsPanel = memo(function SettingsPanel(props: SharedViewProps) {
+  const busy = props.updateState.phase === "checking" || props.updateState.phase === "installing";
+  const updateAvailable = props.updateState.phase === "available";
+  const rows = [
+    { title: "화면 테마", description: "모든 창에 적용하며 재실행 후 유지합니다.", label: props.theme === "dark" ? "라이트 모드" : "다크 모드", action: props.onTheme },
+    { title: "가독성용 불투명 모드", description: "배경의 투명도를 조절합니다.", label: props.solid ? "유리 모드" : "불투명 모드", action: props.onSolid },
+    { title: "메모리 절약 대기", description: props.standby ? "창을 닫으면 WebView를 종료합니다." : "창을 숨겨 다음에 빠르게 엽니다.", label: props.standby ? "빠른 재표시" : "메모리 절약", action: props.onStandby },
+    { title: "작업표시줄 표시", description: "작업표시줄에 확인된 잔여량을 표시합니다.", label: props.strip ? "표시 끄기" : "표시 켜기", action: props.onStrip, disabled: props.stripPending },
+    { title: "사용량 새로고침", description: "공급자 도구에서 확인 가능한 최신 수치를 조회합니다.", label: props.refreshing ? "확인 중" : "지금 확인", action: props.onRefresh, disabled: props.refreshing },
+    { title: "SPECTRA 업데이트", description: props.updateState.message, label: updateAvailable ? "지금 설치" : busy ? "확인 중" : "업데이트 확인", action: updateAvailable ? props.onInstallUpdate : props.onCheckForUpdate, disabled: busy }
   ];
-  return <aside className="nav-rail" aria-label="주요 메뉴">
-    <div className="rail-mark"><span className="brand-mark compact"><i /><i /><i /></span></div>
-    <nav>{items.map(item => <button type="button" className={view === item.view ? "active" : ""} aria-label={item.label} aria-current={view === item.view ? "page" : undefined} key={item.view} onClick={() => onView(item.view)}><Icon name={item.name} />{item.notice ? <span className="notification-dot" /> : null}</button>)}</nav>
-    <button type="button" className={view === "settings" ? "active" : ""} aria-label="설정" aria-current={view === "settings" ? "page" : undefined} onClick={() => onView("settings")}><Icon name="settings" /></button>
-  </aside>;
+  return <section className="settings-panel"><h2>사용 환경</h2>{rows.map(row => <div className="settings-row" key={row.title}><div><strong>{row.title}</strong><p>{row.description}</p></div><button type="button" className="secondary-action" onClick={row.action} disabled={row.disabled}>{row.label}</button></div>)}<p className="settings-note"><Icon name="shield" size={16} />계정·대화 원문 없이 수치만 기기에 기록합니다.</p></section>;
 });
 
-const MetricTabs = memo(function MetricTabs({ metric, onMetric }: Readonly<{ metric: Metric; onMetric: (metric: Metric) => void }>) {
-  return <div className="segmented" role="tablist" aria-label="사용량 단위">
-    {(Object.keys(metricLabels) as Metric[]).map(value => <button type="button" className={metric === value ? "active" : ""} role="tab" aria-selected={metric === value} key={value} onClick={() => onMetric(value)}>{metricLabels[value]}</button>)}
-  </div>;
+const Sidebar = memo(function Sidebar({ view, onView, activeProviderId, onProvider, quotas, now }: Pick<SharedViewProps, "view" | "onView" | "activeProviderId" | "onProvider" | "quotas" | "now">) {
+  const nav: readonly [ProductView, IconName, string][] = [["overview", "grid", "개요"], ["services", "list", "구독 모델"], ["trend", "pulse", "추이"], ["alerts", "bell", "알림"]];
+  return <aside className="focus-sidebar" aria-label="주요 메뉴"><Brand /><nav>{nav.map(([id, icon, label]) => <button type="button" key={id} aria-label={label} className={view === id ? "active" : ""} aria-current={view === id ? "page" : undefined} onClick={() => onView(id)}><Icon name={icon} /><span>{label}</span></button>)}</nav><div className="sidebar-services"><span className="eyebrow">서비스</span>{providers.map(provider => <button type="button" key={provider.id} aria-label={provider.name} style={providerStyle(provider.color)} className={provider.id === activeProviderId ? "active" : ""} aria-pressed={provider.id === activeProviderId} onClick={() => onProvider(provider.id)}><ProviderLogo provider={provider} /><span>{provider.name}</span><strong>{percentFor(quotas[provider.id], summaryWindow(quotas[provider.id], now), now)}</strong></button>)}</div><button type="button" className={`sidebar-settings ${view === "settings" ? "active" : ""}`} aria-label="설정" aria-current={view === "settings" ? "page" : undefined} onClick={() => onView("settings")}><Icon name="settings" /><span>설정</span></button></aside>;
 });
 
-const RangeTabs = memo(function RangeTabs({ range, onRange }: Readonly<{ range: UsageRange; onRange: (range: UsageRange) => void }>) {
-  return <div className="range-tabs" role="tablist" aria-label="조회 기간">
-    {(Object.keys(rangeLabels) as UsageRange[]).map(value => <button type="button" className={range === value ? "active" : ""} role="tab" aria-selected={range === value} key={value} onClick={() => onRange(value)}>{rangeLabels[value]}</button>)}
-  </div>;
+const FocusDashboard = memo(function FocusDashboard(props: SharedViewProps) {
+  const { activeProvider, activeQuota, view, metric } = props;
+  const title = view === "settings" ? "설정" : view === "alerts" ? "알림" : activeProvider.name;
+  const remainingView = view === "overview" && metric === "remaining";
+  return <div className="focus-dashboard" style={providerStyle(activeProvider.color)}><Sidebar {...props} /><section className="focus-main"><header className="focus-header"><div><span className="eyebrow">{view === "settings" ? "사용 환경" : activeQuota.source === "example" ? "브라우저 데모 · 예시 데이터" : "AI 사용 현황"}</span><h1>{title}</h1><p>{view === "settings" ? "미니창과 대시보드의 사용 환경을 조정합니다." : activeQuota.planName}</p></div><div className="top-actions"><button type="button" className="icon-button" onClick={props.onRefresh} disabled={props.refreshing} aria-label="데이터 새로고침"><Icon name="refresh" size={18} /></button><ThemeButton {...props} /><button type="button" className="icon-button" onClick={props.onOpenMini} aria-label="미니창 열기" title="미니창 열기"><Icon name="phone" size={18} /></button></div></header>
+    {props.uiError ? <p className="operation-error" role="alert">{props.uiError}</p> : null}
+    <div className="dashboard-content">
+      {view === "settings" ? <SettingsPanel {...props} /> : view === "alerts" ? <section className="alerts-panel"><h2>연결 및 수집 상태</h2>{providers.map(provider => <button type="button" className="alert-row" key={provider.id} onClick={() => props.onOpenOAuth(provider.id)} style={providerStyle(provider.color)}><ProviderLogo provider={provider} /><div><strong>{provider.name} · {connectionLabel(props.quotas[provider.id])}</strong><p>{props.quotas[provider.id].statusMessage}</p></div><Icon name="chevron" size={18} /></button>)}</section> : <>
+        <div className="dashboard-toolbar">{view === "overview" ? <MetricTabs {...props} /> : <h2>{view === "trend" ? "수집 기록" : "구독 모델"}</h2>}{view === "trend" || remainingView ? <RangeTabs {...props} /> : null}</div>
+        {view === "services" || (view === "overview" && metric === "subscription") ? <SubscriptionPanel {...props} /> : view === "overview" && metric === "requests" ? <section className="requests-panel"><span className="eyebrow">{activeProvider.name}</span><h2>요청 수</h2><div className="empty-state"><Icon name="list" size={26} /><strong>이 연결에서는 요청 수를 제공하지 않습니다</strong><p>구독 한도만 제공됩니다. 요청 수는 집계하지 않습니다.</p></div><button type="button" className="secondary-action" onClick={() => props.onMetric("subscription")}>구독 모델 확인</button></section> : <>
+          <ModelSelector {...props} />
+          {remainingView ? <div className="focus-quota-row"><QuotaHero {...props} /><OtherLimits {...props} /></div> : null}
+          <HistoryPanel {...props} />
+        </>}
+      </>}
+    </div>
+    <footer className="dashboard-footer"><span className={`status-dot ${activeQuota.connectionState === "connected" ? "connected" : ""}`} /><span>{activeQuota.source === "example" ? "예시 데이터" : connectionLabel(activeQuota)}</span><span className="footer-source">{sourceLabel(activeQuota)}</span><button type="button" onClick={() => props.onOpenOAuth(activeProvider.id)}>연결 관리 <Icon name="chevron" size={13} /></button></footer>
+  </section></div>;
 });
 
-const WindowSummary = memo(function WindowSummary({ quotas }: Readonly<{ quotas: QuotaRecord }>) {
-  const now = Date.now();
-  const points = providers.flatMap(provider => {
-    const quota = quotas[provider.id];
-    if (!hasVerifiedUsage(quota)) return [];
-    return quota.windows.flatMap(window => {
-      const progress = computeTimeProgress(window, now);
-      return progress ? [{ provider, window, progress }] : [];
-    });
-  });
-  if (points.length === 0) {
-    return <div className="chart-empty"><Icon name="pulse" size={19} /><strong>서비스 연결 후 창 요약을 표시합니다.</strong><span>창별 시간 진행과 사용률을 한 그림에서 비교합니다.</span></div>;
-  }
-  return <figure className="window-summary">
-    <svg viewBox="0 0 200 100" role="img" aria-label="창별 시간 진행 대비 사용률">
-      <line x1="0" y1="100" x2="200" y2="0" />
-      {points.map(({ provider, window, progress }, index) => <circle key={`${provider.id}-${window.id}-${index}`} cx={progress.timePercent * 2} cy={100 - window.usedPercent} r="4" style={providerStyle(provider.color)} />)}
-    </svg>
-    <ul className="window-summary-legend">
-      {points.map(({ provider, window, progress }, index) => <li key={`${provider.id}-${window.id}-${index}`} style={providerStyle(provider.color)}><i />{provider.name} {window.label} · 사용 {Math.round(window.usedPercent)}% / 시간 {Math.round(progress.timePercent)}% · {paceLabel(progress.pace)}</li>)}
-    </ul>
-  </figure>;
-});
-
-const QuotaWindowRow = memo(function QuotaWindowRow({ window, unavailable = false, compact = false }: Readonly<{ window: QuotaWindow; unavailable?: boolean; compact?: boolean }>) {
-  return <div className={`quota-window ${compact ? "compact" : ""}`}>
-    <div className="quota-window-copy"><span>{window.label}</span><strong>{unavailable ? "—" : `${Math.round(window.remainingPercent)}% 남음`}</strong></div>
-    <div className="quota-window-meta"><span>{window.kindLabel}</span><span>{window.resetLabel}</span></div>
-    <div className="quota-window-meter" aria-label={unavailable ? `${window.label} 데이터 대기` : `${window.label} ${window.usedPercent}% 사용`}><i style={{ width: `${unavailable ? 0 : window.usedPercent}%` }} /></div>
-  </div>;
-});
-
-const emptyQuotaWindow = (id: QuotaWindowId, providerId: ProviderId): QuotaWindow => ({
-  id,
-  label: planQuotas[providerId].windows.find(candidate => candidate.id === id)?.label ?? (id === "rolling" ? "5시간 한도" : "주간 한도"),
-  usedPercent: 0,
-  remainingPercent: 0,
-  resetLabel: "연결 후 표시",
-  kindLabel: "실제 데이터 대기"
-});
-
-const QuotaCell = memo(function QuotaCell({ provider, window, available, pendingLabel = "연결 후 표시", freshness }: Readonly<{ provider: Provider; window: QuotaWindow; available: boolean; pendingLabel?: string; freshness?: ReturnType<typeof claudeFreshness> }>) {
-  const progress = available ? computeTimeProgress(window, Date.now()) : null;
-  return <div className="quota-cell" style={providerStyle(provider.color)} title={freshness?.tooltip}>
-    <div className="quota-cell-top"><span className="quota-cell-pill">{provider.name}</span><span className="quota-cell-window">{window.label}</span></div>
-    <div className="quota-cell-value">{available ? Math.round(window.remainingPercent) : "—"}{available ? <span>%</span> : null}</div>
-    <div className="quota-cell-meta">{available ? `초기화 · ${window.resetLabel}` : pendingLabel}</div>
-    {freshness ? <div className="quota-cell-meta">{freshness.label}</div> : null}
-    <div className="quota-cell-meter" aria-label={available ? `${provider.name} ${window.label} ${Math.round(window.remainingPercent)}% 남음` : `${provider.name} ${window.label} 데이터 대기`}><i style={{ width: `${available ? window.remainingPercent : 0}%` }} /></div>
-    {progress ? <div className="quota-cell-time"><i style={{ "--progress": `${progress.timePercent}%` } as CSSProperties} aria-label={`시간 진행 ${Math.round(progress.timePercent)}%`} />{progress.pace !== "even" ? <span className={`quota-cell-pace ${progress.pace}`}>{paceLabel(progress.pace)}</span> : null}</div> : null}
-  </div>;
-});
-
-const NextActionStrip = memo(function NextActionStrip({ quotas, eyebrow }: Readonly<{ quotas: QuotaRecord; eyebrow?: string }>) {
-  const [, setNow] = useState(Date.now);
-  useEffect(() => {
-    const timer = window.setInterval(() => setNow(Date.now()), 15_000);
-    return () => window.clearInterval(timer);
-  }, []);
-  // Reevaluate reset expiry without a new snapshot; read the clock on snapshot renders too.
-  const action = computeNextAction(quotas, Date.now());
-  return <div className="next-action">
-    {eyebrow ? <span className="eyebrow">{eyebrow}</span> : null}
-    <h1>{action.headline}</h1>
-    <ul className="next-action-chips" aria-label="판단 근거">{action.chips.map(chip => <li key={chip}>{chip}</li>)}</ul>
-  </div>;
-});
-
-const QuotaBoard = memo(function QuotaBoard({ quotas }: Readonly<{ quotas: QuotaRecord }>) {
-  const [, setNow] = useState(Date.now);
-  useEffect(() => {
-    const timer = window.setInterval(() => setNow(Date.now()), 15_000);
-    return () => window.clearInterval(timer);
-  }, []);
-  // Read the clock on snapshot renders too: a response may arrive between timer ticks.
-  const now = Date.now();
-  const freshness = claudeFreshness(quotas.claude, now);
-  const windowIds: readonly QuotaWindowId[] = ["rolling", "weekly"];
-  return <div className="quota-board span-2" role="group" aria-label="공급자별 한도 현황">
-    {providers.flatMap(provider => windowIds.map(id => {
-      const quota = quotas[provider.id];
-      const found = quota.windows.find(candidate => candidate.id === id);
-      const window = found ?? emptyQuotaWindow(id, provider.id);
-      // A carried value whose window already reset shows "—" like the taskbar strip.
-      const outdated = found !== undefined && staleWindowResetPassed(quota, found, now);
-      const available = hasDisplayValue(quota) && found !== undefined && !outdated;
-      return <QuotaCell key={`${provider.id}-${id}`} provider={provider} window={window} available={available} pendingLabel={outdated ? "초기화 후 갱신 대기" : undefined} freshness={provider.id === "claude" ? freshness : undefined} />;
-    }))}
-  </div>;
-});
-
-const ProviderRow = memo(function ProviderRow({ provider, quota, active, onSelect }: Readonly<{ provider: Provider; quota: PlanQuota; active: boolean; onSelect: (id: ProviderId) => void }>) {
-  const primary = quota.windows[0];
-  return <button type="button" className={`provider-row ${active ? "active" : ""}`} style={providerStyle(provider.color)} aria-pressed={active} onClick={() => onSelect(provider.id)}>
-    <ProviderLogo provider={provider} size="sm" />
-    <span className="provider-copy"><strong>{provider.name}</strong><small>{quota.planName}</small></span>
-    <span className="provider-meter"><i style={{ width: `${meterPercent(quota, primary)}%` }} /></span>
-    <span className="provider-value">{displayPercent(quota, primary)}</span>
-  </button>;
-});
-
-const ProviderChip = memo(function ProviderChip({ provider, quota, active, onSelect }: Readonly<{ provider: Provider; quota: PlanQuota; active: boolean; onSelect: (id: ProviderId) => void }>) {
-  const primary = quota.windows[0];
-  return <button type="button" className={`provider-chip ${active ? "active" : ""}`} style={providerStyle(provider.color)} aria-pressed={active} onClick={() => onSelect(provider.id)}>
-    <ProviderLogo provider={provider} size="sm" /><span><strong>{provider.name}</strong><small>{hasDisplayValue(quota) ? `${Math.round(primary.remainingPercent)}% 남음` : connectionLabel(quota)}</small></span>
-  </button>;
-});
-
-const OAuthConnectCard = memo(function OAuthConnectCard({ provider, quota, compact = false, onOpen }: Readonly<{ provider: Provider; quota: PlanQuota; compact?: boolean; onOpen: (id: ProviderId) => void }>) {
-  const unsupported = quota.connectionState === "unsupported";
-  const connected = quota.connectionState === "connected";
-  const capability = providerCapabilities[provider.id];
-  return <article className={`glass-card oauth-card ${compact ? "compact" : ""}`} style={providerStyle(provider.color)}>
-    <div className="oauth-icon"><Icon name={unsupported ? "shield" : connected ? "check" : "link"} size={18} /></div>
-    <div className="oauth-copy"><span className="eyebrow">계정 연결</span><h3>{provider.name} 사용량 연결</h3><p>공급자의 공식 로그인과 사용량 인터페이스에서 개인 요금제 잔여량을 확인합니다.</p><div className={`oauth-status ${quota.connectionState}`}><i />{connectionLabel(quota)}</div><div className="oauth-capability"><span>공식 인증</span><strong>{capability.oauthLabel}</strong><span>연결 준비</span><strong>{connectionCapabilityLabel(capability.connectionStatus)}</strong><span>조회 범위</span><strong>{quotaEndpointStatusLabel(capability.quotaEndpointStatus)}</strong></div></div>
-    <button type="button" className="oauth-button" onClick={() => onOpen(provider.id)}>{quota.connectionState === "not_installed" ? "설치 안내" : quota.connectionState === "signed_out" ? "계정 로그인" : connected || quota.connectionState === "stale" ? "계정·동기화 관리" : "연결 설정"}</button>
-    <div className="oauth-security"><Icon name="shield" size={13} /><span>공급자 토큰은 SPECTRA에 복제하지 않습니다.</span></div>
-  </article>;
+const MiniLayout = memo(function MiniLayout(props: SharedViewProps) {
+  const { activeProvider, activeQuota, quotas, now } = props;
+  return <div className="focus-mini" style={providerStyle(activeProvider.color)}><header className="mini-header"><Brand /><div className="mini-actions"><button type="button" className="icon-button" aria-label="데이터 새로고침" onClick={props.onRefresh} disabled={props.refreshing}><Icon name="refresh" size={17} /></button><button type="button" className={`icon-button ${props.pinned ? "pressed" : ""}`} aria-label="항상 위에 표시" aria-pressed={props.pinned} onClick={props.onPin}><Icon name="pin" size={17} /></button><ThemeButton {...props} /><button type="button" className="icon-button" aria-label="설정" onClick={() => props.onOpenDashboard("settings")}><Icon name="settings" size={17} /></button></div></header>
+    <div className="mini-content"><ProviderTabs {...props} />{props.uiError ? <p className="operation-error" role="alert">{props.uiError}</p> : null}<ModelSelector {...props} compact /><QuotaHero {...props} compact /><OtherLimits {...props} compact />
+      {activeQuota.confidence === "unavailable" ? <button type="button" className="secondary-action mini-connect" onClick={() => props.onOpenOAuth(activeProvider.id)}>연결 관리</button> : null}
+      <div className="mini-summaries">{providers.filter(provider => provider.id !== activeProvider.id).map(provider => { const quota = quotas[provider.id]; const window = summaryWindow(quota, now); return <button type="button" key={provider.id} onClick={() => props.onProvider(provider.id)} style={providerStyle(provider.color)}><div><ProviderLogo provider={provider} /><strong>{provider.name}</strong></div><span>{window?.modelGroupLabel ? `${window.modelGroupLabel} · ` : ""}{window?.label ?? "확인 대기"}</span><b>{percentFor(quota, window, now)}</b></button>; })}</div>
+    </div><footer className="mini-footer"><div><span className={`status-dot ${activeQuota.connectionState === "connected" ? "connected" : ""}`} /><span title={activeQuota.lastSyncedAt ?? undefined}>{activeQuota.source === "example" ? "예시 데이터" : connectionLabel(activeQuota)}</span></div><button type="button" className="primary-action" onClick={() => props.onOpenDashboard("overview")}><Icon name="monitor" size={16} />대시보드 열기</button></footer></div>;
 });
 
 const OAuthDialog = memo(function OAuthDialog({ open, provider, quota, startResult, onClose, onConnect, onDisconnect }: Readonly<{
@@ -441,152 +394,70 @@ const OAuthDialog = memo(function OAuthDialog({ open, provider, quota, startResu
 
   if (!open) return null;
   const unsupported = quota.connectionState === "unsupported";
-  const capability = providerCapabilities[provider.id];
   const loginPending = startResult?.status === "login-started";
   const runtimeMissing = quota.connectionState === "not_installed";
   const needsLogin = quota.connectionState === "signed_out";
-  const needsBridge = provider.id === "claude" && quota.connectionState === "waiting" && !quota.bridgeInstalled;
+  const needsBridge = !quota.bridgeInstalled && (provider.id === "antigravity" || (provider.id === "claude" && quota.connectionState === "waiting"));
   const primaryLabel = runtimeMissing
     ? `${provider.name} CLI 설치 필요`
-    : needsLogin
-      ? `${provider.name} 계정 로그인`
-      : needsBridge
-        ? "사용량 브리지 설치"
-        : "사용량 새로고침";
+    : needsBridge ? "사용량 브리지 설치" : needsLogin ? `${provider.name} 계정 로그인` : "사용량 새로고침";
   return <div className="oauth-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}><div ref={dialogRef} className="oauth-dialog" role="dialog" aria-modal="true" aria-labelledby="oauth-dialog-title" aria-describedby="oauth-dialog-description" tabIndex={-1}>
     <div className="oauth-dialog-header"><div><span className="eyebrow">공식 계정 연결</span><h2 id="oauth-dialog-title">{provider.name} 계정 및 사용량</h2></div><button ref={closeButtonRef} type="button" className="icon-button oauth-close" onClick={onClose} aria-label="연결 창 닫기"><Icon name="x" size={17} /></button></div>
-    <div className="oauth-provider"><ProviderLogo provider={provider} size="lg" /><div><strong>{quota.planName}</strong><span>{authMethodLabel(quota.authMethod)}</span></div></div>
-    <div className="oauth-capability-note"><span>공식 인증 경로</span><strong>{capability.oauthLabel}</strong><span>연결 준비</span><strong>{connectionCapabilityLabel(capability.connectionStatus)}</strong><span>요금제 잔여량</span><strong>{capability.quotaLabel}</strong><span>조회 경로 상태</span><strong>{quotaEndpointStatusLabel(capability.quotaEndpointStatus)}</strong></div>
-    <ol className="oauth-steps"><li><span>01</span><div><strong>공급자 공식 도구로 로그인</strong><small>{provider.id === "codex" ? "Codex가 ChatGPT 로그인과 토큰 갱신을 관리합니다." : "Claude Code가 Claude.ai 로그인을 관리합니다."}</small></div></li><li><span>02</span><div><strong>개인 요금제 한도만 읽기</strong><small>{provider.id === "codex" ? "App Server의 한도 창·사용률·초기화 시각을 확인합니다." : "상태선의 5시간·7일 한도 필드만 정제해 저장합니다."}</small></div></li><li><span>03</span><div><strong>토큰을 SPECTRA에 복제하지 않기</strong><small>화면에는 요금제·퍼센트·초기화 시각과 최신성만 전달합니다.</small></div></li></ol>
+    <div className="oauth-provider"><ProviderLogo provider={provider} size="lg" /><div><strong>{quota.planName}</strong><span>공급자 공식 로그인</span></div></div>
+    <div className="oauth-capability-note"><span>조회 출처</span><strong>{sourceLabel(quota)}</strong><span>연결 상태</span><strong>{connectionLabel(quota)}</strong></div>
+    <p className="view-description">공급자가 로그인을 관리하며 SPECTRA는 한도만 읽습니다.{provider.id === "antigravity" ? " 브리지 설치 후 Antigravity CLI를 실행하면 갱신됩니다." : ""}</p>
     <div id="oauth-dialog-description" className="oauth-demo-note"><Icon name="shield" size={14} /><span>{startResult?.message ?? quota.statusMessage}</span></div>
-    <div className="oauth-dialog-actions"><button type="button" className="secondary-action" onClick={onClose}>닫기</button>{provider.id === "claude" && quota.bridgeInstalled ? <button type="button" className="danger-action" onClick={() => onDisconnect(provider.id)}>브리지 제거</button> : null}<button type="button" className="primary-action" disabled={unsupported || runtimeMissing || loginPending} onClick={() => onConnect(provider.id)}>{loginPending ? "브라우저 로그인 진행 중" : primaryLabel}</button></div>
+    <div className="oauth-dialog-actions"><button type="button" className="secondary-action" onClick={onClose}>닫기</button>{(provider.id === "claude" || provider.id === "antigravity") && quota.bridgeInstalled ? <button type="button" className="danger-action" onClick={() => onDisconnect(provider.id)}>브리지 제거</button> : null}<button type="button" className="primary-action" disabled={unsupported || runtimeMissing || loginPending} onClick={() => onConnect(provider.id)}>{loginPending ? "브라우저 로그인 진행 중" : primaryLabel}</button></div>
   </div></div>;
 });
 
-type LayoutActions = Readonly<{
-  refreshedAt: string;
-  refreshing: boolean;
-  solid: boolean;
-  theme: ThemeMode;
-  standby: boolean;
-  strip: boolean;
-  stripPending: boolean;
-  onRefresh: () => void;
-  onSolid: () => void;
-  onTheme: () => void;
-  onStandby: () => void;
-  onStrip: () => void;
-  updateState: UpdateState;
-  onCheckForUpdate: () => void;
-  onInstallUpdate: () => void;
-}>;
-
-type SharedViewProps = LayoutActions & Readonly<{
-  view: ProductView;
-  onView: (view: ProductView) => void;
-  activeProvider: Provider;
-  activeProviderId: ProviderId;
-  activeQuota: PlanQuota;
-  quotas: QuotaRecord;
-  metric: Metric;
-  range: UsageRange;
-  onProvider: (id: ProviderId) => void;
-  onMetric: (metric: Metric) => void;
-  onRange: (range: UsageRange) => void;
-  onOpenOAuth: (id: ProviderId) => void;
-}>;
-
-function viewCopy(view: ProductView) {
-  if (view === "services") return { eyebrow: "서비스", title: "연결된 서비스를\n비교합니다." };
-  if (view === "trend") return { eyebrow: "추이", title: "현재 한도 창을\n살펴봅니다." };
-  if (view === "alerts") return { eyebrow: "알림", title: "지금 확인할\n항목입니다." };
-  if (view === "settings") return { eyebrow: "설정", title: "사용 환경을\n조정합니다." };
-  return { eyebrow: "개요 · 오늘", title: "" };
-}
-
-type ViewPanelProps = Omit<SharedViewProps, "onView">;
-
-const DesktopViewPanel = memo(function DesktopViewPanel({ view, activeProvider, activeProviderId, activeQuota, quotas, metric, range, onProvider, onMetric, onRange, onOpenOAuth, refreshedAt, refreshing, solid, theme, standby, strip, stripPending, onRefresh, onSolid, onTheme, onStandby, onStrip, updateState, onCheckForUpdate, onInstallUpdate }: ViewPanelProps) {
-  if (view === "services") {
-    return <div className="view-stack"><article className="glass-card providers-card"><div className="card-heading"><div><span className="eyebrow">서비스</span><h3>서비스별 잔여량</h3></div><span className="live-pill"><i />공식 조회</span></div><div className="provider-list">{providers.map(provider => <ProviderRow key={provider.id} provider={provider} quota={quotas[provider.id]} active={provider.id === activeProviderId} onSelect={onProvider} />)}</div></article><OAuthConnectCard provider={activeProvider} quota={activeQuota} onOpen={onOpenOAuth} /></div>;
-  }
-  if (view === "trend") {
-    return <div className="view-stack"><div className="dashboard-toolbar"><MetricTabs metric={metric} onMetric={onMetric} /><RangeTabs range={range} onRange={onRange} /></div><article className="glass-card trend-panel"><div className="card-heading"><div><span className="eyebrow">현재 한도 창</span><h3>{activeProvider.name} 사용량</h3></div><span className="live-pill"><i />{activeQuota.source === "example" ? "데모 집계" : "현재 스냅샷"}</span></div><p className="view-description">과거 사용량은 저장하지 않고, 공식 경로에서 확인한 현재 한도와 초기화 시각만 보여줍니다.</p><div className="trend-window-grid">{activeQuota.windows.map(window => <QuotaWindowRow key={window.id} window={window} unavailable={!hasDisplayValue(activeQuota)} />)}</div></article></div>;
-  }
-  if (view === "alerts") {
-    return <div className="view-stack"><article className="glass-card alert-panel"><div className="card-heading"><div><span className="eyebrow">알림</span><h3>지금 확인할 항목</h3></div><span className="live-pill"><i />현재 상태</span></div>{providers.map(provider => <div className="alert-row" key={provider.id} style={providerStyle(provider.color)}><ProviderLogo provider={provider} size="sm" /><div><strong>{connectionLabel(quotas[provider.id])}</strong><span>{quotas[provider.id].statusMessage}</span></div><b>{displayPercent(quotas[provider.id])}</b></div>)}</article></div>;
-  }
-  const updateBusy = updateState.phase === "checking" || updateState.phase === "installing";
-  const updateAvailable = updateState.phase === "available";
-  const updateButtonLabel = updateAvailable ? "지금 설치" : updateState.phase === "installing" ? "설치 중" : updateState.phase === "checking" ? "확인 중" : "업데이트 확인";
-  return <div className="view-stack"><article className="glass-card settings-panel"><div className="card-heading"><div><span className="eyebrow">설정</span><h3>사용 환경</h3></div><span className="live-pill"><i />기기 안에서만 처리</span></div><div className="settings-row"><div><strong>화면 테마</strong><span>{theme === "dark" ? "짙은 배경과 선명한 대비를 사용합니다." : "밝은 배경과 부드러운 대비를 사용합니다."}</span></div><button type="button" className="secondary-action" onClick={onTheme}>{theme === "dark" ? "일반 모드" : "다크 모드"}</button></div><div className="settings-row"><div><strong>가독성용 불투명 모드</strong><span>{solid ? "현재 불투명 카드를 사용합니다." : "현재 반투명 카드를 사용합니다."}</span></div><button type="button" className="secondary-action" onClick={onSolid}>{solid ? "유리 모드" : "불투명 모드"}</button></div><div className="settings-row"><div><strong>메모리 절약 대기</strong><span>{standby ? "창을 닫으면 WebView를 종료하고 트레이만 남깁니다. 다시 열 때 약 0.5초 걸립니다." : "창을 닫으면 숨기기만 해 즉시 다시 표시됩니다(기본)."}</span></div><button type="button" className="secondary-action" onClick={onStandby}>{standby ? "빠른 재표시" : "메모리 절약"}</button></div><div className="settings-row"><div><strong>작업표시줄 표시</strong><span>{strip ? "작업표시줄 알림 영역 왼쪽에 마지막 확인 잔여량을 표시합니다." : "작업표시줄에 표시하지 않습니다(기본)."}</span></div><button type="button" className="secondary-action" onClick={onStrip} aria-pressed={strip} disabled={stripPending}>{strip ? "표시 끄기" : "표시 켜기"}</button></div><div className="settings-row"><div><strong>공식 사용량 새로고침</strong><span>Codex App Server와 Claude status line 캐시를 다시 확인합니다.</span></div><button type="button" className="primary-action" onClick={onRefresh} disabled={refreshing}>{refreshing ? "확인 중" : "지금 확인"}</button></div><div className="settings-row"><div><strong>SPECTRA 업데이트</strong><span>{updateState.message}</span></div><button type="button" className={updateAvailable ? "primary-action" : "secondary-action"} onClick={updateAvailable ? onInstallUpdate : onCheckForUpdate} disabled={updateBusy}>{updateButtonLabel}</button></div><div className="settings-note"><Icon name="shield" size={15} /><span>토큰·이메일·세션 원문은 SPECTRA에 복제하지 않습니다. 마지막 확인 · {refreshedAt}</span></div></article></div>;
-});
-
-const VariantADesktop = memo(function VariantADesktop({ view, onView, activeProvider, activeProviderId, activeQuota, quotas, metric, range, onProvider, onMetric, onRange, onOpenOAuth, ...actions }: SharedViewProps) {
-  const primary = activeQuota.windows[0];
-  const available = hasDisplayValue(activeQuota);
-  const demo = activeQuota.source === "example";
-  const copy = viewCopy(view);
-  return <div className="product-shell variant-a">
-    <NavRail view={view} onView={onView} />
-    <section className="app-surface command-center">
-      <header className="app-header">
-        {view === "overview"
-          ? <NextActionStrip quotas={quotas} eyebrow={copy.eyebrow} />
-          : <div><span className="eyebrow">{copy.eyebrow}</span><h1>{copy.title.split("\n").map((line, index) => <span key={line}>{index > 0 ? <br /> : null}{index === copy.title.split("\n").length - 1 ? <em>{line}</em> : line}</span>)}</h1></div>}
-        <TopActions {...actions} />
-      </header>
-      {view === "overview" ? <><div className="dashboard-toolbar"><MetricTabs metric={metric} onMetric={onMetric} /><RangeTabs range={range} onRange={onRange} /></div><div className="bento-grid">
-        <QuotaBoard quotas={quotas} />
-        <article className="glass-card live-card span-2"><div className="card-heading"><div><span className="eyebrow">창 요약</span><h3>{available ? `${Math.round(primary.usedPercent)}%` : "—"} <small>{available ? "현재 사용" : "실제 데이터 대기"}</small></h3></div><span className="live-pill"><i />{demo ? "브라우저 데모" : available ? "현재 스냅샷" : "연결 대기"}</span></div><WindowSummary quotas={quotas} /></article>
-        <article className="glass-card providers-card span-2"><div className="card-heading"><div><span className="eyebrow">서비스</span><h3>서비스별 잔여량</h3></div><button type="button" className="text-button">모두 보기 <Icon name="chevron" size={14} /></button></div><div className="provider-list">{providers.map(provider => <ProviderRow key={provider.id} provider={provider} quota={quotas[provider.id]} active={provider.id === activeProviderId} onSelect={onProvider} />)}</div></article>
-        <article className="glass-card focus-card"><div className="card-heading"><div><ProviderLogo provider={activeProvider} size="lg" /><span className="eyebrow">집중 확인</span></div><span className="trend-badge">{displayPercent(activeQuota, primary)}{available ? " 남음" : ""}</span></div><h3>{activeProvider.name}</h3><p>{available ? <>{primary.label}는 {primary.resetLabel} 초기화됩니다. <strong>{activeQuota.planName}</strong> {demo ? "브라우저 데모" : "공식 조회"} 수치입니다.</> : activeQuota.statusMessage}</p>{demo ? <Sparkline values={activeProvider.trend} color={activeProvider.color} width={220} height={62} /> : <div className="focus-status"><Icon name={available ? "check" : "link"} size={17} /><span>{sourceLabel(activeQuota)}</span></div>}</article>
-        <article className="glass-card budget-card plan-card"><span className="eyebrow">연결된 요금제</span><h3>{activeQuota.planName}</h3><p><span>{activeQuota.accountLabel}</span><span className={activeQuota.connectionState === "connected" ? "positive" : ""}>{activeQuota.lastSyncedAt ? `마지막 확인 · ${activeQuota.lastSyncedAt}` : connectionLabel(activeQuota)}</span></p><div className="micro-stat"><span>인증 방식</span><strong>{authMethodLabel(activeQuota.authMethod)}</strong></div></article>
-        <OAuthConnectCard provider={activeProvider} quota={activeQuota} onOpen={onOpenOAuth} />
-      </div></> : <DesktopViewPanel view={view} activeProvider={activeProvider} activeProviderId={activeProviderId} activeQuota={activeQuota} quotas={quotas} metric={metric} range={range} onProvider={onProvider} onMetric={onMetric} onRange={onRange} onOpenOAuth={onOpenOAuth} {...actions} />}
-      <footer className="privacy-strip"><Icon name="shield" size={15} /><span>잔여량 숫자는 공식 조회 경로가 확인된 경우에만 갱신됩니다.</span><i /><span>{sourceLabel(activeQuota)}</span></footer>
-    </section>
-  </div>;
-});
-
-const MobileNav = memo(function MobileNav({ view, onView }: Readonly<{ view: ProductView; onView: (view: ProductView) => void }>) {
-  const items: readonly Readonly<{ name: IconName; label: string; view: ProductView }>[] = [{ name: "pulse", label: "현황", view: "overview" }, { name: "list", label: "서비스", view: "services" }, { name: "spark", label: "추이", view: "trend" }, { name: "settings", label: "설정", view: "settings" }];
-  return <nav className="mobile-nav" aria-label="하단 메뉴">{items.map(item => <button type="button" className={view === item.view ? "active" : ""} aria-current={view === item.view ? "page" : undefined} key={item.view} onClick={() => onView(item.view)}><Icon name={item.name} size={19} /><span>{item.label}</span></button>)}</nav>;
-});
-
-const VariantCMobile = memo(function VariantCMobile({ view, onView, activeProvider, activeProviderId, activeQuota, quotas, onProvider, onOpenOAuth, ...actions }: SharedViewProps) {
-  const codex = providers.find(provider => provider.id === "codex") ?? providers[0];
-  const claude = providers.find(provider => provider.id === "claude") ?? providers[1];
-  const codexQuota = quotas.codex;
-  const claudeQuota = quotas.claude;
-  const now = new Date();
-  return <div className="product-shell variant-c"><section className="stream-app"><div className="stream-layout"><section className="mobile-stream">
-    <div className="mobile-top"><span>{mobileClockFormatter.format(now)}</span><div><i /><i /><i /></div></div>
-    <div className="mobile-title">{view === "overview" ? <NextActionStrip quotas={quotas} eyebrow={mobileDateFormatter.format(now)} /> : <div><span className="eyebrow">{mobileDateFormatter.format(now)}</span><h1>사용 현황</h1></div>}<button type="button" className="icon-button" aria-label="알림"><Icon name="bell" size={18} /><span className="notification-dot" /></button></div>
-    {view === "overview" ? <><QuotaBoard quotas={quotas} />
-    <div className="chip-scroll" role="group" aria-label="서비스 선택">{providers.map(provider => <ProviderChip key={provider.id} provider={provider} quota={quotas[provider.id]} active={provider.id === activeProviderId} onSelect={onProvider} />)}</div>
-    <OAuthConnectCard provider={activeProvider} quota={activeQuota} compact onOpen={onOpenOAuth} />
-    <section className="stream-feed"><div className="section-title"><div><span className="eyebrow">알림</span><h3>지금 확인할 항목</h3></div><button type="button">전체</button></div>
-      <article className="feed-item priority"><span className="feed-line" style={providerStyle(claude.color)} /><ProviderLogo provider={claude} size="sm" /><div><span className="feed-time">현재 · CLAUDE</span><h4>{connectionLabel(claudeQuota)}</h4><p>{claudeQuota.statusMessage}</p></div><strong>{displayPercent(claudeQuota)}</strong></article>
-      <article className="feed-item"><span className="feed-line" style={providerStyle(codex.color)} /><ProviderLogo provider={codex} size="sm" /><div><span className="feed-time">현재 · CODEX</span><h4>{connectionLabel(codexQuota)}</h4><p>{codexQuota.statusMessage}</p></div><strong>{displayPercent(codexQuota)}</strong></article>
-    </section></> : <DesktopViewPanel view={view} activeProvider={activeProvider} activeProviderId={activeProviderId} activeQuota={activeQuota} quotas={quotas} onProvider={onProvider} onOpenOAuth={onOpenOAuth} {...actions} />}
-    <MobileNav view={view} onView={onView} />
-  </section></div></section></div>;
-});
-
-const MiniLayout = memo(function MiniLayout({ quotas, onRefresh, refreshing }: Readonly<{ quotas: QuotaRecord; onRefresh: () => void; refreshing: boolean }>) {
-  return <div className="product-shell mini-shell"><section className="app-surface mini-layout">
-    <NextActionStrip quotas={quotas} eyebrow="지금" />
-    <QuotaBoard quotas={quotas} />
-    <button type="button" className="primary-action mini-refresh" onClick={onRefresh} disabled={refreshing}><span>{refreshing ? "확인 중" : "지금 확인"}</span></button>
-  </section></div>;
-});
-
 export function App() {
-  const isMobile = useIsMobile();
   const boot = useRef(readBootState()).current;
   const windowMode = useWindowMode();
   const [view, setView] = useState<ProductView>("overview");
+  const [selectedGroups, setSelectedGroups] = useState<Partial<Record<ProviderId, string>>>({});
+  const [selectedWindowId, setSelectedWindowId] = useState<QuotaWindowId>("weekly");
+  const [history, setHistory] = useState<readonly UsageHistoryPoint[]>([]);
+  const [historyState, setHistoryState] = useState<"loading" | "ready" | "error">(isTauriRuntime() ? "loading" : "ready");
+  const historyRequest = useRef(0);
+  const [now, setNow] = useState(Date.now);
+  const [pinned, setPinned] = useState(windowMode === "mini");
+  const pinPending = useRef(false);
+  const [uiError, setUiError] = useState<string | null>(null);
+  const loadHistory = useCallback(async () => {
+    const ticket = ++historyRequest.current;
+    try {
+      const points = await getNativeUsageHistory();
+      if (ticket !== historyRequest.current) return;
+      setHistory(points);
+      setHistoryState("ready");
+    } catch { if (ticket === historyRequest.current) setHistoryState("error"); }
+  }, []);
+  useEffect(() => { void loadHistory(); }, [loadHistory]);
+  useEffect(() => { setPinned(windowMode === "mini"); }, [windowMode]);
+  useEffect(() => {
+    const syncPin = (event: Event) => setPinned((event as CustomEvent<string>).detail === "mini");
+    window.addEventListener("spectra-mode", syncPin);
+    return () => window.removeEventListener("spectra-mode", syncPin);
+  }, []);
+  useEffect(() => {
+    let timer: number;
+    const tick = () => { setNow(Date.now()); timer = window.setTimeout(tick, 30_000); };
+    timer = window.setTimeout(tick, 30_000);
+    return () => window.clearTimeout(timer);
+  }, []);
+  const changeWindowMode = useCallback(async (mode: "mini" | "dashboard", targetView?: ProductView) => {
+    if (targetView) setView(targetView);
+    try { await setNativeWindowMode(mode); setUiError(null); }
+    catch { setUiError("창을 전환하지 못했습니다. 다시 시도해 주세요."); }
+  }, []);
+  const togglePin = useCallback(async () => {
+    if (pinPending.current) return;
+    pinPending.current = true;
+    try { setPinned(await setNativeWindowPinned(!pinned)); setUiError(null); }
+    catch { setUiError("항상 위 표시를 변경하지 못했습니다."); }
+    finally { pinPending.current = false; }
+  }, [pinned]);
   const [activeProviderId, setActiveProviderId] = useState<ProviderId>("codex");
   const [metric, setMetric] = useState<Metric>("remaining");
   const [range, setRange] = useState<UsageRange>("7D");
@@ -611,6 +482,8 @@ export function App() {
   const refreshSequence = useRef(createRefreshSequencer<ProviderId>()).current;
   const activeProvider = useMemo(() => providers.find(provider => provider.id === activeProviderId) ?? providers[0], [activeProviderId]);
   const activeQuota = quotas[activeProviderId];
+  const group = selectedModelGroup(activeQuota, selectedGroups[activeProviderId]);
+  const quotaWindow = group?.windows.find(window => window.id === selectedWindowId) ?? group?.windows[0];
   const oauthProvider = useMemo(() => providers.find(provider => provider.id === oauthProviderId) ?? providers[0], [oauthProviderId]);
   const oauthQuota = quotas[oauthProviderId];
 
@@ -625,7 +498,7 @@ export function App() {
       prefsSyncArmed.current = true;
       return;
     }
-    void setNativeUiPrefs({ theme, solid }).catch((error: unknown) => console.warn("SPECTRA: ui preferences were not synced", error));
+    void setNativeUiPrefs({ theme, solid }).catch(() => setUiError("설정 저장 실패. 이번 실행에만 적용됩니다."));
   }, [theme, solid]);
 
   const toggleStandby = useCallback(async () => {
@@ -687,6 +560,29 @@ export function App() {
     }
   }, [refreshSequence]);
 
+  useEffect(() => {
+    if (!isTauriRuntime() || !quotas.antigravity.bridgeInstalled) return;
+    let disposed = false;
+    let pending = false;
+    let timer: number | undefined;
+    const poll = async () => {
+      if (disposed || pending) return;
+      window.clearTimeout(timer);
+      if (document.visibilityState === "visible") {
+        pending = true;
+        await refreshProvider("antigravity");
+        if (!disposed) await loadHistory();
+        pending = false;
+      }
+      if (!disposed) timer = window.setTimeout(() => void poll(), 30_000);
+    };
+    const activate = () => { if (document.visibilityState === "visible") void poll(); };
+    void poll();
+    window.addEventListener("focus", activate);
+    document.addEventListener("visibilitychange", activate);
+    return () => { disposed = true; window.clearTimeout(timer); window.removeEventListener("focus", activate); document.removeEventListener("visibilitychange", activate); };
+  }, [quotas.antigravity.bridgeInstalled, refreshProvider, loadHistory]);
+
   const refresh = useCallback(async () => {
     setRefreshing(true);
     try {
@@ -695,11 +591,13 @@ export function App() {
       } else {
         await new Promise(resolve => window.setTimeout(resolve, 420));
       }
+      await loadHistory();
+      setNow(Date.now());
       setRefreshedAt("지금");
     } finally {
       setRefreshing(false);
     }
-  }, [refreshProvider]);
+  }, [refreshProvider, loadHistory]);
 
   const checkForUpdates = useCallback(async () => {
     if (updateOperationInFlight.current) return;
@@ -777,11 +675,13 @@ export function App() {
     let unlisten: TauriUnlisten | null = null;
     void listenNativeProviderUsage(snapshot => {
       const id = snapshot.providerId;
-      if (id !== "codex" && id !== "claude") return;
+      if (!providers.some(provider => provider.id === id)) return;
       // Claim a fresh ticket so an older in-flight request cannot overwrite this newer snapshot.
       refreshSequence.begin(id);
       setQuotas(current => ({ ...current, [id]: quotaFromSnapshot(snapshot, planQuotas[id]) }));
       setRefreshedAt(autoRefreshLabel(new Date()));
+      setNow(Date.now());
+      void loadHistory();
     }).then(handle => {
       if (disposed) void handle?.();
       else unlisten = handle;
@@ -790,7 +690,7 @@ export function App() {
       disposed = true;
       void unlisten?.();
     };
-  }, [refreshSequence]);
+  }, [refreshSequence, loadHistory]);
 
   useEffect(() => {
     if (!loginPollingProviderId || !isTauriRuntime()) return;
@@ -807,7 +707,7 @@ export function App() {
         setActionFeedback({ status: "refreshed", message: snapshot.message });
       } else if (attempts >= 30) {
         setLoginPollingProviderId(null);
-        setActionFeedback({ status: "not-available", message: "로그인 확인 시간이 초과되었습니다. 공급자 로그인을 마친 뒤 새로고침해 주세요." });
+        setActionFeedback({ status: "not-available", message: "로그인 확인 시간 초과. 로그인 후 새로고침해 주세요." });
       } else {
         pollTimer = window.setTimeout(() => void poll(), 4_000);
       }
@@ -832,39 +732,40 @@ export function App() {
   }, []);
   const connectOAuth = useCallback(async (id: ProviderId) => {
     if (!isTauriRuntime()) {
-      setActionFeedback({ status: "demo-only", message: "브라우저 미리보기에서는 예시 수치만 표시합니다. 설치된 SPECTRA 앱에서 공식 계정을 연결해 주세요." });
+      setActionFeedback({ status: "demo-only", message: "예시 화면입니다. 설치된 앱에서 연결해 주세요." });
       return;
     }
     const snapshot = await refreshProvider(id);
     if (!snapshot) {
-      setActionFeedback({ status: "not-available", message: "공식 도구의 계정 상태를 확인하지 못했습니다. 잠시 뒤 다시 시도해 주세요." });
+      setActionFeedback({ status: "not-available", message: "계정 상태 확인 실패. 다시 시도해 주세요." });
       return;
     }
-    if (!snapshot.runtimeAvailable) {
+    const action = nextConnectionAction(id, snapshot);
+    if (action === "install-cli") {
       setActionFeedback({ status: "not-installed", message: snapshot.message });
       return;
     }
-    if (snapshot.authState !== "signed-in") {
+    if (action === "login") {
       const result = await startNativeProviderLogin(id);
       setActionFeedback(result ?? { status: "not-available", message: "로그인 프로세스를 시작하지 못했습니다." });
       if (result?.status === "login-started") setLoginPollingProviderId(id);
       return;
     }
-    if (id === "claude" && !snapshot.bridgeInstalled) {
+    if (action === "install-bridge") {
       const result = await installNativeProviderBridge(id);
-      setActionFeedback(result ?? { status: "not-available", message: "Claude 사용량 브리지를 설치하지 못했습니다." });
+      setActionFeedback(result ?? { status: "not-available", message: "사용량 브리지를 설치하지 못했습니다." });
       if (result?.status === "bridge-installed") void refreshProvider(id);
       return;
     }
     setActionFeedback({ status: "refreshed", message: snapshot.message });
   }, [refreshProvider]);
   const disconnectOAuth = useCallback(async (id: ProviderId) => {
-    if (!isTauriRuntime() || id !== "claude") {
+    if (!isTauriRuntime() || (id !== "claude" && id !== "antigravity")) {
       setActionFeedback({ status: "not-supported", message: "SPECTRA는 공급자 로그인 자격 증명을 삭제하지 않습니다." });
       return;
     }
     const result = await removeNativeProviderBridge(id);
-    setActionFeedback(result ?? { status: "not-available", message: "Claude 사용량 브리지를 제거하지 못했습니다." });
+    setActionFeedback(result ?? { status: "not-available", message: "사용량 브리지를 제거하지 못했습니다." });
     if (result?.status === "bridge-removed") void refreshProvider(id);
   }, [refreshProvider]);
 
@@ -877,10 +778,16 @@ export function App() {
     quotas,
     metric,
     range,
-    onProvider: setActiveProviderId,
+    onProvider: (id) => { setActiveProviderId(id); if (view === "settings" || view === "alerts") setView("overview"); },
     onMetric: setMetric,
     onRange: setRange,
     onOpenOAuth: openOAuth,
+    group, quotaWindow, history, historyState, now, pinned, uiError,
+    onGroup: id => setSelectedGroups(current => ({ ...current, [activeProviderId]: id })),
+    onWindow: setSelectedWindowId,
+    onPin: () => void togglePin(),
+    onOpenDashboard: targetView => void changeWindowMode("dashboard", targetView),
+    onOpenMini: () => void changeWindowMode("mini"),
     refreshedAt,
     refreshing,
     solid,
@@ -898,5 +805,5 @@ export function App() {
     onInstallUpdate: () => void installUpdate()
   };
 
-  return <><div className={solid ? "solid-mode" : ""}>{windowMode === "mini" ? <MiniLayout quotas={quotas} onRefresh={refresh} refreshing={refreshing} /> : isMobile ? <VariantCMobile {...sharedProps} /> : <VariantADesktop {...sharedProps} />}</div><UpdateNotice state={updateState} visible={updateNoticeVisible} onInstall={installUpdate} onRetry={checkForUpdates} onDismiss={() => setUpdateNoticeVisible(false)} /><OAuthDialog open={oauthOpen} provider={oauthProvider} quota={oauthQuota} startResult={actionFeedback} onClose={closeOAuth} onConnect={connectOAuth} onDisconnect={disconnectOAuth} /></>;
+  return <><div className={solid ? "solid-mode" : ""}>{windowMode === "mini" ? <MiniLayout {...sharedProps} /> : <FocusDashboard {...sharedProps} />}</div><UpdateNotice state={updateState} visible={updateNoticeVisible} onInstall={installUpdate} onRetry={checkForUpdates} onDismiss={() => setUpdateNoticeVisible(false)} /><OAuthDialog open={oauthOpen} provider={oauthProvider} quota={oauthQuota} startResult={actionFeedback} onClose={closeOAuth} onConnect={connectOAuth} onDisconnect={disconnectOAuth} /></>;
 }

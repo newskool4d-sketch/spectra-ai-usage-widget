@@ -21,6 +21,7 @@ pub const TOKEN_HOLD_SECS: u64 = 1_800;
 pub enum Provider {
     Claude,
     Codex,
+    Antigravity,
 }
 
 impl Provider {
@@ -28,6 +29,7 @@ impl Provider {
         match self {
             Self::Claude => "claude",
             Self::Codex => "codex",
+            Self::Antigravity => "antigravity",
         }
     }
 }
@@ -101,6 +103,7 @@ impl Slot {
 pub struct Scheduler {
     claude: Slot,
     codex: Slot,
+    antigravity: Slot,
     credentials_seen: Option<u64>,
 }
 
@@ -108,7 +111,7 @@ impl Scheduler {
     /// `now` counts as the first attempt: the WebView boots with its own refresh, so the
     /// loop must not repeat it within the first tick.
     pub fn new(now: u64) -> Self {
-        Self { claude: Slot::new(now), codex: Slot::new(now), credentials_seen: None }
+        Self { claude: Slot::new(now), codex: Slot::new(now), antigravity: Slot::new(now), credentials_seen: None }
     }
 
     /// Providers to refresh on this tick, Claude first. The credentials stamp is tracked
@@ -126,7 +129,7 @@ impl Scheduler {
             return Vec::new();
         }
         let now = input.now;
-        let mut due = Vec::with_capacity(2);
+        let mut due = Vec::with_capacity(3);
         if credentials_changed {
             self.claude.clear();
             due.push(Provider::Claude);
@@ -138,6 +141,9 @@ impl Scheduler {
         if self.codex.interval_due(now) {
             due.push(Provider::Codex);
         }
+        if self.antigravity.interval_due(now) {
+            due.push(Provider::Antigravity);
+        }
         due
     }
 
@@ -145,6 +151,7 @@ impl Scheduler {
         let slot = match provider {
             Provider::Claude => &mut self.claude,
             Provider::Codex => &mut self.codex,
+            Provider::Antigravity => &mut self.antigravity,
         };
         slot.last_attempt = now;
         match outcome {
@@ -180,7 +187,7 @@ mod tests {
     fn first_periodic_refresh_waits_one_full_interval_after_start() {
         let mut scheduler = Scheduler::new(1_000);
         assert!(scheduler.plan(input(1_000 + INTERVAL_SECS - 1)).is_empty());
-        assert_eq!(scheduler.plan(input(1_000 + INTERVAL_SECS)), vec![Provider::Claude, Provider::Codex]);
+        assert_eq!(scheduler.plan(input(1_000 + INTERVAL_SECS)), vec![Provider::Claude, Provider::Codex, Provider::Antigravity]);
     }
 
     #[test]
@@ -190,16 +197,17 @@ mod tests {
         off.strip_enabled = false;
         off.claude_reset_due = true;
         assert!(scheduler.plan(off).is_empty());
-        assert_eq!(scheduler.plan(input(10_000)), vec![Provider::Claude, Provider::Codex]);
+        assert_eq!(scheduler.plan(input(10_000)), vec![Provider::Claude, Provider::Codex, Provider::Antigravity]);
     }
 
     #[test]
     fn claude_is_planned_before_codex_and_each_follows_its_own_clock() {
         let mut scheduler = Scheduler::new(0);
         scheduler.record(Provider::Codex, 100, Outcome::Ok);
+        scheduler.record(Provider::Antigravity, 100, Outcome::Ok);
         assert_eq!(scheduler.plan(input(120)), vec![Provider::Claude]);
         scheduler.record(Provider::Claude, 120, Outcome::Ok);
-        assert_eq!(scheduler.plan(input(220)), vec![Provider::Codex]);
+        assert_eq!(scheduler.plan(input(220)), vec![Provider::Codex, Provider::Antigravity]);
     }
 
     #[test]
@@ -220,7 +228,7 @@ mod tests {
         scheduler.record(Provider::Claude, 1_000, Outcome::TokenExpired);
         let mut tick = input(1_000 + INTERVAL_SECS);
         tick.claude_reset_due = true;
-        assert_eq!(scheduler.plan(tick), vec![Provider::Codex], "a held Claude is skipped even at a reset boundary");
+        assert_eq!(scheduler.plan(tick), vec![Provider::Codex, Provider::Antigravity], "a held Claude is skipped even at a reset boundary");
         scheduler.record(Provider::Codex, tick.now, Outcome::Ok);
         tick.now = 1_000 + TOKEN_HOLD_SECS - 1;
         assert!(!scheduler.plan(tick).contains(&Provider::Claude));
@@ -298,6 +306,6 @@ mod tests {
         snapshot.live_failure = Some("claude-usage-http-429".to_string());
         assert_eq!(outcome_for(&snapshot), Outcome::Failed);
         assert_eq!([Outcome::Ok.label(), Outcome::TokenExpired.label(), Outcome::Failed.label()], ["ok", "token-expired", "failed"]);
-        assert_eq!([Provider::Claude.id(), Provider::Codex.id()], ["claude", "codex"]);
+        assert_eq!([Provider::Claude.id(), Provider::Codex.id(), Provider::Antigravity.id()], ["claude", "codex", "antigravity"]);
     }
 }

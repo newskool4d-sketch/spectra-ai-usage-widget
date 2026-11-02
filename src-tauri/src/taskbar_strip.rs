@@ -273,6 +273,8 @@ mod tests {
             remaining_percent: remaining,
             resets_at: None,
             window_duration_mins: None,
+            model_group_id: None,
+            model_group_label: None,
         }
     }
 

@@ -52,6 +52,22 @@ export const providerCapabilities: Readonly<Record<ProviderId, ProviderCapabilit
     ] as const),
     reviewedAt: "2026-08-16"
   },
+  antigravity: {
+    providerId: "antigravity",
+    oauth: "cli-managed",
+    oauthLabel: "Antigravity CLI · Google 로그인",
+    quotaScope: "subscription",
+    quotaLabel: "Antigravity 모델군별 사용률·초기화 시각",
+    planQuotaVerified: true,
+    authorizeUrl: null,
+    tokenUrl: null,
+    clientIdEnv: null,
+    connectionStatus: "supported",
+    quotaEndpoint: "Antigravity CLI statusline quota",
+    quotaEndpointStatus: "remaining-published",
+    docs: Object.freeze(["https://antigravity.google/docs/cli/statusline"]),
+    reviewedAt: "2026-11-02"
+  },
   claude: {
     providerId: "claude",
     oauth: "cli-managed",

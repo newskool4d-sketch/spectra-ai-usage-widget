@@ -54,7 +54,7 @@
   --color-button: #eee9df;
   --color-ambient-gradient: linear-gradient(145deg, #10110f, #171713 54%, #0f100e);
 
-  --color-violet: #8879c6;
+  --color-violet: #b58af0;
   --color-cyan: #56b7b0;
   --color-blue: #6f8fc9;
   --color-pink: #c77799;
@@ -141,18 +141,18 @@
   --motion-rise: .45s cubic-bezier(.2, .8, .2, 1);
 }
 
-/* 일반 모드 — 대비는 낮추고, 잔여량 색상은 다크 모드와 동일하게 유지합니다. */
+/* Light surfaces preserve provider identity with darker, readable accent inks. */
 [data-theme="light"] {
   color-scheme: light;
   --color-ink: #20231f;
   --color-muted: #626861;
   --color-subtle: #858d83;
-  --color-canvas: #eef1ec;
-  --color-canvas-raised: #f7f9f6;
+  --color-canvas: #f5f3ee;
+  --color-canvas-raised: #fffefb;
   --color-surface-app: rgba(255, 255, 255, .82);
   --color-surface-nav: rgba(248, 250, 247, .88);
   --color-surface-card: rgba(255, 255, 255, .68);
-  --color-surface-solid: #f7f9f6;
+  --color-surface-solid: #fffefb;
   --color-surface-core: rgba(255, 255, 255, .94);
   --color-surface-node: rgba(247, 249, 246, .92);
   --color-surface-inner: #e8ede7;
@@ -171,7 +171,10 @@
   --color-nav-icon: #768078;
   --color-ink-button: #f7f9f6;
   --color-button: #273128;
-  --color-ambient-gradient: linear-gradient(145deg, #edf2ed, #f8faf7 54%, #e8efea);
+  --color-ambient-gradient: linear-gradient(145deg, #f5f3ee, #fffefb 54%, #f1eee8);
+  --color-cyan: #147b76;
+  --color-coral: #aa492b;
+  --color-violet: #7151ac;
   --shadow-inset: inset 0 1px 0 rgba(255, 255, 255, .85);
   --shadow-app: 0 12px 24px rgba(43, 61, 48, .09), var(--shadow-inset);
   --shadow-card: var(--shadow-inset), 0 8px 16px rgba(43, 61, 48, .06);

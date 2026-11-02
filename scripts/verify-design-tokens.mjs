@@ -72,5 +72,5 @@ if (failures.length > 0) {
   console.log("DESIGN TOKENS: PASS");
   console.log(`- token source: ${manifest.tokenSource}`);
   console.log(`- declared tokens: ${tokenCount}`);
-  console.log("- A+C style consumers: PASS");
+  console.log("- Focus Dock style consumers: PASS");
 }

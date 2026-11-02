@@ -10,14 +10,16 @@ const sourceFiles = [
   "src/components/Sparkline.tsx",
   "src/data/providers.ts",
   "src/data/next-action.ts",
+  "src/data/focus-dock.ts",
   "src/integrations/tauri-native-bridge.ts",
   "src/integrations/boot-state.ts"
 ];
 const source = sourceFiles.map(file => readFileSync(join(root, file), "utf8")).join("\n");
 const failures = [];
 
-if (!source.includes("matchMedia")) failures.push("responsive mount gate is missing");
-if (!source.includes("isMobile ? <VariantCMobile") || !source.includes(": <VariantADesktop")) failures.push("A/C conditional mount is missing");
+if (!/windowMode\s*===\s*["']mini["']\s*\?\s*<MiniLayout\b/.test(source) || !/:\s*<FocusDashboard\b/.test(source)) failures.push("Focus Dock conditional mount is missing");
+const styles = readFileSync(join(root, "styles.css"), "utf8");
+if (!/@media[^{}]*max-width/.test(styles)) failures.push("responsive Focus Dock layout is missing");
 if (!source.includes("Object.freeze")) failures.push("provider data is not frozen at module scope");
 if (!source.includes("clearTimeout")) failures.push("refresh timer cleanup is missing");
 for (const pattern of [/setInterval\s*\(/, /requestAnimationFrame\s*\(/, /localStorage/, /sessionStorage/]) {
@@ -71,5 +73,5 @@ if (failures.length > 0) {
   for (const failure of failures) console.error(`- ${failure}`);
   process.exitCode = 1;
 } else {
-  console.log(`MEMORY BUDGET: PASS (js=${jsBytes} bytes, css=${cssBytes} bytes, fonts=${fontBytes} bytes/${fontFiles} files, assets=${jsFiles}, one-layout mount, no polling/persistence)`);
+  console.log(`MEMORY BUDGET: PASS (js=${jsBytes} bytes, css=${cssBytes} bytes, fonts=${fontBytes} bytes/${fontFiles} files, assets=${jsFiles}, one-layout mount, no browser storage)`);
 }

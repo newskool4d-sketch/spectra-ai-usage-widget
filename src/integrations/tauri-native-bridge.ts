@@ -51,6 +51,8 @@ export type NativeCredentialStatus = Readonly<{
 
 export type NativeProviderQuotaWindow = Readonly<{
   id: "rolling" | "weekly";
+  modelGroupId?: string;
+  modelGroupLabel?: string;
   label: string;
   usedPercent: number;
   remainingPercent: number;
@@ -65,7 +67,7 @@ export type NativeProviderUsageSnapshot = Readonly<{
   connectionState: "not-installed" | "signed-out" | "waiting-for-usage" | "connected" | "stale" | "error";
   authMethod: string | null;
   planType: string | null;
-  source: "codex-app-server" | "claude-statusline" | "claude-usage-api" | null;
+  source: "codex-app-server" | "claude-statusline" | "claude-usage-api" | "antigravity-statusline" | null;
   lastSyncedAt: number | null;
   bridgeInstalled: boolean;
   windows: readonly NativeProviderQuotaWindow[];
@@ -113,6 +115,38 @@ export async function setNativeStrip(enabled: boolean): Promise<NativeUiPrefs | 
   const command = invoke();
   if (!command) return null;
   return command<NativeUiPrefs>("set_strip", { enabled });
+}
+
+export type UsageHistoryPoint = Readonly<{
+  providerId: string;
+  modelGroupId?: string;
+  modelGroupLabel?: string;
+  windowId: "rolling" | "weekly";
+  label: string;
+  capturedAt: number;
+  remainingPercent: number;
+  usedPercent: number;
+  resetsAt: number | null;
+  windowDurationMins: number | null;
+}>;
+
+export async function getNativeUsageHistory(): Promise<readonly UsageHistoryPoint[]> {
+  const command = invoke();
+  return command ? command<UsageHistoryPoint[]>("get_usage_history") : [];
+}
+
+export async function setNativeWindowMode(mode: "mini" | "dashboard"): Promise<void> {
+  const command = invoke();
+  if (command) await command<void>("set_window_mode", { mode });
+  else {
+    window.__SPECTRA_MODE__ = mode;
+    window.dispatchEvent(new CustomEvent("spectra-mode", { detail: mode }));
+  }
+}
+
+export async function setNativeWindowPinned(pinned: boolean): Promise<boolean> {
+  const command = invoke();
+  return command ? command<boolean>("set_window_pinned", { pinned }) : pinned;
 }
 
 export async function prepareNativeOAuth(providerId: ProviderId): Promise<NativeOAuthPrepareResult | null> {

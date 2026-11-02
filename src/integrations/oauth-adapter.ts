@@ -77,7 +77,8 @@ const createDemoAdapter = (providerId: ProviderId): OAuthAdapter => Object.freez
 
 export const oauthAdapters: Readonly<Record<ProviderId, OAuthAdapter>> = Object.freeze({
   codex: createDemoAdapter("codex"),
-  claude: createDemoAdapter("claude")
+  claude: createDemoAdapter("claude"),
+  antigravity: createDemoAdapter("antigravity")
 });
 
 export const getOAuthAdapter = (providerId: ProviderId) => oauthAdapters[providerId];

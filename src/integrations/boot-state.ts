@@ -4,7 +4,7 @@ export type NativeUiPrefs = Readonly<{ theme: "dark" | "light"; solid: boolean; 
 export type NativeBootState = NativeUiPrefs & Readonly<{ mode: "mini" | "dashboard"; snapshots: readonly NativeProviderUsageSnapshot[] }>;
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null;
-const knownProviders = new Set(["codex", "claude"]);
+const knownProviders = new Set(["codex", "claude", "antigravity"]);
 // Match the native usage refresh interval so reopening does not prolong an old cache.
 const codexBootCacheMaxAgeMs = 120_000;
 
@@ -47,7 +47,7 @@ export function providersToRefreshAfterBoot<T extends string>(boot: NativeBootSt
   if (!boot) return [...all];
   return all.filter(id => {
     const snapshot = boot.snapshots.find(snapshot => snapshot.providerId === id);
-    if (!snapshot || id === "claude") return true;
+    if (!snapshot || id === "claude" || id === "antigravity") return true;
     if (id !== "codex") return false;
     const captured = snapshot.lastSyncedAt == null ? NaN : snapshot.lastSyncedAt * 1000;
     return snapshot.connectionState !== "connected"

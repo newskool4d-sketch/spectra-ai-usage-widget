@@ -1,19 +1,22 @@
 {
   "schemaVersion": 1,
   "decisionId": "SPECTRA-ADR-001",
-  "baselineRevision": 3,
-  "approvedAt": "2026-09-05",
+  "baselineRevision": 4,
+  "approvedAt": "2026-11-02",
   "status": "approved",
-  "sourceOfTruth": "code-and-screenshots",
+  "sourceOfTruth": "approved-mockups-and-code",
   "figmaRequired": false,
   "tokenSource": "styles/tokens.css",
   "tokenRevision": 1,
   "decision": {
-    "desktop": "A",
-    "mobile": "C",
-    "combination": "A+C",
+    "desktop": "focus-dock",
+    "mini": "focus-dock",
+    "combination": "Focus Dock",
+    "themes": [
+      "dark",
+      "light"
+    ],
     "excludedFromProduct": [
-      "B",
       "prototype-switcher"
     ]
   },
@@ -35,36 +38,55 @@
       "cursor": "#8CB66B",
       "copilot": "#C77799",
       "perplexity": "#C7A852",
-      "secondaryBlue": "#6F8FC9"
+      "secondaryBlue": "#6F8FC9",
+      "antigravity": "#8879C6"
     },
     "material": "restrained-glass-on-navigation-and-widget-surfaces",
     "copyStyle": "short-natural-korean"
   },
   "assets": [
     {
+      "path": "docs/design-baseline/focus-dock-approved.png",
+      "role": "desktop-and-mini-concept",
+      "viewport": "1672x941",
+      "sha256": "2925358CA9E23805DD406CE28B8007F01FC009C2C383091A5473121E615E66CA"
+    },
+    {
+      "path": "docs/design-baseline/focus-dock-mini-themes-approved.png",
+      "role": "mini-dark-light-concept",
+      "viewport": "1536x1024",
+      "sha256": "E665291C96FDD23CEB23209EDC947CFE640D88E1402863597D6A5F5133336B8C"
+    }
+  ],
+  "acceptance": [
+    "Desktop and mini-window structure follow the selected Focus Dock concept.",
+    "Mini-window dark and light themes share layout and preserve readable provider colors.",
+    "The cost view is replaced by subscription-model information; no estimated bill is inferred from quota percentages.",
+    "Settings remains accessible in the initial viewport; mini-window actions have native implementations.",
+    "History displays real collected samples for today, 7 days and 30 days; missing history is not fabricated.",
+    "Antigravity model groups remain distinct from the direct Claude subscription.",
+    "Provider names and numeric usage data remain readable without relying on color alone.",
+    "Approved images contain example data and are visual targets, not evidence of installed runtime behavior.",
+    "Figma packages, URLs, plugins, and runtime APIs are not required to run or verify the project."
+  ],
+  "referenceAssets": [
+    {
       "path": "docs/design-baseline/desktop-a.png",
-      "role": "desktop-primary",
+      "role": "historical-desktop-primary",
       "viewport": "1440x1000",
       "sha256": "783A7A7C290C846C85F2B25B04A954B6C49125BAD24937620291EBC659B4254B"
     },
     {
       "path": "docs/design-baseline/desktop-c-context.png",
-      "role": "cross-device-context",
+      "role": "historical-cross-device-context",
       "viewport": "1440x1000",
       "sha256": "00A10D136238EAD62CD0BE4CC16020D1B100B64BE7F9521EEDE0C2FF15A46178"
     },
     {
       "path": "docs/design-baseline/mobile-c.png",
-      "role": "mobile-primary",
+      "role": "historical-mobile-primary",
       "viewport": "390x844",
       "sha256": "DF82B105238D1325C75319B156C21CA75E5A28345972B187F97E1EF9546C7CE3"
     }
-  ],
-  "acceptance": [
-    "Desktop product structure follows variant A.",
-    "Mobile and iOS widget structure follows variant C.",
-    "Provider names and numeric usage data remain readable without relying on color alone.",
-    "Figma packages, URLs, plugins, and runtime APIs are not required to run or verify the project.",
-    "Variant B and the prototype switcher are reference-only and do not ship in the product UI."
   ]
 }

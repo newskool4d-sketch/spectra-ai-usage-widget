@@ -1,7 +1,7 @@
 import type { PlanQuota, ProviderId, QuotaWindow } from "./providers";
 
-export const providerNames: Readonly<Record<ProviderId, string>> = Object.freeze({ codex: "Codex", claude: "Claude" });
-const providerIds: readonly ProviderId[] = ["codex", "claude"];
+export const providerNames: Readonly<Record<ProviderId, string>> = Object.freeze({ codex: "Codex", claude: "Claude", antigravity: "Antigravity" });
+const knownProviderIds: readonly ProviderId[] = ["codex", "claude", "antigravity"];
 
 export type NextAction = Readonly<{
   recommendedProvider: ProviderId | null;
@@ -59,6 +59,7 @@ function beats(candidate: QuotaWindow, current: QuotaWindow): boolean {
 }
 
 export function computeNextAction(quotas: Readonly<Record<ProviderId, PlanQuota>>, now: number): NextAction {
+  const providerIds = knownProviderIds.filter(id => quotas[id]);
   const chips = providerIds.map(id => chipText(id, quotas[id], now));
   const connected = providerIds.filter(id => hasVerifiedUsage(quotas[id]));
   if (connected.length === 0) {

@@ -28,6 +28,10 @@ const MAX_STATUSLINE_OUTPUT_BYTES: u64 = 64 * 1024;
 #[serde(rename_all = "camelCase")]
 pub struct ProviderQuotaWindow {
     pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_group_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_group_label: Option<String>,
     pub label: String,
     pub used_percent: f64,
     pub remaining_percent: f64,
@@ -320,6 +324,8 @@ fn quota_window(value: &Value, fallback_id: &str, fallback_label: &str) -> Optio
     };
     Some(ProviderQuotaWindow {
         id,
+        model_group_id: None,
+        model_group_label: None,
         label: quota_label(duration, fallback_label),
         used_percent,
         remaining_percent: (100.0 - used_percent).clamp(0.0, 100.0),
@@ -655,7 +661,7 @@ fn read_claude_oauth_at(path: &Path, now_ms: u64) -> Result<ClaudeOAuth, String>
 /// `2026-08-23T19:10:00.123Z` or `2026-08-24T04:10:00+09:00` into unix
 /// seconds. Sub-second precision is dropped. Returns `None` on any syntax
 /// error rather than guessing.
-fn parse_rfc3339_seconds(input: &str) -> Option<u64> {
+pub(crate) fn parse_rfc3339_seconds(input: &str) -> Option<u64> {
     let input = input.trim();
     if input.len() < 20 {
         return None;
@@ -765,7 +771,7 @@ fn fetch_claude_usage_live(token: &str) -> Result<ClaudeUsageCache, String> {
     parse_claude_usage_response(&body, unix_now()).ok_or_else(|| "claude-usage-no-windows".to_string())
 }
 
-fn read_json(path: &Path) -> Result<Value, String> {
+pub(crate) fn read_json(path: &Path) -> Result<Value, String> {
     if fs::metadata(path)
         .map_err(|_| "json-read-failed".to_string())?
         .len()
@@ -1101,6 +1107,8 @@ fn claude_snapshot() -> ProviderUsageSnapshot {
             let used = window.used_percentage.clamp(0.0, 100.0);
             windows.push(ProviderQuotaWindow {
                 id: "rolling".to_string(),
+                model_group_id: None,
+                model_group_label: None,
                 label: "5시간 한도".to_string(),
                 used_percent: used,
                 remaining_percent: (100.0 - used).clamp(0.0, 100.0),
@@ -1112,6 +1120,8 @@ fn claude_snapshot() -> ProviderUsageSnapshot {
             let used = window.used_percentage.clamp(0.0, 100.0);
             windows.push(ProviderQuotaWindow {
                 id: "weekly".to_string(),
+                model_group_id: None,
+                model_group_label: None,
                 label: "주간 한도".to_string(),
                 used_percent: used,
                 remaining_percent: (100.0 - used).clamp(0.0, 100.0),
@@ -1173,6 +1183,7 @@ fn claude_snapshot() -> ProviderUsageSnapshot {
 
 pub fn snapshot(provider_id: &str) -> ProviderUsageSnapshot {
     match provider_id {
+        "antigravity" => crate::antigravity::snapshot(),
         "codex" => codex_snapshot(),
         "claude" => claude_snapshot(),
         _ => unavailable_snapshot(provider_id, "지원하지 않는 공급자입니다."),
@@ -1217,6 +1228,13 @@ pub(crate) fn stale_window_reset_passed(snapshot: &ProviderUsageSnapshot, window
 }
 
 pub fn start_login(provider_id: &str) -> ProviderActionResult {
+    if provider_id == "antigravity" {
+        return ProviderActionResult {
+            provider_id: provider_id.to_string(),
+            status: "not-supported".to_string(),
+            message: "Antigravity CLI(agy)에서 공식 로그인을 완료한 뒤 사용량 연결을 눌러 주세요.".to_string(),
+        };
+    }
     let (command_name, args): (&str, &[&str]) = match provider_id {
         "codex" => ("codex", &["login"]),
         "claude" => ("claude", &["auth", "login"]),
@@ -1341,6 +1359,7 @@ fn remove_claude_bridge_at(settings_path: &Path, bridge_config_path: &Path) -> R
 }
 
 pub fn install_bridge(provider_id: &str) -> ProviderActionResult {
+    if provider_id == "antigravity" { return crate::antigravity::install_bridge(); }
     if provider_id != "claude" {
         return ProviderActionResult {
             provider_id: provider_id.to_string(),
@@ -1388,6 +1407,7 @@ pub fn install_bridge(provider_id: &str) -> ProviderActionResult {
 }
 
 pub fn remove_bridge(provider_id: &str) -> ProviderActionResult {
+    if provider_id == "antigravity" { return crate::antigravity::remove_bridge(); }
     if provider_id != "claude" {
         return ProviderActionResult {
             provider_id: provider_id.to_string(),
@@ -1431,8 +1451,8 @@ fn extract_claude_cache(input: &Value) -> Option<ClaudeUsageCache> {
     })
 }
 
-fn run_previous_statusline(command: &str, input: &[u8]) -> Option<String> {
-    if command.contains(CLAUDE_BRIDGE_FLAG) {
+pub(crate) fn run_previous_statusline(command: &str, input: &[u8]) -> Option<String> {
+    if command.contains(CLAUDE_BRIDGE_FLAG) || command.contains(crate::antigravity::BRIDGE_FLAG) {
         return None;
     }
     #[cfg(target_os = "windows")]
@@ -1464,7 +1484,7 @@ fn run_statusline_command(command: &mut Command, input: &[u8]) -> Option<String>
     Some(String::from_utf8_lossy(&output.stdout).trim_end().to_string())
 }
 
-fn read_statusline_input(reader: impl Read) -> Option<Vec<u8>> {
+pub(crate) fn read_statusline_input(reader: impl Read) -> Option<Vec<u8>> {
     let mut input = Vec::new();
     reader
         .take(MAX_STATUSLINE_INPUT_BYTES + 1)
@@ -1749,6 +1769,8 @@ mod tests {
     fn quota(id: &str, remaining: f64, resets_at: Option<u64>) -> ProviderQuotaWindow {
         ProviderQuotaWindow {
             id: id.into(),
+            model_group_id: None,
+            model_group_label: None,
             label: id.into(),
             used_percent: 100.0 - remaining,
             remaining_percent: remaining,

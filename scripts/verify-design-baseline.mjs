@@ -15,13 +15,18 @@ function requireCondition(condition, message) {
 
 requireCondition(manifest.schemaVersion === 1, "지원하지 않는 기준선 스키마입니다.");
 requireCondition(manifest.status === "approved", "기준선 상태가 approved가 아닙니다.");
-requireCondition(manifest.sourceOfTruth === "code-and-screenshots", "코드·스크린샷 기준선이 아닙니다.");
+requireCondition(manifest.sourceOfTruth === "approved-mockups-and-code", "승인 시안·코드 기준선이 아닙니다.");
 requireCondition(manifest.figmaRequired === false, "Figma 비의존성 선언이 깨졌습니다.");
-requireCondition(manifest.decision?.combination === "A+C", "A+C 결정이 바뀌었습니다.");
-requireCondition(manifest.decision?.desktop === "A", "데스크톱 기준이 A가 아닙니다.");
-requireCondition(manifest.decision?.mobile === "C", "모바일 기준이 C가 아닙니다.");
+requireCondition(manifest.decision?.combination === "Focus Dock", "포커스 도크 결정이 바뀌었습니다.");
+requireCondition(manifest.decision?.desktop === "focus-dock", "데스크톱 기준이 포커스 도크가 아닙니다.");
+requireCondition(manifest.decision?.mini === "focus-dock", "미니창 기준이 포커스 도크가 아닙니다.");
 
-for (const asset of manifest.assets ?? []) {
+requireCondition(JSON.stringify(manifest.decision?.themes) === JSON.stringify(["dark", "light"]), "다크·라이트 기준이 없습니다.");
+requireCondition(manifest.assets?.length === 2, "승인된 포커스 도크 시안 두 장이 필요합니다.");
+requireCondition(manifest.assets?.some(asset => asset.role === "desktop-and-mini-concept"), "대시보드·미니창 시안이 없습니다.");
+requireCondition(manifest.assets?.some(asset => asset.role === "mini-dark-light-concept"), "미니창 테마 시안이 없습니다.");
+
+for (const asset of [...(manifest.assets ?? []), ...(manifest.referenceAssets ?? [])]) {
   try {
     const bytes = await readFile(path.join(projectRoot, asset.path));
     const actualHash = createHash("sha256").update(bytes).digest("hex").toUpperCase();

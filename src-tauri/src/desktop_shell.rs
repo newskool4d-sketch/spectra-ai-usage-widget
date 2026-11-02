@@ -439,6 +439,8 @@ mod tests {
                 remaining_percent: 80.0,
                 resets_at: Some(120),
                 window_duration_mins: Some(300),
+                model_group_id: None,
+                model_group_label: None,
             }],
             message: String::new(),
             live_failure: None,

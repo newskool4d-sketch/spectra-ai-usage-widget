@@ -1,8 +1,9 @@
 import { memo, type ReactNode } from "react";
 
-export type IconName = "grid" | "list" | "pulse" | "spark" | "bell" | "settings" | "refresh" | "shield" | "phone" | "monitor" | "eye" | "sun" | "moon" | "chevron" | "check" | "link" | "x";
+export type IconName = "grid" | "list" | "pulse" | "spark" | "bell" | "settings" | "refresh" | "shield" | "phone" | "monitor" | "eye" | "sun" | "moon" | "chevron" | "check" | "link" | "x" | "pin";
 
 const iconShapes: Readonly<Record<IconName, ReactNode>> = {
+  pin: <><path d="M8 3h8l-1 7 3 4H6l3-4-1-7Z" /><path d="M12 14v7" /></>,
   grid: <><rect x="3" y="3" width="7" height="7" rx="2" /><rect x="14" y="3" width="7" height="7" rx="2" /><rect x="3" y="14" width="7" height="7" rx="2" /><rect x="14" y="14" width="7" height="7" rx="2" /></>,
   list: <><path d="M9 6h12M9 12h12M9 18h12" /><circle cx="4.5" cy="6" r="1.2" /><circle cx="4.5" cy="12" r="1.2" /><circle cx="4.5" cy="18" r="1.2" /></>,
   pulse: <path d="M3 12h4l2.2-6 4.1 12 2.2-6H21" />,

@@ -6,6 +6,8 @@ mod oauth_callback;
 #[cfg(feature = "native-oauth")]
 mod provider_connection;
 mod provider_usage;
+mod antigravity;
+mod usage_history;
 mod standby;
 #[cfg(any(target_os = "windows", test))]
 mod taskbar_strip;
@@ -39,6 +41,7 @@ pub struct AppState {
     pub(crate) ui: Mutex<standby::UiPrefs>,
     pub(crate) window_mode: Mutex<desktop_shell::WindowMode>,
     pub(crate) last_snapshots: Mutex<Vec<provider_usage::ProviderUsageSnapshot>>,
+    pub(crate) history: Mutex<Vec<usage_history::UsageHistoryPoint>>,
     pub(crate) recreating: std::sync::atomic::AtomicBool,
     pub(crate) snapshot_requests: Mutex<std::collections::HashMap<String, u64>>,
     #[cfg(target_os = "windows")]
@@ -49,7 +52,7 @@ pub struct AppState {
 
 impl AppState {
     fn with_prefs(prefs: standby::UiPrefs) -> Self {
-        Self { ui: Mutex::new(prefs), ..Self::default() }
+        Self { ui: Mutex::new(prefs), history: Mutex::new(usage_history::load()), ..Self::default() }
     }
 
     pub(crate) fn boot_state(&self, mode: desktop_shell::WindowMode) -> standby::BootState {
@@ -290,6 +293,11 @@ pub(crate) async fn refresh_provider(
         return Ok(state.with_last_good(snapshot));
     }
     let snapshot = state.remember_snapshot(snapshot);
+    if let Ok(mut history) = state.history.lock() {
+        if usage_history::record(&mut history, &snapshot, provider_usage::unix_now()) && usage_history::save(&history).is_err() {
+            eprintln!("spectra: quota history could not be saved");
+        }
+    }
     desktop_shell::update_tray_badge(&app);
     desktop_shell::update_taskbar_strip(&app);
     if let Err(error) = app.emit(PROVIDER_USAGE_EVENT, &snapshot) {
@@ -304,6 +312,30 @@ async fn provider_usage_snapshot(
     provider_id: String,
 ) -> Result<provider_usage::ProviderUsageSnapshot, String> {
     refresh_provider(app, provider_id).await
+}
+
+#[tauri::command]
+fn get_usage_history(state: State<'_, AppState>) -> Result<Vec<usage_history::UsageHistoryPoint>, String> {
+    let mut history = state.history.lock().map_err(|_| "quota history unavailable".to_string())?;
+    usage_history::prune(&mut history, provider_usage::unix_now());
+    Ok(history.clone())
+}
+
+#[tauri::command]
+fn set_window_mode(app: AppHandle, mode: String) -> Result<(), String> {
+    let mode = match mode.as_str() {
+        "mini" => desktop_shell::WindowMode::Mini,
+        "dashboard" => desktop_shell::WindowMode::Dashboard,
+        _ => return Err("invalid window mode".into()),
+    };
+    desktop_shell::show_main_window(&app, mode).map_err(|_| "window mode could not be changed".into())
+}
+
+#[tauri::command]
+fn set_window_pinned(app: AppHandle, pinned: bool) -> Result<bool, String> {
+    let window = app.get_webview_window(desktop_shell::MAIN_WINDOW_LABEL).ok_or("main window unavailable")?;
+    window.set_always_on_top(pinned).map_err(|_| "window pin could not be changed")?;
+    Ok(pinned)
 }
 
 #[tauri::command]
@@ -410,6 +442,9 @@ pub fn run() {
             credential_status,
             credential_remove,
             provider_usage_snapshot,
+            get_usage_history,
+            set_window_mode,
+            set_window_pinned,
             provider_start_login,
             provider_install_bridge,
             provider_remove_bridge,
@@ -468,7 +503,7 @@ pub fn run() {
 }
 
 pub fn run_cli_mode() -> bool {
-    provider_usage::run_statusline_bridge() || provider_usage::run_provider_snapshot_cli()
+    provider_usage::run_statusline_bridge() || antigravity::run_statusline_bridge() || provider_usage::run_provider_snapshot_cli()
 }
 
 #[cfg(test)]
@@ -511,6 +546,8 @@ mod app_state_tests {
             remaining_percent: remaining,
             resets_at: None,
             window_duration_mins: Some(10_080),
+            model_group_id: None,
+            model_group_label: None,
         }
     }
 

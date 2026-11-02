@@ -1,5 +1,5 @@
-export type ProviderId = "codex" | "claude";
-export type Metric = "remaining" | "cost" | "requests";
+export type ProviderId = "codex" | "claude" | "antigravity";
+export type Metric = "remaining" | "subscription" | "requests";
 export type UsageRange = "24H" | "7D" | "30D";
 export type QuotaWindowId = "rolling" | "weekly";
 export type QuotaConnectionState =
@@ -11,12 +11,14 @@ export type QuotaConnectionState =
   | "stale"
   | "unsupported"
   | "error";
-export type QuotaSource = "example" | "codex-app-server" | "claude-statusline" | "claude-usage-api" | "unavailable";
+export type QuotaSource = "example" | "codex-app-server" | "claude-statusline" | "claude-usage-api" | "antigravity-statusline" | "unavailable";
 export type QuotaConfidence = "example" | "verified" | "unavailable";
 export type AuthMethod = "oauth-pkce" | "provider-delegated" | "not-published";
 
 export type QuotaWindow = Readonly<{
   id: QuotaWindowId;
+  modelGroupId?: string;
+  modelGroupLabel?: string;
   label: string;
   usedPercent: number;
   remainingPercent: number;
@@ -47,56 +49,67 @@ export type Provider = Readonly<{
   name: string;
   short: string;
   color: string;
-  used: number;
-  tokens: string;
-  cost: string;
-  reset: string;
-  trend: readonly number[];
 }>;
 
 export const providers: readonly Provider[] = Object.freeze([
-  { id: "codex", name: "Codex", short: "CX", color: "#56B7B0", used: 68, tokens: "3.8M", cost: "$18.40", reset: "3시간 42분", trend: [28, 34, 31, 48, 44, 63, 68] },
-  { id: "claude", name: "Claude", short: "CL", color: "#D88463", used: 76, tokens: "2.6M", cost: "$14.90", reset: "1시간 18분", trend: [40, 42, 51, 49, 64, 71, 76] }
+  { id: "codex", name: "Codex", short: "CX", color: "var(--color-cyan)" },
+  { id: "claude", name: "Claude", short: "CL", color: "var(--color-coral)" },
+  { id: "antigravity", name: "Antigravity", short: "AG", color: "var(--color-violet)" }
 ]);
+
+const exampleQuota = Object.freeze({
+  accountLabel: "브라우저 데모 · 네이티브 앱에서 연결",
+  authMethod: "provider-delegated",
+  connectionState: "not_connected",
+  source: "example",
+  confidence: "example",
+  lastSyncedAt: null,
+  bridgeInstalled: false
+} as const);
+
+function exampleWindow(id: QuotaWindowId, remainingPercent: number, resetLabel: string, modelGroupId?: string, modelGroupLabel?: string): QuotaWindow {
+  return { id, modelGroupId, modelGroupLabel, label: id === "rolling" ? "5시간 한도" : "주간 한도", usedPercent: 100 - remainingPercent, remainingPercent, resetLabel, kindLabel: "구독 한도" };
+}
 
 export const planQuotas: Readonly<Record<ProviderId, PlanQuota>> = Object.freeze({
   codex: {
+    ...exampleQuota,
     providerId: "codex",
     planName: "ChatGPT Pro · Codex",
-    accountLabel: "브라우저 데모 · 네이티브 앱에서 연결",
-    authMethod: "provider-delegated",
-    connectionState: "not_connected",
-    source: "example",
-    confidence: "example",
-    lastSyncedAt: null,
-    bridgeInstalled: false,
-    statusMessage: "네이티브 앱에서는 Codex App Server로 실제 한도를 확인합니다.",
+    statusMessage: "설치된 앱에서 Codex 한도를 확인합니다.",
     windows: Object.freeze([
-      { id: "rolling", label: "5시간 한도", usedPercent: 76, remainingPercent: 24, resetLabel: "1시간 18분 후", kindLabel: "공유 에이전트 사용량" },
-      { id: "weekly", label: "주간 한도", usedPercent: 42, remainingPercent: 58, resetLabel: "3일 4시간 후", kindLabel: "주간 사용량" }
+      exampleWindow("rolling", 24, "1시간 18분 후"),
+      exampleWindow("weekly", 58, "3일 4시간 후")
     ] as const)
   },
   claude: {
+    ...exampleQuota,
     providerId: "claude",
     planName: "Claude Max",
-    accountLabel: "브라우저 데모 · 네이티브 앱에서 연결",
-    authMethod: "provider-delegated",
-    connectionState: "not_connected",
-    source: "example",
-    confidence: "example",
-    lastSyncedAt: null,
-    bridgeInstalled: false,
-    statusMessage: "네이티브 앱에서는 Claude Code 상태선 브리지로 실제 한도를 확인합니다.",
+    statusMessage: "설치된 앱에서 Claude 한도를 확인합니다.",
     windows: Object.freeze([
-      { id: "rolling", label: "5시간 한도", usedPercent: 68, remainingPercent: 32, resetLabel: "3시간 42분 후", kindLabel: "공유 사용량" },
-      { id: "weekly", label: "주간 한도", usedPercent: 51, remainingPercent: 49, resetLabel: "4일 2시간 후", kindLabel: "주간 사용량" }
+      exampleWindow("rolling", 32, "3시간 42분 후"),
+      exampleWindow("weekly", 49, "4일 2시간 후")
+    ] as const)
+  },
+  antigravity: {
+    ...exampleQuota,
+    providerId: "antigravity",
+    planName: "Google AI Pro",
+    statusMessage: "Antigravity 앱에서 확인한 모델군별 한도를 표시합니다.",
+    windows: Object.freeze([
+      exampleWindow("rolling", 100, "3시간 41분 후", "gemini", "Gemini"),
+      exampleWindow("weekly", 100, "5일 10시간 후", "gemini", "Gemini"),
+      exampleWindow("rolling", 100, "초기화 시각 미제공", "claude-gpt", "Claude · GPT"),
+      exampleWindow("weekly", 100, "초기화 시각 미제공", "claude-gpt", "Claude · GPT"),
+      exampleWindow("weekly", 83, "6일 4시간 후", "gemini-4-argon", "Gemini 4 Argon")
     ] as const)
   }
 });
 
 export const metricLabels: Readonly<Record<Metric, string>> = Object.freeze({
   remaining: "잔여량",
-  cost: "비용",
+  subscription: "구독 모델",
   requests: "요청"
 });
 
