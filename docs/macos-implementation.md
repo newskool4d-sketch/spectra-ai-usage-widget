@@ -1,6 +1,6 @@
 # macOS 포팅 작업 및 검증
 
-기준: v0.3.1 (`2588389`), 2026-11-03. 상태: 구현·검증 중.
+기준: v0.3.1 (`2588389`), 2026-11-03. Mac 시험판 소스: `803ba25a70ff0cae0f422d69b4de01e9331000de`. 상태: 양쪽 아키텍처의 설치 패키지 생성·검증 완료, 실기기 GUI 미검증.
 
 ## 범위와 완료 기준
 
@@ -26,4 +26,21 @@
 - 공급자 테스트: Windows에서 provider_usage 31/31, Antigravity 12/12 통과. 초기 subprocess 시간 제한 실패 2건은 직렬 재실행 통과. Antigravity Windows wrapper는 샌드박스 PowerShell 초기화 경고가 stderr에 섞여 실패했으며 동일 합성 입력 테스트를 일반 실행 환경에서 통과했다.
 - Windows 네이티브 전체 테스트: 134 통과 / 0 실패 / 기존 GDI 통합 테스트 9개 미실행. 직렬 실행으로 subprocess 검사를 격리했으며 macOS 메뉴 모델·좌표 테스트 6개를 포함한다.
 - 독립검토: 프론트엔드·패키징 P1/P2 없음. 네이티브 RV-001(Retina 좌표 단위 혼용), RV-002(비동기 창 크기 변경 직후 이전 크기로 앵커 계산)를 수용하여 논리좌표·목표 창 크기 기반으로 수정하고 재검토했다. 남은 P1/P2 없음. 혼합 DPI 모니터가 모호하면 중앙 표시로 복원한다.
-- Mac CI 빌드·사용자 실화면: 아직 미실행. 로컬 단위 테스트와 구분한다.
+- [Mac CI 실행 41531866262](https://github.com/newskool4d-sketch/spectra-ai-usage-widget/actions/runs/41531866262): 최종 성공. Intel·Apple Silicon에서 네이티브 테스트, 앱·DMG 빌드, 아키텍처·번들 메타데이터·ad-hoc 서명·DMG 무결성, 패키징된 CLI 실행 검사 통과. 네이티브 테스트는 각 129/129 통과했다. 프론트엔드 테스트 92개 및 크기 검사도 각 환경에서 통과했다.
+- 실행 환경: Intel macOS 15.7.9, Apple Silicon macOS 15.8.2. macOS 13 최소 버전 실기기 검증은 하지 않았다.
+- 다운로드 후 DMG와 app.zip 각각의 SHA-256을 CI 산출값과 재대조하여 4개 모두 일치했다.
+
+## 설치 패키지
+
+로컬 위치: 작업트리의 `src-tauri/target/macos-artifacts/arm64/` 및 `x86_64/`. 바이너리는 Git에 넣지 않는다.
+
+| DMG | SHA-256 |
+|---|---|
+| `SPECTRA_0.3.1_arm64.dmg` | `602cdf384122c69f16263b231e0d72eae6dc7bb9ac7bcf1e34f0e784a2d7c9cc` |
+| `SPECTRA_0.3.1_x86_64.dmg` | `153dda6fedd180d096094957a8bfb8f74138fed86118bf9f5a466cada6406e12` |
+
+## 남은 검증
+
+- 실제 Mac 로그인 계정으로 공급자 연결·메뉴 막대 표시·클릭·창 위치·다크/라이트 설정 유지 확인.
+- Apple Developer ID 서명·공증, Mac 자동 업데이트 피드. 현재 ad-hoc 서명 시험판이며 Windows 정식 릴리즈는 변경하지 않았다.
+- 실제 Mac 대화형 검증을 CI의 컴파일·단위 테스트·CLI 실행 성공으로 대체하지 않는다. 종합 상태는 시험판 구현 및 패키지 검증 완료 / GUI 검증 PARTIAL이다.

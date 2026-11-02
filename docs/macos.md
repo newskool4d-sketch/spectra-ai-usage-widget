@@ -1,6 +1,8 @@
 # SPECTRA for macOS
 
-Windows 포커스 도크·대시보드와 같은 React 화면을 사용하며 미니 창의 다크/라이트 설정을 유지합니다. 상단 메뉴 막대에서 수치를 확인하고 미니 창·대시보드를 열 수 있도록 macOS 전용 처리를 추가합니다.
+Windows 포커스 도크·대시보드와 같은 React 화면을 사용하며 미니 창의 다크/라이트 설정을 유지합니다. 상단 메뉴 막대에서 수치를 확인하고 미니 창·대시보드를 열 수 있도록 macOS 전용 처리를 추가했습니다.
+
+2026-11-03 시험판(`803ba25`): [Mac 빌드 실행](https://github.com/newskool4d-sketch/spectra-ai-usage-widget/actions/runs/41531866262)에서 Apple Silicon·Intel의 앱/DMG 생성 및 패키지 검사가 통과했습니다. 각 설치파일과 해시는 [검증 기록](./macos-implementation.md)에 있습니다. 실제 Mac 화면·계정 연결 검증과 Apple 공증은 아직 완료하지 않았습니다.
 
 ## 빌드 대상과 현재 검증 범위
 
