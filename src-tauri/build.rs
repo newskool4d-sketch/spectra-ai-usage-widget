@@ -92,6 +92,18 @@ fn generated_icon_ico(png_data: &[u8]) -> Vec<u8> {
     ico
 }
 
+fn generated_icon_icns(png_data: &[u8]) -> Vec<u8> {
+    // An ICNS ic08 element contains the existing 256×256 PNG unchanged.
+    // Generate it with the Windows icons so clean macOS checkouts need no icon tool.
+    let mut icns = Vec::with_capacity(16 + png_data.len());
+    icns.extend_from_slice(b"icns");
+    icns.extend_from_slice(&((16 + png_data.len()) as u32).to_be_bytes());
+    icns.extend_from_slice(b"ic08");
+    icns.extend_from_slice(&((8 + png_data.len()) as u32).to_be_bytes());
+    icns.extend_from_slice(png_data);
+    icns
+}
+
 fn main() {
     let manifest_dir =
         PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("manifest dir is required"));
@@ -103,6 +115,8 @@ fn main() {
     fs::write(&png_path, &png_data).expect("generated PNG could not be written");
     fs::write(&ico_path, generated_icon_ico(&png_data))
         .expect("generated ICO could not be written");
+    fs::write(icons_dir.join("icon.icns"), generated_icon_icns(&png_data))
+        .expect("generated ICNS could not be written");
 
     if env::var("CARGO_CFG_TARGET_OS").is_ok_and(|target| target == "windows") {
         // Native integration tests use Tauri APIs that import Common Controls v6.

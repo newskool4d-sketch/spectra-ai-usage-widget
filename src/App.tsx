@@ -5,8 +5,8 @@ import { UpdateNotice, type UpdateState } from "./components/UpdateNotice";
 import { createRefreshSequencer } from "./data/refresh-sequence";
 import { LOOKUP_DELAYED, autoRefreshLabel, claudeFreshness, antigravityFreshness } from "./data/usage-freshness";
 import { metricLabels, planQuotas, providers, rangeLabels, type AuthMethod, type Metric, type PlanQuota, type Provider, type ProviderId, type QuotaWindow, type QuotaWindowId, type UsageRange } from "./data/providers";
-import { checkForAppUpdate, type AvailableAppUpdate } from "./integrations/app-updater";
-import { providersToRefreshAfterBoot } from "./integrations/boot-state";
+import { checkForAppUpdate, macUpdateMessage, type AvailableAppUpdate } from "./integrations/app-updater";
+import { providersToRefreshAfterBoot, type NativePlatform } from "./integrations/boot-state";
 import { nextConnectionAction } from "./integrations/provider-connect";
 import { getNativeUsageHistory, setNativeWindowMode, setNativeWindowPinned, type UsageHistoryPoint, getNativeProviderUsage, installNativeProviderBridge, isTauriRuntime, listenNativeProviderUsage, readBootState, removeNativeProviderBridge, setNativeStandby, setNativeStrip, setNativeUiPrefs, startNativeProviderLogin, type NativeProviderActionResult, type NativeProviderUsageSnapshot, type TauriUnlisten } from "./integrations/tauri-native-bridge";
 
@@ -188,6 +188,7 @@ const ProviderLogo = memo(function ProviderLogo({ provider }: Readonly<{ provide
 });
 
 type LayoutActions = Readonly<{
+  platform: NativePlatform;
   refreshedAt: string; refreshing: boolean; solid: boolean; theme: ThemeMode;
   standby: boolean; strip: boolean; stripPending: boolean;
   onRefresh: () => void; onSolid: () => void; onTheme: () => void;
@@ -295,13 +296,14 @@ const SubscriptionPanel = memo(function SubscriptionPanel({ activeProvider, acti
 const SettingsPanel = memo(function SettingsPanel(props: SharedViewProps) {
   const busy = props.updateState.phase === "checking" || props.updateState.phase === "installing";
   const updateAvailable = props.updateState.phase === "available";
+  const isMac = props.platform === "macos";
   const rows = [
     { title: "화면 테마", description: "모든 창에 적용하며 재실행 후 유지합니다.", label: props.theme === "dark" ? "라이트 모드" : "다크 모드", action: props.onTheme },
     { title: "가독성용 불투명 모드", description: "배경의 투명도를 조절합니다.", label: props.solid ? "유리 모드" : "불투명 모드", action: props.onSolid },
     { title: "메모리 절약 대기", description: props.standby ? "창을 닫으면 WebView를 종료합니다." : "창을 숨겨 다음에 빠르게 엽니다.", label: props.standby ? "빠른 재표시" : "메모리 절약", action: props.onStandby },
-    { title: "작업표시줄 표시", description: "작업표시줄에 확인된 잔여량을 표시합니다.", label: props.strip ? "표시 끄기" : "표시 켜기", action: props.onStrip, disabled: props.stripPending },
+    { title: isMac ? "메뉴 막대 잔여량" : "작업표시줄 표시", description: isMac ? "상단 메뉴 막대에 잔여량을 표시합니다. 꺼도 앱 아이콘은 유지됩니다." : "작업표시줄에 확인된 잔여량을 표시합니다.", label: props.strip ? "표시 끄기" : "표시 켜기", action: props.onStrip, disabled: props.stripPending },
     { title: "사용량 새로고침", description: "공급자 도구에서 확인 가능한 최신 수치를 조회합니다.", label: props.refreshing ? "확인 중" : "지금 확인", action: props.onRefresh, disabled: props.refreshing },
-    { title: "SPECTRA 업데이트", description: props.updateState.message, label: updateAvailable ? "지금 설치" : busy ? "확인 중" : "업데이트 확인", action: updateAvailable ? props.onInstallUpdate : props.onCheckForUpdate, disabled: busy }
+    { title: "SPECTRA 업데이트", description: props.updateState.message, label: isMac ? "수동 업데이트" : updateAvailable ? "지금 설치" : busy ? "확인 중" : "업데이트 확인", action: updateAvailable ? props.onInstallUpdate : props.onCheckForUpdate, disabled: busy || isMac }
   ];
   return <section className="settings-panel"><h2>사용 환경</h2>{rows.map(row => <div className="settings-row" key={row.title}><div><strong>{row.title}</strong><p>{row.description}</p></div><button type="button" className="secondary-action" onClick={row.action} disabled={row.disabled}>{row.label}</button></div>)}<p className="settings-note"><Icon name="shield" size={16} />계정·대화 원문 없이 수치만 기기에 기록합니다.</p></section>;
 });
@@ -413,6 +415,7 @@ const OAuthDialog = memo(function OAuthDialog({ open, provider, quota, startResu
 
 export function App() {
   const boot = useRef(readBootState()).current;
+  const platform = boot?.platform ?? "unknown";
   const windowMode = useWindowMode();
   const [view, setView] = useState<ProductView>("overview");
   const [selectedGroups, setSelectedGroups] = useState<Partial<Record<ProviderId, string>>>({});
@@ -474,7 +477,9 @@ export function App() {
   const [oauthOpen, setOauthOpen] = useState(false);
   const [actionFeedback, setActionFeedback] = useState<ProviderActionFeedback | null>(null);
   const [loginPollingProviderId, setLoginPollingProviderId] = useState<ProviderId | null>(null);
-  const [updateState, setUpdateState] = useState<UpdateState>({ phase: "idle", version: null, message: "업데이트 확인 전" });
+  const [updateState, setUpdateState] = useState<UpdateState>(platform === "macos"
+    ? { phase: "unsupported", version: null, message: macUpdateMessage }
+    : { phase: "idle", version: null, message: "업데이트 확인 전" });
   const [updateNoticeVisible, setUpdateNoticeVisible] = useState(false);
   const pendingUpdate = useRef<AvailableAppUpdate | null>(null);
   const updateOperationInFlight = useRef(false);
@@ -601,6 +606,11 @@ export function App() {
 
   const checkForUpdates = useCallback(async () => {
     if (updateOperationInFlight.current) return;
+    if (platform === "macos") {
+      setUpdateState({ phase: "unsupported", version: null, message: macUpdateMessage });
+      setUpdateNoticeVisible(false);
+      return;
+    }
     if (!isTauriRuntime()) {
       setUpdateState({ phase: "unsupported", version: null, message: "설치된 앱에서만 업데이트를 확인할 수 있습니다." });
       setUpdateNoticeVisible(false);
@@ -626,7 +636,7 @@ export function App() {
     } finally {
       updateOperationInFlight.current = false;
     }
-  }, []);
+  }, [platform]);
 
   const installUpdate = useCallback(async () => {
     if (updateOperationInFlight.current) return;
@@ -770,6 +780,7 @@ export function App() {
   }, [refreshProvider]);
 
   const sharedProps: SharedViewProps = {
+    platform,
     view,
     onView: setView,
     activeProvider,

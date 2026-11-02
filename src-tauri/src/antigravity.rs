@@ -108,7 +108,7 @@ struct BridgeConfig {
 
 fn settings_path() -> Option<PathBuf> {
     env::var_os("SPECTRA_ANTIGRAVITY_SETTINGS").map(PathBuf::from).or_else(|| {
-        env::var_os("USERPROFILE").or_else(|| env::var_os("HOME")).map(PathBuf::from)
+        provider_usage::provider_home_dir()
             .map(|home| home.join(".gemini").join("antigravity-cli").join("settings.json"))
     })
 }
@@ -122,12 +122,11 @@ fn config_path() -> Option<PathBuf> {
 }
 
 fn runtime_available() -> bool {
+    #[cfg(windows)]
     if let Some(local) = env::var_os("LOCALAPPDATA") {
         if PathBuf::from(local).join("agy").join("bin").join("agy.exe").is_file() { return true; }
     }
-    env::var_os("PATH").is_some_and(|path| env::split_paths(&path).any(|dir| {
-        dir.join(if cfg!(windows) { "agy.exe" } else { "agy" }).is_file()
-    }))
+    provider_usage::command_available("agy")
 }
 
 fn our_statusline(settings: &Value) -> bool {
@@ -372,8 +371,8 @@ pub fn run_statusline_bridge() -> bool {
     if let Some(config) = config_path().and_then(|path| provider_usage::read_json(&path).ok())
         .and_then(|value| serde_json::from_value::<BridgeConfig>(value).ok()) {
         if let Some(command) = previous_command(config.previous_status_line.as_ref()) {
-            let home = env::var("USERPROFILE").or_else(|_| env::var("HOME")).ok();
-            let expanded = match home { Some(home) => expand_command_home(command, &home), None => Some(command.to_string()) };
+            let home = provider_usage::provider_home_dir();
+            let expanded = match home.as_deref().and_then(Path::to_str) { Some(home) => expand_command_home(command, home), None => Some(command.to_string()) };
             if let Some(output) = expanded.as_deref().and_then(|command| provider_usage::run_previous_statusline(command, &input)) {
                 println!("{output}");
             }
@@ -543,6 +542,30 @@ mod tests {
         assert!(is_bridge_command(&command));
         assert_eq!(previous_command(Some(&json!({"command":command}))), None, "a saved bridge cannot chain recursively");
         assert!(!is_bridge_command("powershell.exe -EncodedCommand unrelated"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_bridge_quotes_a_macos_bundle_path_and_preserves_utf8_stdin() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::process::{Command, Stdio};
+        let dir = env::temp_dir().join(format!("spectra 한글 user's $(printf BAD) {}", uuid::Uuid::new_v4()));
+        let binary_dir = dir.join("SPECTRA.app/Contents/MacOS");
+        fs::create_dir_all(&binary_dir).unwrap();
+        let executable = binary_dir.join("spectra-native");
+        fs::write(&executable, b"#!/bin/sh\ncat\n").unwrap();
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o755)).unwrap();
+        let command = bridge_command(&executable).unwrap();
+        assert!(is_bridge_command(&command));
+        let mut child = Command::new("/bin/sh").args(["-c", &command])
+            .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+        let input = json!({"product":"antigravity", "fixture":"한글 보존", "quota":{"gemini-weekly":{"remaining_fraction":0.73}}});
+        child.stdin.take().unwrap().write_all(&serde_json::to_vec(&input).unwrap()).unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(output.status.success());
+        assert!(output.stderr.is_empty());
+        assert_eq!(serde_json::from_slice::<Value>(&output.stdout).unwrap(), input);
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[cfg(windows)]

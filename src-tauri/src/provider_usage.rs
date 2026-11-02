@@ -100,6 +100,12 @@ impl CommandSpec {
             }
         };
         command.args(args);
+        #[cfg(target_os = "macos")]
+        if let Ok(path) = env::join_paths(command_directories()) {
+            // Finder does not inherit the interactive shell PATH. npm-installed CLIs
+            // also need their Node runtime to be discoverable by `/usr/bin/env node`.
+            command.env("PATH", path);
+        }
         hide_window(&mut command);
         command
     }
@@ -116,22 +122,63 @@ fn hide_window(command: &mut Command) {
 fn hide_window(_command: &mut Command) {}
 
 fn resolve_command(name: &str) -> Option<CommandSpec> {
-    let path = env::var_os("PATH")?;
-    let directories: Vec<PathBuf> = env::split_paths(&path).collect();
+    let directories = command_directories();
 
     #[cfg(target_os = "windows")]
     return resolve_windows_command(name, &directories);
 
     #[cfg(not(target_os = "windows"))]
     {
-        directories.into_iter().find_map(|directory| {
-            let path = directory.join(name);
-            path.is_file().then_some(CommandSpec {
-                path,
-                kind: CommandKind::Direct,
-            })
-        })
+        resolve_unix_command(name, &directories)
     }
+}
+
+fn command_directories() -> Vec<PathBuf> {
+    let directories = env::var_os("PATH")
+        .map(|path| env::split_paths(&path).collect()).unwrap_or_default();
+    #[cfg(target_os = "macos")]
+    return mac_command_directories(directories, provider_home_dir().as_deref());
+    #[cfg(not(target_os = "macos"))]
+    directories
+}
+
+/// Keep explicit PATH precedence, then cover native CLI and Homebrew installs without
+/// executing shell startup files or changing the user's global environment.
+#[cfg(any(target_os = "macos", test))]
+fn mac_command_directories(mut directories: Vec<PathBuf>, home: Option<&Path>) -> Vec<PathBuf> {
+    directories.retain(|path| path.is_absolute());
+    let mut fallback = Vec::new();
+    if let Some(home) = home.filter(|home| home.is_absolute()) {
+        fallback.extend([home.join(".local/bin"), home.join(".npm-global/bin"), home.join(".volta/bin")]);
+    }
+    fallback.extend(["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"].map(PathBuf::from));
+    for path in fallback {
+        if !directories.contains(&path) { directories.push(path); }
+    }
+    directories
+}
+
+#[cfg(unix)]
+fn resolve_unix_command(name: &str, directories: &[PathBuf]) -> Option<CommandSpec> {
+    use std::os::unix::fs::PermissionsExt;
+    directories.iter().find_map(|directory| {
+        let path = directory.join(name);
+        let metadata = fs::metadata(&path).ok()?;
+        (metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+            .then_some(CommandSpec { path, kind: CommandKind::Direct })
+    })
+}
+
+pub(crate) fn command_available(name: &str) -> bool {
+    resolve_command(name).is_some()
+}
+
+pub(crate) fn provider_home_dir() -> Option<PathBuf> {
+    #[cfg(target_os = "windows")]
+    let home = env::var_os("USERPROFILE").or_else(|| env::var_os("HOME"));
+    #[cfg(not(target_os = "windows"))]
+    let home = env::var_os("HOME");
+    home.filter(|home| !home.is_empty()).map(PathBuf::from)
 }
 
 #[cfg(target_os = "windows")]
@@ -529,6 +576,12 @@ fn claude_cache_is_stale(cache: &ClaudeUsageCache, source_is_live: bool, now: u6
             .any(|window| window.resets_at.is_some_and(|reset| reset <= now))
 }
 
+fn claude_bridge_cache_is_stale(cache: &ClaudeUsageCache, bridge_installed: bool, now: u64) -> bool {
+    !bridge_installed || cache.captured_at > now || now.saturating_sub(cache.captured_at) > 300
+        || [&cache.five_hour, &cache.seven_day].into_iter().flatten()
+            .any(|window| window.resets_at.is_some_and(|reset| reset <= now))
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ClaudeBridgeConfig {
@@ -544,19 +597,17 @@ pub(crate) fn app_data_dir() -> Option<PathBuf> {
     if let Some(path) = env::var_os("LOCALAPPDATA") {
         return Some(PathBuf::from(path).join("SPECTRA"));
     }
-    env::var_os("HOME")
-        .map(PathBuf::from)
-        .map(|path| path.join(".local").join("share").join("spectra"))
+    #[cfg(target_os = "macos")]
+    return provider_home_dir().map(|path| path.join("Library/Application Support/SPECTRA"));
+    #[cfg(not(target_os = "macos"))]
+    provider_home_dir().map(|path| path.join(".local/share/spectra"))
 }
 
 fn claude_settings_path() -> Option<PathBuf> {
     if let Some(path) = env::var_os("SPECTRA_CLAUDE_SETTINGS") {
         return Some(PathBuf::from(path));
     }
-    env::var_os("USERPROFILE")
-        .or_else(|| env::var_os("HOME"))
-        .map(PathBuf::from)
-        .map(|path| path.join(".claude").join("settings.json"))
+    provider_home_dir().map(|path| path.join(".claude").join("settings.json"))
 }
 
 fn claude_cache_path() -> Option<PathBuf> {
@@ -586,10 +637,7 @@ fn claude_credentials_path() -> Option<PathBuf> {
     if let Some(path) = env::var_os(CLAUDE_CREDENTIALS_ENV) {
         return Some(PathBuf::from(path));
     }
-    env::var_os("USERPROFILE")
-        .or_else(|| env::var_os("HOME"))
-        .map(PathBuf::from)
-        .map(|path| path.join(".claude").join(".credentials.json"))
+    provider_home_dir().map(|path| path.join(".claude").join(".credentials.json"))
 }
 
 /// Modification stamp (unix milliseconds) of the file at `path`, `None` when unreadable.
@@ -1042,6 +1090,9 @@ fn claude_snapshot() -> ProviderUsageSnapshot {
     let login = claude_credentials_path()
         .ok_or_else(|| "claude-credentials-path-unavailable".to_string())
         .and_then(|path| read_claude_oauth_at(&path, unix_now_millis()));
+    // Claude Code normally keeps macOS credentials in Keychain. Do not copy or read
+    // those secrets: verify login through the CLI and consume its official status line.
+    let bridge_is_primary = cfg!(target_os = "macos") && login.is_err();
     let (auth_method, plan_type, live_result) = match login {
         // The credentials file already says signed in through Claude.ai and names the plan,
         // so no CLI start is needed on this two-minute path.
@@ -1083,7 +1134,7 @@ fn claude_snapshot() -> ProviderUsageSnapshot {
             Ok(Some(status)) => (status.auth_method, status.subscription_type, Err(reason)),
         },
     };
-    let live_error = live_result.as_ref().err().cloned();
+    let live_error = if bridge_is_primary { None } else { live_result.as_ref().err().cloned() };
     let source_is_live = live_result.is_ok();
     let cache = match live_result {
         Ok(fresh) => {
@@ -1102,7 +1153,11 @@ fn claude_snapshot() -> ProviderUsageSnapshot {
     if let Some(cache) = cache {
         captured_at = Some(cache.captured_at);
         let now = unix_now();
-        stale = claude_cache_is_stale(&cache, source_is_live, now);
+        stale = if bridge_is_primary {
+            claude_bridge_cache_is_stale(&cache, bridge_installed, now)
+        } else {
+            claude_cache_is_stale(&cache, source_is_live, now)
+        };
         if let Some(window) = cache.five_hour {
             let used = window.used_percentage.clamp(0.0, 100.0);
             windows.push(ProviderQuotaWindow {
@@ -1274,11 +1329,21 @@ pub fn start_login(provider_id: &str) -> ProviderActionResult {
     }
 }
 
+fn claude_bridge_command(executable: &Path) -> Result<String, String> {
+    let executable = executable.to_str().filter(|path| !path.contains(['\0', '\n', '\r']))
+        .ok_or_else(|| "claude-executable-path-invalid".to_string())?;
+    #[cfg(target_os = "windows")]
+    { Ok(format!("\"{}\" {CLAUDE_BRIDGE_FLAG}", executable.replace('"', ""))) }
+    #[cfg(not(target_os = "windows"))]
+    { Ok(format!("'{}' {CLAUDE_BRIDGE_FLAG}", executable.replace('\'', "'\"'\"'"))) }
+}
+
 fn install_claude_bridge_at(
     settings_path: &Path,
     bridge_config_path: &Path,
     executable: &Path,
 ) -> Result<(), String> {
+    let command = claude_bridge_command(executable)?;
     let mut settings = if settings_path.exists() {
         read_json(settings_path)?
     } else {
@@ -1294,10 +1359,15 @@ fn install_claude_bridge_at(
         .and_then(Value::as_str)
         .is_some_and(|command| command.contains(CLAUDE_BRIDGE_FLAG))
     {
-        return bridge_config_path
-            .is_file()
-            .then_some(())
-            .ok_or_else(|| "claude-bridge-config-missing".to_string());
+        // Reconnecting after moving a macOS .app must update its absolute path while
+        // preserving the original user status line stored in the first backup.
+        let _: ClaudeBridgeConfig = serde_json::from_value(read_json(bridge_config_path)
+            .map_err(|_| "claude-bridge-config-missing".to_string())?)
+            .map_err(|_| "claude-bridge-config-invalid".to_string())?;
+        settings_object.get_mut("statusLine").and_then(Value::as_object_mut)
+            .ok_or_else(|| "claude-statusline-invalid".to_string())?
+            .insert("command".to_string(), Value::String(command));
+        return write_json(settings_path, &settings);
     }
     if previous
         .as_ref()
@@ -1319,10 +1389,6 @@ fn install_claude_bridge_at(
         &serde_json::to_value(bridge_config).map_err(|_| "bridge-config-invalid".to_string())?,
     )?;
 
-    let command = format!(
-        "\"{}\" {CLAUDE_BRIDGE_FLAG}",
-        executable.to_string_lossy().replace('"', "")
-    );
     let mut status_line = previous
         .and_then(|value| value.as_object().cloned())
         .unwrap_or_default();
@@ -1565,6 +1631,85 @@ mod tests {
         let path = env::temp_dir().join(format!("spectra-{name}-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&path).unwrap();
         path
+    }
+
+    #[test]
+    fn mac_finder_search_adds_native_and_homebrew_paths_without_shell_startup() {
+        let home = temp_dir("mac-home");
+        let explicit = home.join("explicit/bin");
+        let native = home.join(".local/bin");
+        let directories = mac_command_directories(vec![explicit.clone(), native.clone(), PathBuf::from("relative")], Some(&home));
+        assert_eq!(&directories[..2], &[explicit, native.clone()]);
+        assert_eq!(directories.iter().filter(|path| **path == native).count(), 1);
+        assert!(!directories.contains(&PathBuf::from("relative")));
+        for path in ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"] {
+            assert!(directories.contains(&PathBuf::from(path)));
+        }
+        assert!(mac_command_directories(Vec::new(), None).contains(&PathBuf::from("/usr/bin")));
+        fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn mac_claude_statusline_freshness_uses_capture_time_and_reset_boundary() {
+        let mut cache = ClaudeUsageCache {
+            captured_at: 1_000,
+            five_hour: Some(ClaudeRateWindow { used_percentage: 20.0, resets_at: Some(2_000) }),
+            seven_day: None,
+        };
+        assert!(!claude_bridge_cache_is_stale(&cache, true, 1_300));
+        assert!(claude_bridge_cache_is_stale(&cache, true, 1_301));
+        assert!(claude_bridge_cache_is_stale(&cache, false, 1_100));
+        assert!(claude_bridge_cache_is_stale(&cache, true, 999));
+        cache.captured_at = 1_950;
+        assert!(claude_bridge_cache_is_stale(&cache, true, 2_000));
+        assert!(claude_cache_is_stale(&cache, false, 1_951), "failed direct lookups keep their original stale semantics");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_cli_lookup_skips_non_executables_and_follows_native_symlinks() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+        let root = temp_dir("unix-command-resolution");
+        let first = root.join("first");
+        let second = root.join("second");
+        fs::create_dir_all(&first).unwrap();
+        fs::create_dir_all(&second).unwrap();
+        fs::write(first.join("claude"), b"not executable").unwrap();
+        fs::set_permissions(first.join("claude"), fs::Permissions::from_mode(0o644)).unwrap();
+        let binary = root.join("native-cli");
+        fs::write(&binary, b"#!/bin/sh\nexit 0\n").unwrap();
+        fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).unwrap();
+        symlink(&binary, second.join("claude")).unwrap();
+        let resolved = resolve_unix_command("claude", &[first, second.clone()]).unwrap();
+        assert_eq!(resolved.path, second.join("claude"));
+        assert!(resolved.command(&[]).status().unwrap().success());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn mac_cli_child_receives_the_same_finder_fallback_search_path() {
+        let spec = CommandSpec { path: PathBuf::from("/opt/homebrew/bin/codex"), kind: CommandKind::Direct };
+        let command = spec.command(&["app-server"]);
+        let child_path = command.get_envs().find(|(name, _)| *name == "PATH").and_then(|(_, value)| value).unwrap();
+        let paths: Vec<_> = env::split_paths(child_path).collect();
+        assert!(paths.contains(&PathBuf::from("/opt/homebrew/bin")));
+        assert!(paths.contains(&PathBuf::from("/usr/local/bin")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_claude_bridge_preserves_unicode_spaces_and_shell_metacharacters() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = temp_dir("한글 user's $(printf BAD) `printf BAD`");
+        let executable = root.join("spectra-native");
+        fs::write(&executable, b"#!/bin/sh\nprintf '%s\\n' \"$1\"\ncat\n").unwrap();
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o755)).unwrap();
+        let mut shell = Command::new("/bin/sh");
+        shell.args(["-c", &claude_bridge_command(&executable).unwrap()]);
+        let output = run_statusline_command(&mut shell, "한글 입력".as_bytes()).unwrap();
+        assert_eq!(output, format!("{CLAUDE_BRIDGE_FLAG}\n한글 입력"));
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -1891,6 +2036,24 @@ mod tests {
     }
 
     #[test]
+    fn reconnecting_claude_after_app_move_rebinds_without_replacing_backup() {
+        let root = temp_dir("bridge-rebind");
+        let settings = root.join("settings.json");
+        let bridge = root.join("bridge.json");
+        let original = json!({"statusLine":{"type":"command","command":"original","padding":2}});
+        write_json(&settings, &original).unwrap();
+        install_claude_bridge_at(&settings, &bridge, &root.join("Downloads/SPECTRA.app/Contents/MacOS/spectra-native")).unwrap();
+        let original_backup = read_json(&bridge).unwrap();
+        let installed = root.join("Applications/SPECTRA.app/Contents/MacOS/spectra-native");
+        install_claude_bridge_at(&settings, &bridge, &installed).unwrap();
+        assert_eq!(read_json(&bridge).unwrap(), original_backup);
+        assert_eq!(read_json(&settings).unwrap()["statusLine"]["command"], claude_bridge_command(&installed).unwrap());
+        remove_claude_bridge_at(&settings, &bridge).unwrap();
+        assert_eq!(read_json(&settings).unwrap(), original);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn bridge_remove_does_not_overwrite_a_newer_user_statusline() {
         let root = temp_dir("bridge-user-change");
         let settings = root.join("settings.json");
@@ -1953,7 +2116,6 @@ mod tests {
         assert_eq!(args, [OsStr::new("app-server"), OsStr::new("--stdio")]);
     }
 
-    #[cfg(target_os = "windows")]
     #[test]
     fn command_io_fixture() {
         let Ok(mode) = env::var("SPECTRA_TEST_IO_MODE") else { return };
@@ -1976,7 +2138,6 @@ mod tests {
         std::process::exit(0);
     }
 
-    #[cfg(target_os = "windows")]
     fn io_fixture_command(mode: &str) -> Command {
         let mut command = Command::new(env::current_exe().unwrap());
         command.args(["--exact", "provider_usage::tests::command_io_fixture", "--nocapture"]);
@@ -1985,7 +2146,6 @@ mod tests {
         command
     }
 
-    #[cfg(target_os = "windows")]
     #[test]
     fn output_with_timeout_bounds_inherited_stdout() {
         let mut child = io_fixture_command("inherit-stdout")
@@ -1998,7 +2158,6 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(2));
     }
 
-    #[cfg(target_os = "windows")]
     #[test]
     fn previous_statusline_times_out_when_stdin_is_not_consumed() {
         let started = Instant::now();
@@ -2010,7 +2169,6 @@ mod tests {
         assert!(started.elapsed() < Duration::from_millis(3500), "stdin exceeded the two-second deadline: {:?}", started.elapsed());
     }
 
-    #[cfg(target_os = "windows")]
     #[test]
     fn previous_statusline_sends_input_while_draining_stdout() {
         let output = run_statusline_command(
