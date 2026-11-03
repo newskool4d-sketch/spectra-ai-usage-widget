@@ -7,7 +7,6 @@ const NO_VALUE: &str = "—";
 /// 이전 값이 없을 때 조회 자체가 실패한 상태(`connection_state == "error"`)의 표기.
 /// 창의 claudeFreshness·connectionLabel·next-action 칩과 같은 문구를 쓴다.
 const LOOKUP_DELAYED: &str = "사용량 확인 지연";
-const ANTIGRAVITY_DISPLAY_GROUP: &str = "gemini";
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum StripTheme { Light, Dark }
@@ -78,7 +77,7 @@ pub fn provider_remaining(snapshot: &ProviderUsageSnapshot, now: u64) -> Option<
     snapshot
         .windows
         .iter()
-        .filter(|w| snapshot.provider_id != "antigravity" || w.model_group_id.as_deref() == Some(ANTIGRAVITY_DISPLAY_GROUP))
+        .filter(|w| snapshot.provider_id != "antigravity" || crate::antigravity::is_summary_window(w))
         .filter_map(|w| window_percent(snapshot, w, now))
         .min()
 }

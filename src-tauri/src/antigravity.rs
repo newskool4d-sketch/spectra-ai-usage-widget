@@ -175,6 +175,11 @@ fn expand_command_home(command: &str, home: &str) -> Option<String> {
     Some(format!("{executable}{}", &command[tail..]))
 }
 
+/// 작업표시줄·트레이의 AG 요약 값은 Gemini 모델군만 본다. 다른 모델군은 상세 표시에만 남긴다.
+pub(crate) fn is_summary_window(window: &ProviderQuotaWindow) -> bool {
+    window.model_group_id.as_deref() == Some("gemini")
+}
+
 fn group_label(group: &str) -> Option<&'static str> {
     match group {
         "gemini" => Some("Gemini"),
