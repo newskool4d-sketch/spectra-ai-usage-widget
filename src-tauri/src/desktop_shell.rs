@@ -290,7 +290,7 @@ pub(crate) fn update_taskbar_strip<R: Runtime>(app: &AppHandle<R>) {
 
 /// Periodic provider refresh while the strip is visible: two-minute cadence, the Claude reset
 /// boundary, an immediate retry when Claude Code rewrites its credentials, exponential backoff
-/// on failures and a hold while the OAuth token is expired (spec 2026-09-18 §2-3).
+/// on failures, including an OAuth token that stays expired (spec 2026-09-18 §2-3).
 #[cfg(target_os = "windows")]
 pub(crate) fn ensure_usage_refresh_loop(app: &AppHandle) {
     let state = app.state::<crate::AppState>();

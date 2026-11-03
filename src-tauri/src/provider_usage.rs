@@ -577,9 +577,9 @@ fn claude_bridge_config_path() -> Option<PathBuf> {
 const CLAUDE_CREDENTIALS_ENV: &str = "SPECTRA_CLAUDE_CREDENTIALS";
 const CLAUDE_USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 const CLAUDE_USAGE_TIMEOUT: Duration = Duration::from_secs(10);
-/// Live lookup failure code for an expired Claude Code access token. The scheduler holds
-/// Claude until the credentials file changes, and both freshness labels turn it into
-/// "로그인 갱신 필요".
+/// Live lookup failure code for an expired Claude Code access token. The scheduler retries on
+/// the failure backoff or as soon as the credentials file changes, and both freshness labels
+/// turn it into "로그인 갱신 필요".
 pub const CLAUDE_TOKEN_EXPIRED: &str = "claude-oauth-token-expired";
 
 fn claude_credentials_path() -> Option<PathBuf> {
@@ -604,7 +604,7 @@ pub(crate) fn modified_stamp(path: &Path) -> Option<u64> {
 }
 
 /// Claude Code rewrites its credentials file whenever a session refreshes the OAuth token;
-/// the refresh loop watches this stamp to retry right away instead of waiting out a hold.
+/// the refresh loop watches this stamp to retry right away instead of waiting out a backoff.
 pub(crate) fn claude_credentials_modified() -> Option<u64> {
     claude_credentials_path().and_then(|path| modified_stamp(&path))
 }
@@ -969,7 +969,7 @@ fn command_output(spec: &CommandSpec, args: &[&str]) -> Result<Output, String> {
 fn claude_live_failure_hint(error: Option<&str>) -> Option<&'static str> {
     match error {
         Some(CLAUDE_TOKEN_EXPIRED) => {
-            Some("Claude Code 로그인 갱신이 필요합니다. 토큰이 만료되어 Claude Code를 한 번 실행해 주세요.")
+            Some("Claude Code 로그인 갱신이 필요합니다. 토큰이 만료되어 자동 갱신을 다시 시도합니다. 계속되면 Claude Code를 한 번 실행해 주세요.")
         }
         Some("claude-usage-unauthorized") => {
             Some("Claude 사용량 조회를 위한 로그인이 필요합니다. 조회가 거부되어 Claude Code에서 다시 로그인해 주세요.")
@@ -1050,8 +1050,8 @@ fn claude_snapshot() -> ProviderUsageSnapshot {
             // When none has run, the file stays expired for hours and the values freeze, so
             // ask the CLI once: `claude auth status` rewrites the credentials with a fresh
             // token (about 1 s, verified 2026-10-29) and the live lookup continues on this
-            // same pass instead of holding for the token-expired window. A CLI that does not
-            // answer keeps the hold and the cache fallback below.
+            // same pass. A CLI that does not answer retries on the scheduler's failure backoff
+            // and keeps the cache fallback below.
             if oauth.token.as_ref().err().map(String::as_str) == Some(CLAUDE_TOKEN_EXPIRED) {
                 match probe_claude_auth(&spec) {
                     Ok(None) => return claude_signed_out_snapshot(bridge_installed),

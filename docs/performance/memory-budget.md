@@ -211,7 +211,7 @@ Task 5의 셸 이벤트·WinEvent·자동숨김·F11·Explorer 재시작 검증�
 
 ## 2026-09-18 스트립 주기 갱신 (A안)
 
-변경: 작업표시줄 표시가 켜진 동안 네이티브 루프(`spectra-usage-refresh`, 15초 tick)가 Claude → Codex를 120초마다 순차 재조회한다. `.credentials.json`이 다시 쓰이면 다음 tick에 Claude를 즉시 재조회하고, 실패는 120·240·480·960·1800초로 백오프하며, 토큰 만료(`claude-oauth-token-expired`)는 자격 증명 변경 또는 30분까지 조회를 보류한다. 갱신된 스냅샷은 `provider-usage-updated` 이벤트로 WebView에도 전달된다. 규칙과 근거는 [`docs/superpowers/specs/2026-09-18-strip-periodic-refresh.md`](../superpowers/specs/2026-09-18-strip-periodic-refresh.md)에 있다.
+변경: 작업표시줄 표시가 켜진 동안 네이티브 루프(`spectra-usage-refresh`, 15초 tick)가 Claude → Codex를 120초마다 순차 재조회한다. `.credentials.json`이 다시 쓰이면 다음 tick에 Claude를 즉시 재조회하고, 실패는 120·240·480·960·1800초로 백오프하며, 토큰 만료(`claude-oauth-token-expired`)도 v0.3.2부터 같은 백오프로 재시도하고 자격 증명이 바뀌면 즉시 재조회한다. 갱신된 스냅샷은 `provider-usage-updated` 이벤트로 WebView에도 전달된다. 규칙과 근거는 [`docs/superpowers/specs/2026-09-18-strip-periodic-refresh.md`](../superpowers/specs/2026-09-18-strip-periodic-refresh.md)에 있다.
 
 비용(2026-09-18 실측, 설치본 0.2.3): Claude 조회 1.1초(`claude auth status` + HTTPS 1회), Codex 조회 1.3초(`codex app-server` + RPC 2회). 두 프로세스 모두 조회 직후 종료되므로 상주 메모리 증가는 없고, 2분당 약 2.4초의 단기 실행이 더해진다. 위 2026-09-12 standby-strip 30분 실측(평균 33.6 MB)은 주기 갱신 이전 값이며, 같은 시나리오 재측정은 후속 항목이다.
 

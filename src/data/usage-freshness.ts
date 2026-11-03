@@ -18,9 +18,9 @@ export function antigravityFreshness(quota: PlanQuota, now: number): string {
   if (quota.confidence !== "verified" || !quota.windows.length) return "CLI 첫 실행 대기";
   const captured = quota.lastSyncedAtMs;
   if (quota.connectionState !== "connected" || captured == null || !Number.isFinite(captured)
-    || captured > now || now - captured >= 300_000
+    || captured > now || now - captured >= 86_400_000
     || quota.windows.some(window => window.resetsAt != null && window.resetsAt <= now)) return "CLI 실행 후 갱신 필요";
-  return "CLI 수집값 · 최신";
+  return "CLI 수집값";
 }
 
 // Keep the labels and expiry boundary aligned with taskbar_strip::claude_status.

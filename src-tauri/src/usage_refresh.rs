@@ -14,8 +14,6 @@ pub const INTERVAL_SECS: u64 = 120;
 pub const RESET_RETRY_SECS: u64 = 60;
 /// Upper bound for the exponential failure backoff.
 pub const BACKOFF_MAX_SECS: u64 = 1_800;
-/// Safety cap on the expired-token hold when no credential change is ever observed.
-pub const TOKEN_HOLD_SECS: u64 = 1_800;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Provider {
@@ -156,11 +154,9 @@ impl Scheduler {
         slot.last_attempt = now;
         match outcome {
             Outcome::Ok => slot.clear(),
-            Outcome::TokenExpired => {
-                slot.failures = 0;
-                slot.next_allowed = now + TOKEN_HOLD_SECS;
-            }
-            Outcome::Failed => {
+            // A token still expired after the CLI probe usually means the network was not up
+            // yet (waking from sleep), so it retries on the same backoff as any other failure.
+            Outcome::TokenExpired | Outcome::Failed => {
                 slot.failures = slot.failures.saturating_add(1);
                 slot.next_allowed = now + backoff_secs(slot.failures);
             }
@@ -222,22 +218,27 @@ mod tests {
     }
 
     #[test]
-    fn expired_token_holds_claude_until_the_safety_cap() {
+    fn expired_token_retries_on_the_failure_backoff_and_recovers_after_waking() {
         let mut scheduler = Scheduler::new(1_000);
         scheduler.plan(input(1_000));
         scheduler.record(Provider::Claude, 1_000, Outcome::TokenExpired);
-        let mut tick = input(1_000 + INTERVAL_SECS);
+        let mut tick = input(1_000 + INTERVAL_SECS - 1);
         tick.claude_reset_due = true;
-        assert_eq!(scheduler.plan(tick), vec![Provider::Codex, Provider::Antigravity], "a held Claude is skipped even at a reset boundary");
-        scheduler.record(Provider::Codex, tick.now, Outcome::Ok);
-        tick.now = 1_000 + TOKEN_HOLD_SECS - 1;
+        assert!(!scheduler.plan(tick).contains(&Provider::Claude), "skipped until the backoff ends, even at a reset boundary");
+        tick.now = 1_000 + INTERVAL_SECS;
+        assert!(scheduler.plan(tick).contains(&Provider::Claude), "the first retry comes after two minutes, not thirty");
+        scheduler.record(Provider::Claude, tick.now, Outcome::TokenExpired);
+        tick.now += 2 * INTERVAL_SECS - 1;
         assert!(!scheduler.plan(tick).contains(&Provider::Claude));
-        tick.now = 1_000 + TOKEN_HOLD_SECS;
-        assert!(scheduler.plan(tick).contains(&Provider::Claude), "the hold expires after 30 minutes as a safety net");
+        tick.now += 1;
+        assert!(scheduler.plan(tick).contains(&Provider::Claude));
+        scheduler.record(Provider::Claude, tick.now, Outcome::Ok);
+        tick.now += INTERVAL_SECS;
+        assert!(scheduler.plan(tick).contains(&Provider::Claude), "a success returns to the regular interval");
     }
 
     #[test]
-    fn a_credentials_rewrite_refreshes_claude_immediately_and_clears_the_hold() {
+    fn a_credentials_rewrite_refreshes_claude_immediately_and_clears_the_backoff() {
         let mut scheduler = Scheduler::new(1_000);
         scheduler.plan(input(1_000));
         scheduler.record(Provider::Claude, 1_000, Outcome::TokenExpired);
