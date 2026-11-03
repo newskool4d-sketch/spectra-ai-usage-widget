@@ -42,7 +42,7 @@ Claude 원인은 위 로그 1건과 코드 경로로 판단한 것이며, 절전
 | 네이티브 일반 검사 | PASS | `cargo test --lib --locked`: 128 passed, 0 failed |
 | Windows 전용 검사 | PASS | `--ignored --test-threads=1`: 9 passed, 0 failed |
 | 유지 모듈 지원 목록 | PASS(소스) | 0.3.2 추가, PowerShell Parser 오류 0. 설치된 유지 모듈과 예약작업은 변경하지 않음 |
-| 실제 작업표시줄 | PASS(로컬 release 빌드) | 실제 캐시로 실행해 화면 캡처 확인. AG는 수집 46분 뒤에도 회색이 아니고 Gemini 값으로 표시됨. 같은 캐시에서 수정 전 표시값은 Claude·GPT 주간 값이었음 |
+| 실제 작업표시줄 | PASS(로컬 release 빌드) | 실제 캐시로 실행해 화면 캡처 확인. AG는 수집 46분 뒤에도 회색이 아니고 Gemini 값으로 표시됨. 수정 전 표시값은 화면으로 확인하지 못했고(첫 캡처 실패), 같은 캐시로 계산하면 Claude·GPT 주간 값임 |
 | 자동 갱신 | PASS(로컬 release 빌드) | `standby-timing.log`: `usage_refresh` Claude·Codex·Antigravity `ok` |
 
 첫 네이티브 일반 검사에서 시간 제한 테스트 2건(`output_with_timeout_kills_slow_child`, `previous_statusline_times_out_when_stdin_is_not_consumed`)이 실패했습니다. 다른 빌드 작업과 겹친 실행이었고, 해당 2건 단독 3회와 전체 재실행 1회는 모두 통과했습니다. 이번 변경이 건드리지 않은 코드이며, 원인을 부하로 확정하지는 않았습니다.
