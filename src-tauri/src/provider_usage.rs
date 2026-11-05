@@ -150,12 +150,28 @@ fn mac_command_directories(mut directories: Vec<PathBuf>, home: Option<&Path>) -
     let mut fallback = Vec::new();
     if let Some(home) = home.filter(|home| home.is_absolute()) {
         fallback.extend([home.join(".local/bin"), home.join(".npm-global/bin"), home.join(".volta/bin")]);
+        fallback.extend(nvm_bin_directories(home));
     }
     fallback.extend(["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"].map(PathBuf::from));
     for path in fallback {
         if !directories.contains(&path) { directories.push(path); }
     }
     directories
+}
+
+/// nvm is only activated by shell startup files, which Finder never runs, so its CLIs and
+/// their Node runtime have to be listed explicitly. Newest version first, as a shell would pick.
+#[cfg(any(target_os = "macos", test))]
+fn nvm_bin_directories(home: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = fs::read_dir(home.join(".nvm/versions/node")) else { return Vec::new(); };
+    let mut versions: Vec<(Vec<u64>, PathBuf)> = entries.flatten().filter_map(|entry| {
+        let name = entry.file_name();
+        let version = name.to_str()?.strip_prefix('v')?.split('.')
+            .map(|part| part.parse().ok()).collect::<Option<Vec<u64>>>()?;
+        Some((version, entry.path().join("bin")))
+    }).collect();
+    versions.sort_by(|left, right| right.0.cmp(&left.0));
+    versions.into_iter().map(|(_, bin)| bin).collect()
 }
 
 #[cfg(unix)]
@@ -1646,6 +1662,28 @@ mod tests {
             assert!(directories.contains(&PathBuf::from(path)));
         }
         assert!(mac_command_directories(Vec::new(), None).contains(&PathBuf::from("/usr/bin")));
+        fs::remove_dir_all(home).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn mac_finder_search_finds_nvm_cli_with_newest_version_first() {
+        use std::os::unix::fs::PermissionsExt;
+        let home = temp_dir("mac-nvm");
+        let nvm = home.join(".nvm/versions/node");
+        for version in ["v9.0.0", "v24.2.0", "v24.14.1", "not-a-version"] {
+            fs::create_dir_all(nvm.join(version).join("bin")).unwrap();
+        }
+        let explicit = home.join("explicit/bin");
+        let directories = mac_command_directories(vec![explicit.clone()], Some(&home));
+        assert_eq!(directories[0], explicit, "an explicit PATH keeps precedence");
+        let nvm_order: Vec<_> = directories.iter().filter(|path| path.starts_with(&nvm)).cloned().collect();
+        assert_eq!(nvm_order, ["v24.14.1", "v24.2.0", "v9.0.0"].map(|version| nvm.join(version).join("bin")));
+
+        let codex = nvm.join("v24.2.0/bin/codex");
+        fs::write(&codex, "#!/bin/sh\n").unwrap();
+        fs::set_permissions(&codex, fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(resolve_unix_command("codex", &directories).unwrap().path, codex);
         fs::remove_dir_all(home).unwrap();
     }
 
