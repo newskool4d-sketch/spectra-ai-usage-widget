@@ -38,13 +38,20 @@ fn stale(snapshot: &ProviderUsageSnapshot, now: u64) -> bool {
         || !snapshot.last_synced_at.is_some_and(|captured| captured > 0 && captured <= now && now - captured < 300)
 }
 
+/// Antigravity's title follows the Gemini group alone. Other groups stay in the tooltip.
+fn counts_toward_title(snapshot: &ProviderUsageSnapshot, window: &ProviderQuotaWindow) -> bool {
+    snapshot.provider_id != "antigravity" || window.model_group_id.as_deref() == Some("gemini")
+}
+
 pub fn build_model(snapshots: &[ProviderUsageSnapshot], now: u64) -> MenuBarModel {
     let mut parts = Vec::new();
-    let mut details = vec!["SPECTRA · 서비스별 최소 잔여율".to_string()];
+    let mut details = vec!["SPECTRA · 서비스별 최소 잔여율 (Antigravity는 Gemini 기준)".to_string()];
     for (id, short, name) in PROVIDERS {
         let snapshot = snapshots.iter().find(|snapshot| snapshot.provider_id == id);
         let usable = snapshot.filter(|snapshot| verified(snapshot));
-        let remaining = usable.and_then(|snapshot| snapshot.windows.iter().filter_map(|window| percent(window, now)).min());
+        let remaining = usable.and_then(|snapshot| snapshot.windows.iter()
+            .filter(|window| counts_toward_title(snapshot, window))
+            .filter_map(|window| percent(window, now)).min());
         let is_stale = usable.is_some_and(|snapshot| stale(snapshot, now));
         let value = remaining.map(|value| format!("{value}%{}", if is_stale { "·" } else { "" })).unwrap_or_else(|| "—".into());
         parts.push(format!("{short}{value}"));
@@ -134,11 +141,34 @@ mod tests {
         }
     }
 
+    fn antigravity(groups: &[&str], values: &[f64]) -> ProviderUsageSnapshot {
+        let mut result = snapshot("antigravity", values);
+        for (window, group) in result.windows.iter_mut().zip(groups) {
+            window.model_group_id = Some((*group).into());
+        }
+        result
+    }
+
     #[test]
     fn model_uses_verified_minimum_in_stable_provider_order() {
-        let model = build_model(&[snapshot("antigravity", &[100.0, 83.0]), snapshot("claude", &[96.0]), snapshot("codex", &[70.0, 47.0])], 1_000);
+        let model = build_model(&[antigravity(&["gemini", "gemini"], &[100.0, 83.0]), snapshot("claude", &[96.0]), snapshot("codex", &[70.0, 47.0])], 1_000);
         assert_eq!(model.title, "CX47%  CL96%  AG83%");
         assert!(model.tooltip.contains("서비스별 최소 잔여율"));
+    }
+
+    #[test]
+    fn antigravity_title_follows_gemini_and_tooltip_keeps_other_groups() {
+        let model = build_model(&[antigravity(&["claude-gpt", "gemini", "gemini-4-argon", "gemini"], &[52.0, 100.0, 76.0, 90.0])], 1_000);
+        assert_eq!(model.title, "CX—  CL—  AG90%");
+        assert!(model.tooltip.contains("Antigravity는 Gemini 기준"));
+        assert!(model.tooltip.contains("claude-gpt / window 0: 52%"));
+        assert!(model.tooltip.contains("gemini-4-argon / window 2: 76%"));
+    }
+
+    #[test]
+    fn antigravity_title_never_substitutes_another_group_for_gemini() {
+        let model = build_model(&[antigravity(&["claude-gpt", "gemini-4-argon"], &[52.0, 76.0])], 1_000);
+        assert_eq!(model.title, "CX—  CL—  AG—");
     }
 
     #[test]
