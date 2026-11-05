@@ -297,7 +297,7 @@ fn action(success: bool, installed: bool) -> ProviderActionResult {
         provider_id: "antigravity".into(),
         status: if !success { "not-available" } else if installed { "bridge-installed" } else { "bridge-removed" }.into(),
         message: if !success { "Antigravity CLI의 기존 설정을 보존하며 사용량 연결을 변경하지 못했습니다." }
-            else if installed { "Antigravity CLI 사용량 연결을 설정했습니다. agy를 실행하고 /usage를 열면 수치가 갱신됩니다. 기존 상태선 출력은 보존됩니다." }
+            else if installed { "Antigravity CLI 사용량 연결을 설정했습니다. agy를 새로 실행하면 수치가 갱신됩니다. 기존 상태선 출력은 보존됩니다." }
             else { "Antigravity 사용량 연결을 해제하고 이전 상태선 설정을 복원했습니다." }.into(),
     }
 }
@@ -323,7 +323,7 @@ fn snapshot_at(cache: Option<Cache>, runtime: bool, bridge: bool, now: u64) -> P
         last_synced_at: None, bridge_installed: bridge, windows: Vec::new(), live_failure: None,
         message: if !runtime { "Antigravity CLI(agy)를 찾지 못했습니다." }
             else if !bridge { "사용량 연결을 설정한 뒤 Antigravity CLI(agy)를 실행해 주세요." }
-            else { "Antigravity CLI에서 /usage를 열면 모델군별 한도가 전달됩니다. 아직 수신한 데이터가 없습니다." }.into(),
+            else { "Antigravity CLI(agy)를 새로 실행하면 모델군별 한도가 전달됩니다. 아직 수신한 데이터가 없습니다." }.into(),
     };
     if !runtime || !bridge { return result; }
     let Some(cache) = cache.filter(|cache| cache.captured_at <= now && cache.captured_at > 0) else { return result; };
@@ -345,7 +345,7 @@ fn snapshot_at(cache: Option<Cache>, runtime: bool, bridge: bool, now: u64) -> P
     result.plan_type = cache.plan;
     result.source = Some("antigravity-statusline".into());
     result.last_synced_at = Some(cache.captured_at);
-    result.message = if stale { "Antigravity CLI의 마지막 수신값입니다. agy에서 /usage를 열어 갱신해 주세요." }
+    result.message = if stale { "Antigravity CLI의 마지막 수신값입니다. agy를 실행하면 갱신됩니다." }
         else { "Antigravity CLI 공식 상태선에서 수신했습니다. GUI 앱만 사용하면 자동 갱신되지 않습니다." }.into();
     result
 }

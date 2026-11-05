@@ -242,7 +242,7 @@ fn build_model_at(snapshots: &[ProviderUsageSnapshot], theme: StripTheme, now: u
         if id == "antigravity" {
             tooltip_lines.push(format!("Antigravity · 최소 잔여율 · {}", antigravity_status(snapshot, now)));
             tooltip_lines.push(format!("마지막 CLI 수집: {}", last_sync_label(snapshot.and_then(|s| s.last_synced_at), now)));
-            tooltip_lines.push("Antigravity CLI 실행 시 갱신 · agy /usage · 직접 Claude 구독과 별도".to_string());
+            tooltip_lines.push("Antigravity CLI 실행 시 갱신 · 직접 Claude 구독과 별도".to_string());
         }
         // 조회 실패를 넘기며 이어받은 Codex 값에도 Claude와 같은 최신성·수집 시각을 붙인다.
         if let Some(snapshot) = snapshot.filter(|s| id == "codex" && usable(s) && s.connection_state == "stale") {
