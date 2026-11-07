@@ -45,8 +45,22 @@ ZIP은 커밋된 소스(`git show <커밋>:scripts/taskbar-keeper/…`)에서 �
 - `docs/releases/v0.2.9.md`: "v0.2.9 설치 파일에는 적용되지 않습니다" 문장을 보정 완료·v0.3.4 ZIP 배포 안내로 바꾸고, 기존 설치 PC는 작업·폴더 삭제 후 재설치해야 보정이 적용된다는 안내를 유지했습니다.
 - `docs/releases/v0.3.4.md`: 선택 설치형 유지 모듈 절을 추가했습니다. 공개 릴리스 본문 반영은 아래 미수행 항목입니다.
 
+## 공개 배포 증거 (2026-11-07 사용자 승인 후)
+
+사용자 승인 범위: 브랜치 push, merge commit 병합, v0.3.4 자산 2개 업로드, v0.3.4·v0.2.9 공개 본문 갱신. 아래 순서대로 수행했습니다.
+
+| 단계 | 상태 | 증거 |
+|---|---|---|
+| 병합 | PASS | [PR #6](https://github.com/newskool4d-sketch/spectra-ai-usage-widget/pull/6) merge commit `9d30747ac5cbbffa88b3cbd3e87c4ea92d0d60cc`, `2026-11-07T12:29:52Z`. ZIP 소스 커밋 `a0bba1c`가 `origin/main`의 조상임을 확인. 직전에 병합된 PR #5는 메모리 예산 문서·스크립트만 바꿔 이 배포 파일과 겹치지 않음 |
+| 자산 업로드 | PASS | `2026-11-07T12:30:32Z`, `--clobber` 없이 2개 추가. GitHub digest: ZIP `sha256:eea995b7…62803c905`(7,716 B, 로컬 해시와 일치), `.sha256` `sha256:02e55caf…14bd386e`(99 B) |
+| 다운로드 재확인 | PASS | 공개 자산을 새 폴더로 내려받아 `sha256sum -c` OK |
+| 공개 본문 | PASS | v0.3.4·v0.2.9 본문을 `main`의 `docs/releases/v0.3.4.md`·`v0.2.9.md`로 교체. 교체 전 공개 본문이 이전 노트 파일과 같음(끝 빈 줄 차이만)을 확인해 GitHub에만 있던 문구가 없음을 확인. 교체 뒤 본문이 노트 파일과 일치 |
+| 기존 자산 보존 | PASS | 설치 파일·서명·`latest.json`·`SHA256SUMS.txt` digest가 업로드 전과 같음. `releases/latest/download/latest.json` SHA-256 `32e5a7e9…8b088f52` 그대로, `releases/latest` = v0.3.4 |
+| 검증 기록 링크 | PASS | v0.3.4 본문의 `blob/main/docs/release-0.3.4-taskbar-keeper-qa.md`가 `main`에 존재 |
+
+이 공개 기록 커밋은 ZIP의 소스 커밋(`a0bba1c`)과 구분합니다.
+
 ## 미수행·미검증
 
-- 릴리스 자산 업로드, 공개 릴리스 본문 갱신, push는 사용자 승인 전이라 수행하지 않았습니다. 승인 시 순서는 브랜치 push → `main` merge commit 병합(노트의 `blob/main` 검증 기록 링크가 이때부터 유효) → v0.3.4에 ZIP·`.sha256` 2개 업로드 → v0.3.4·v0.2.9 공개 본문을 각 노트 파일로 갱신 → `gh release view`로 재확인입니다.
 - 현재 PC에 설치된 앱·유지 모듈·예약 작업은 교체하거나 다시 시작하지 않았습니다. 따라서 이 ZIP의 실제 설치, 재부팅, 다른 PC의 새 설치는 검증하지 않았습니다. 보정 동작 자체는 2026-10-29 격리 폴더 검증(`docs/release-0.2.8-taskbar-keeper-qa.md`)을 근거로 합니다.
 - v0.3.0~v0.3.3 공개 CI 실행 파일의 ProductVersion은 설치 파일을 풀어 확인하지 않았습니다.
