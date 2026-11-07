@@ -4,9 +4,9 @@ import type { UsageHistoryPoint } from "../integrations/tauri-native-bridge";
 export type ModelGroup = Readonly<{ id: string; label: string; windows: readonly QuotaWindow[] }>;
 export const groupId = (window: Pick<QuotaWindow, "modelGroupId">) => window.modelGroupId || "default";
 
-// Antigravity 모델군 표시 순서. 목록에 없는 모델군은 수집 순서대로 뒤에 둔다.
+// Antigravity 모델군 표시 순서. 목록에 없는 모델군은 indexOf의 -1이 `>>> 0`으로 최댓값이 되어 수집 순서대로 뒤에 온다.
 const groupOrder = ["gemini", "gemini-4-argon", "claude-gpt"];
-const groupRank = (id: string) => { const rank = groupOrder.indexOf(id); return rank < 0 ? groupOrder.length : rank; };
+const groupRank = (id: string) => groupOrder.indexOf(id) >>> 0;
 
 export function modelGroups(quota: PlanQuota): ModelGroup[] {
   const groups = new Map<string, ModelGroup>();
