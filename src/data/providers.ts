@@ -100,9 +100,9 @@ export const planQuotas: Readonly<Record<ProviderId, PlanQuota>> = Object.freeze
     windows: Object.freeze([
       exampleWindow("rolling", 100, "3시간 41분 후", "gemini", "Gemini"),
       exampleWindow("weekly", 100, "5일 10시간 후", "gemini", "Gemini"),
+      exampleWindow("weekly", 83, "6일 4시간 후", "gemini-4-argon", "Gemini 4 Argon"),
       exampleWindow("rolling", 100, "초기화 시각 미제공", "claude-gpt", "Claude · GPT"),
-      exampleWindow("weekly", 100, "초기화 시각 미제공", "claude-gpt", "Claude · GPT"),
-      exampleWindow("weekly", 83, "6일 4시간 후", "gemini-4-argon", "Gemini 4 Argon")
+      exampleWindow("weekly", 100, "초기화 시각 미제공", "claude-gpt", "Claude · GPT")
     ] as const)
   }
 });
