@@ -32,15 +32,19 @@ fn percent(window: &ProviderQuotaWindow, now: u64) -> Option<u8> {
         .then(|| window.remaining_percent.round() as u8)
 }
 
+/// Antigravity values arrive only while its CLI runs, so they follow the strip's day-long
+/// freshness window (v0.3.2) instead of the five-minute live-lookup cadence of Codex and Claude.
 fn stale(snapshot: &ProviderUsageSnapshot, now: u64) -> bool {
+    let fresh_secs = if snapshot.provider_id == "antigravity" { crate::antigravity::FRESH_SECS } else { 300 };
     snapshot.connection_state != "connected"
         || snapshot.live_failure.is_some()
-        || !snapshot.last_synced_at.is_some_and(|captured| captured > 0 && captured <= now && now - captured < 300)
+        || !snapshot.last_synced_at.is_some_and(|captured| captured > 0 && captured <= now && now - captured < fresh_secs)
 }
 
-/// Antigravity's title follows the Gemini group alone. Other groups stay in the tooltip.
+/// Antigravity's title follows the Gemini group alone, the same rule as the Windows strip and
+/// tray badge. Other groups stay in the tooltip.
 fn counts_toward_title(snapshot: &ProviderUsageSnapshot, window: &ProviderQuotaWindow) -> bool {
-    snapshot.provider_id != "antigravity" || window.model_group_id.as_deref() == Some("gemini")
+    snapshot.provider_id != "antigravity" || crate::antigravity::is_summary_window(window)
 }
 
 pub fn build_model(snapshots: &[ProviderUsageSnapshot], now: u64) -> MenuBarModel {
@@ -178,6 +182,17 @@ mod tests {
         let mut claude = snapshot("claude", &[30.0]);
         claude.source = Some("unverified".into());
         assert_eq!(build_model(&[codex, claude], 1_000).title, "CX—  CL—  AG—");
+    }
+
+    #[test]
+    fn antigravity_cache_stays_current_for_a_day_like_the_strip() {
+        let fresh_secs = crate::antigravity::FRESH_SECS;
+        let mut ag = antigravity(&["gemini"], &[83.0]);
+        ag.windows[0].resets_at = None;
+        ag.last_synced_at = Some(1_000);
+        assert_eq!(build_model(&[ag.clone()], 1_000 + 300).title, "CX—  CL—  AG83%");
+        assert_eq!(build_model(&[ag.clone()], 1_000 + fresh_secs - 1).title, "CX—  CL—  AG83%");
+        assert_eq!(build_model(&[ag], 1_000 + fresh_secs).title, "CX—  CL—  AG83%·");
     }
 
     #[test]

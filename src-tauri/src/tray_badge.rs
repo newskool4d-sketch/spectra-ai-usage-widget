@@ -47,7 +47,8 @@ pub fn min_remaining_percent(snapshots: &[ProviderUsageSnapshot], now: u64) -> O
         .filter_map(|snapshot| {
             // A carried value whose window already reset is not shown as a percentage.
             let mut current = snapshot.windows.iter()
-                .filter(|w| !crate::provider_usage::stale_window_reset_passed(snapshot, w, now));
+                .filter(|w| !crate::provider_usage::stale_window_reset_passed(snapshot, w, now))
+                .filter(|w| snapshot.provider_id != "antigravity" || crate::antigravity::is_summary_window(w));
             let window = if snapshot.provider_id == "antigravity" {
                 current.min_by(|a, b| a.remaining_percent.total_cmp(&b.remaining_percent))
             } else {
@@ -181,6 +182,36 @@ mod tests {
         assert_eq!(min_remaining_percent(&[claude.clone()], 1_000), None);
         claude.connection_state = "connected".to_string();
         assert_eq!(min_remaining_percent(&[claude], 1_000), Some(("claude".to_string(), 9)), "fresh values stay");
+    }
+
+    fn antigravity(windows: Vec<(&str, &str, f64)>) -> ProviderUsageSnapshot {
+        let mut result = snapshot("antigravity", "connected", windows.iter().map(|(_, id, remaining)| (*id, *remaining)).collect());
+        for (window, (group, ..)) in result.windows.iter_mut().zip(&windows) {
+            window.model_group_id = Some(group.to_string());
+        }
+        result
+    }
+
+    #[test]
+    fn antigravity_counts_only_the_gemini_group_like_the_strip() {
+        let ag = antigravity(vec![("claude-gpt", "weekly", 31.0), ("gemini-4-argon", "weekly", 20.0),
+            ("gemini", "rolling", 100.0), ("gemini", "weekly", 83.0)]);
+        assert_eq!(min_remaining_percent(&[ag.clone()], 0), Some(("antigravity".to_string(), 83)));
+        let codex = snapshot("codex", "connected", vec![("weekly", 50.0)]);
+        assert_eq!(min_remaining_percent(&[ag, codex.clone()], 0), Some(("codex".to_string(), 50)));
+
+        let no_gemini = antigravity(vec![("claude-gpt", "weekly", 31.0), ("gemini-4-argon", "weekly", 20.0)]);
+        assert_eq!(min_remaining_percent(&[no_gemini.clone()], 0), None, "no other group stands in for Gemini");
+        assert_eq!(min_remaining_percent(&[no_gemini, codex], 0), Some(("codex".to_string(), 50)));
+    }
+
+    #[test]
+    fn antigravity_skips_a_carried_gemini_window_that_already_reset() {
+        let mut ag = antigravity(vec![("gemini", "rolling", 9.0), ("gemini", "weekly", 40.0), ("claude-gpt", "weekly", 5.0)]);
+        ag.connection_state = "stale".to_string();
+        ag.windows[0].resets_at = Some(1_000);
+        assert_eq!(min_remaining_percent(&[ag.clone()], 999), Some(("antigravity".to_string(), 9)));
+        assert_eq!(min_remaining_percent(&[ag], 1_000), Some(("antigravity".to_string(), 40)));
     }
 
     #[test]

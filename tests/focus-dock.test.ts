@@ -12,7 +12,9 @@ const point = (overrides: Partial<UsageHistoryPoint> = {}): UsageHistoryPoint =>
 describe("focus dock models", () => {
   it("keeps model-group quota windows distinct and never fabricates an Argon rolling window", () => {
     const groups = modelGroups(planQuotas.antigravity);
-    assert.equal(groups.length, 3);
+    assert.deepEqual(groups.map(group => group.id), ["gemini", "gemini-4-argon", "claude-gpt"]);
+    const reversed = modelGroups({ ...planQuotas.antigravity, windows: [...planQuotas.antigravity.windows].reverse() });
+    assert.deepEqual(reversed.map(group => group.id), ["gemini", "gemini-4-argon", "claude-gpt"]);
     assert.deepEqual(groups.find(group => group.id === "gemini-4-argon")?.windows.map(window => window.id), ["weekly"]);
     assert.deepEqual(groups.find(group => group.id === "claude-gpt")?.windows.map(window => window.id), ["rolling", "weekly"]);
     assert.equal(modelGroups(planQuotas.claude).length, 1);
@@ -34,10 +36,11 @@ describe("focus dock models", () => {
     assert.deepEqual(Object.keys(metricLabels), ["remaining", "subscription", "requests"]);
     assert.equal(metricLabels.subscription, "구독 모델");
   });
-  it("ages Antigravity CLI data after five minutes or a reset even without a new native snapshot", () => {
+  it("ages Antigravity CLI data after a day or a reset even without a new native snapshot", () => {
     const quota = { ...planQuotas.antigravity, source: "antigravity-statusline" as const, confidence: "verified" as const, connectionState: "connected" as const, bridgeInstalled: true, lastSyncedAtMs: now };
-    assert.equal(antigravityFreshness(quota, now + 299_999), "CLI 수집값 · 최신");
-    assert.equal(antigravityFreshness(quota, now + 300_000), "CLI 실행 후 갱신 필요");
+    assert.equal(antigravityFreshness(quota, now + 300_000), "CLI 수집값");
+    assert.equal(antigravityFreshness(quota, now + 86_399_999), "CLI 수집값");
+    assert.equal(antigravityFreshness(quota, now + 86_400_000), "CLI 실행 후 갱신 필요");
     assert.equal(antigravityFreshness({ ...quota, windows: [{ ...quota.windows[0], resetsAt: now }] }, now), "CLI 실행 후 갱신 필요");
     assert.equal(antigravityFreshness({ ...quota, lastSyncedAtMs: now + 1 }, now), "CLI 실행 후 갱신 필요");
     assert.equal(antigravityFreshness({ ...quota, windows: [], confidence: "unavailable" }, now), "CLI 첫 실행 대기");

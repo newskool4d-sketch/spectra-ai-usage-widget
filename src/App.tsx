@@ -477,9 +477,8 @@ export function App() {
   const [oauthOpen, setOauthOpen] = useState(false);
   const [actionFeedback, setActionFeedback] = useState<ProviderActionFeedback | null>(null);
   const [loginPollingProviderId, setLoginPollingProviderId] = useState<ProviderId | null>(null);
-  const [updateState, setUpdateState] = useState<UpdateState>(platform === "macos"
-    ? { phase: "unsupported", version: null, message: macUpdateMessage }
-    : { phase: "idle", version: null, message: "업데이트 확인 전" });
+  const isMac = platform === "macos";
+  const [updateState, setUpdateState] = useState<UpdateState>({ phase: isMac ? "unsupported" : "idle", version: null, message: isMac ? macUpdateMessage : "업데이트 확인 전" });
   const [updateNoticeVisible, setUpdateNoticeVisible] = useState(false);
   const pendingUpdate = useRef<AvailableAppUpdate | null>(null);
   const updateOperationInFlight = useRef(false);
@@ -606,13 +605,10 @@ export function App() {
 
   const checkForUpdates = useCallback(async () => {
     if (updateOperationInFlight.current) return;
-    if (platform === "macos") {
-      setUpdateState({ phase: "unsupported", version: null, message: macUpdateMessage });
-      setUpdateNoticeVisible(false);
-      return;
-    }
-    if (!isTauriRuntime()) {
-      setUpdateState({ phase: "unsupported", version: null, message: "설치된 앱에서만 업데이트를 확인할 수 있습니다." });
+    // Mac preview packages have no signed updater feed; the browser has no updater at all.
+    const unsupported = isMac ? macUpdateMessage : isTauriRuntime() ? null : "설치된 앱에서만 업데이트를 확인할 수 있습니다.";
+    if (unsupported) {
+      setUpdateState({ phase: "unsupported", version: null, message: unsupported });
       setUpdateNoticeVisible(false);
       return;
     }
@@ -636,7 +632,7 @@ export function App() {
     } finally {
       updateOperationInFlight.current = false;
     }
-  }, [platform]);
+  }, [isMac]);
 
   const installUpdate = useCallback(async () => {
     if (updateOperationInFlight.current) return;
