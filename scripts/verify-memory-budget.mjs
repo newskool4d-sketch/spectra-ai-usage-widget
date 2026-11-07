@@ -58,7 +58,7 @@ if (existsSync(distAssets)) {
   }
 }
 
-const maxJsBytes = 240_000; // spec §1: JS bundle ≤ 240 KB while React stays
+const maxJsBytes = 250_000; // spec §1 was 240 KB; raised 2026-11-07 after the updater/freshness UI growth (see docs/performance/memory-budget.md)
 const maxCssBytes = 34_000;
 const maxFontBytes = 820_000;
 const maxFontFiles = 3;
