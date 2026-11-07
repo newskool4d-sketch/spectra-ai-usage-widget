@@ -21,6 +21,8 @@ ZIP은 커밋된 소스(`git show <커밋>:scripts/taskbar-keeper/…`)에서 �
 
 - 소스 커밋(`SOURCE_COMMIT.txt`): `a0bba1cd23b43e4ecce2631ff7393323c54479d1`.
 - `SPECTRA_0.3.4_taskbar-keeper.zip.sha256`은 `<해시>  <파일명>` 한 줄로 v0.2.8 형식과 같습니다.
+- ZIP은 릴리스의 `SHA256SUMS.txt`(설치 파일·서명·manifest 3개만 담음)에 넣지 않고 자체 `.sha256`으로 검증합니다. v0.2.8 선례와 같습니다. `scripts/verify-release.mjs`는 자산을 정확한 이름으로 찾으므로 추가 자산이 있어도 검증에 영향이 없습니다.
+- `SOURCE_COMMIT.txt`의 커밋이 `main`에 그대로 남도록 이 브랜치는 merge commit으로 병합해야 합니다. squash·rebase로 병합하면 병합 뒤 `main` 커밋으로 ZIP을 다시 만들고 이 표의 해시를 갱신합니다.
 - 유지 모듈 `keep-spectra-taskbar.ps1` 해시는 v0.2.8 공개 사본과 같고, 설치 스크립트의 `$expectedKeeperHash`와 일치합니다.
 
 ## 확인한 결과
@@ -45,6 +47,6 @@ ZIP은 커밋된 소스(`git show <커밋>:scripts/taskbar-keeper/…`)에서 �
 
 ## 미수행·미검증
 
-- 릴리스 자산 업로드, 공개 릴리스 본문 갱신, push는 사용자 승인 전이라 수행하지 않았습니다.
+- 릴리스 자산 업로드, 공개 릴리스 본문 갱신, push는 사용자 승인 전이라 수행하지 않았습니다. 승인 시 순서는 브랜치 push → `main` merge commit 병합(노트의 `blob/main` 검증 기록 링크가 이때부터 유효) → v0.3.4에 ZIP·`.sha256` 2개 업로드 → v0.3.4·v0.2.9 공개 본문을 각 노트 파일로 갱신 → `gh release view`로 재확인입니다.
 - 현재 PC에 설치된 앱·유지 모듈·예약 작업은 교체하거나 다시 시작하지 않았습니다. 따라서 이 ZIP의 실제 설치, 재부팅, 다른 PC의 새 설치는 검증하지 않았습니다. 보정 동작 자체는 2026-10-29 격리 폴더 검증(`docs/release-0.2.8-taskbar-keeper-qa.md`)을 근거로 합니다.
 - v0.3.0~v0.3.3 공개 CI 실행 파일의 ProductVersion은 설치 파일을 풀어 확인하지 않았습니다.
