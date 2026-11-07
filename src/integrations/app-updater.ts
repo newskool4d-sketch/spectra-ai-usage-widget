@@ -1,6 +1,8 @@
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check } from "@tauri-apps/plugin-updater";
-import { isTauriRuntime } from "./tauri-native-bridge";
+import { isTauriRuntime, readBootState } from "./tauri-native-bridge";
+
+export const macUpdateMessage = "Mac 시험판은 새 설치파일로 업데이트합니다. 자동 업데이트는 정식 배포 후 지원됩니다.";
 
 // Native request deadlines cancel the network operation itself; a JS race would
 // leave a timed-out download running and could later launch an unwanted install.
@@ -15,6 +17,9 @@ export type AvailableAppUpdate = Readonly<{
 
 export async function checkForAppUpdate(): Promise<AvailableAppUpdate | null> {
   if (!isTauriRuntime()) return null;
+  // Mac preview packages intentionally have no signed updater feed yet. Never query
+  // the Windows release manifest or report a missing Mac entry as up to date.
+  if (readBootState()?.platform === "macos") throw new Error(macUpdateMessage);
   const update = await check({ timeout: manifestTimeoutMs });
   if (!update) return null;
 

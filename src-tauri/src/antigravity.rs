@@ -110,7 +110,7 @@ struct BridgeConfig {
 
 fn settings_path() -> Option<PathBuf> {
     env::var_os("SPECTRA_ANTIGRAVITY_SETTINGS").map(PathBuf::from).or_else(|| {
-        env::var_os("USERPROFILE").or_else(|| env::var_os("HOME")).map(PathBuf::from)
+        provider_usage::provider_home_dir()
             .map(|home| home.join(".gemini").join("antigravity-cli").join("settings.json"))
     })
 }
@@ -124,12 +124,11 @@ fn config_path() -> Option<PathBuf> {
 }
 
 fn runtime_available() -> bool {
+    #[cfg(windows)]
     if let Some(local) = env::var_os("LOCALAPPDATA") {
         if PathBuf::from(local).join("agy").join("bin").join("agy.exe").is_file() { return true; }
     }
-    env::var_os("PATH").is_some_and(|path| env::split_paths(&path).any(|dir| {
-        dir.join(if cfg!(windows) { "agy.exe" } else { "agy" }).is_file()
-    }))
+    provider_usage::command_available("agy")
 }
 
 fn our_statusline(settings: &Value) -> bool {
@@ -305,7 +304,7 @@ fn action(success: bool, installed: bool) -> ProviderActionResult {
         provider_id: "antigravity".into(),
         status: if !success { "not-available" } else if installed { "bridge-installed" } else { "bridge-removed" }.into(),
         message: if !success { "Antigravity CLI의 기존 설정을 보존하며 사용량 연결을 변경하지 못했습니다." }
-            else if installed { "Antigravity CLI 사용량 연결을 설정했습니다. agy를 실행하고 /usage를 열면 수치가 갱신됩니다. 기존 상태선 출력은 보존됩니다." }
+            else if installed { "Antigravity CLI 사용량 연결을 설정했습니다. agy를 새로 실행하면 수치가 갱신됩니다. 기존 상태선 출력은 보존됩니다." }
             else { "Antigravity 사용량 연결을 해제하고 이전 상태선 설정을 복원했습니다." }.into(),
     }
 }
@@ -331,7 +330,7 @@ fn snapshot_at(cache: Option<Cache>, runtime: bool, bridge: bool, now: u64) -> P
         last_synced_at: None, bridge_installed: bridge, windows: Vec::new(), live_failure: None,
         message: if !runtime { "Antigravity CLI(agy)를 찾지 못했습니다." }
             else if !bridge { "사용량 연결을 설정한 뒤 Antigravity CLI(agy)를 실행해 주세요." }
-            else { "Antigravity CLI에서 /usage를 열면 모델군별 한도가 전달됩니다. 아직 수신한 데이터가 없습니다." }.into(),
+            else { "Antigravity CLI(agy)를 새로 실행하면 모델군별 한도가 전달됩니다. 아직 수신한 데이터가 없습니다." }.into(),
     };
     if !runtime || !bridge { return result; }
     let Some(cache) = cache.filter(|cache| cache.captured_at <= now && cache.captured_at > 0) else { return result; };
@@ -353,7 +352,7 @@ fn snapshot_at(cache: Option<Cache>, runtime: bool, bridge: bool, now: u64) -> P
     result.plan_type = cache.plan;
     result.source = Some("antigravity-statusline".into());
     result.last_synced_at = Some(cache.captured_at);
-    result.message = if stale { "Antigravity CLI의 마지막 수신값입니다. agy에서 /usage를 열어 갱신해 주세요." }
+    result.message = if stale { "Antigravity CLI의 마지막 수신값입니다. agy를 실행하면 갱신됩니다." }
         else { "Antigravity CLI 공식 상태선에서 수신했습니다. GUI 앱만 사용하면 자동 갱신되지 않습니다." }.into();
     result
 }
@@ -379,8 +378,8 @@ pub fn run_statusline_bridge() -> bool {
     if let Some(config) = config_path().and_then(|path| provider_usage::read_json(&path).ok())
         .and_then(|value| serde_json::from_value::<BridgeConfig>(value).ok()) {
         if let Some(command) = previous_command(config.previous_status_line.as_ref()) {
-            let home = env::var("USERPROFILE").or_else(|_| env::var("HOME")).ok();
-            let expanded = match home { Some(home) => expand_command_home(command, &home), None => Some(command.to_string()) };
+            let home = provider_usage::provider_home_dir();
+            let expanded = match home.as_deref().and_then(Path::to_str) { Some(home) => expand_command_home(command, home), None => Some(command.to_string()) };
             if let Some(output) = expanded.as_deref().and_then(|command| provider_usage::run_previous_statusline(command, &input)) {
                 println!("{output}");
             }
@@ -559,6 +558,30 @@ mod tests {
         assert!(is_bridge_command(&command));
         assert_eq!(previous_command(Some(&json!({"command":command}))), None, "a saved bridge cannot chain recursively");
         assert!(!is_bridge_command("powershell.exe -EncodedCommand unrelated"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_bridge_quotes_a_macos_bundle_path_and_preserves_utf8_stdin() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::process::{Command, Stdio};
+        let dir = env::temp_dir().join(format!("spectra 한글 user's $(printf BAD) {}", uuid::Uuid::new_v4()));
+        let binary_dir = dir.join("SPECTRA.app/Contents/MacOS");
+        fs::create_dir_all(&binary_dir).unwrap();
+        let executable = binary_dir.join("spectra-native");
+        fs::write(&executable, b"#!/bin/sh\ncat\n").unwrap();
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o755)).unwrap();
+        let command = bridge_command(&executable).unwrap();
+        assert!(is_bridge_command(&command));
+        let mut child = Command::new("/bin/sh").args(["-c", &command])
+            .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+        let input = json!({"product":"antigravity", "fixture":"한글 보존", "quota":{"gemini-weekly":{"remaining_fraction":0.73}}});
+        child.stdin.take().unwrap().write_all(&serde_json::to_vec(&input).unwrap()).unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(output.status.success());
+        assert!(output.stderr.is_empty());
+        assert_eq!(serde_json::from_slice::<Value>(&output.stdout).unwrap(), input);
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[cfg(windows)]

@@ -1,6 +1,8 @@
 #[cfg(feature = "native-oauth")]
 mod credential_vault;
 mod desktop_shell;
+#[cfg(any(target_os = "macos", test))]
+mod macos_menu;
 #[cfg(feature = "native-oauth")]
 mod oauth_callback;
 #[cfg(feature = "native-oauth")]
@@ -14,7 +16,7 @@ mod taskbar_strip;
 #[cfg(target_os = "windows")]
 mod taskbar_window;
 mod tray_badge;
-#[cfg(any(target_os = "windows", test))]
+#[cfg(any(target_os = "windows", target_os = "macos", test))]
 mod usage_refresh;
 
 #[cfg(feature = "native-oauth")]
@@ -46,7 +48,7 @@ pub struct AppState {
     pub(crate) snapshot_requests: Mutex<std::collections::HashMap<String, u64>>,
     #[cfg(target_os = "windows")]
     pub(crate) strip: Mutex<Option<taskbar_window::StripHandle>>,
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
     pub(crate) strip_refresh_started: std::sync::atomic::AtomicBool,
 }
 
@@ -58,7 +60,7 @@ impl AppState {
     pub(crate) fn boot_state(&self, mode: desktop_shell::WindowMode) -> standby::BootState {
         let prefs = self.ui.lock().map(|p| p.clone()).unwrap_or_default();
         let snapshots = self.last_snapshots.lock().map(|s| s.clone()).unwrap_or_default();
-        standby::BootState { theme: prefs.theme, solid: prefs.solid, standby: prefs.standby, strip: prefs.strip, mode: mode.slug(), snapshots }
+        standby::BootState { platform: std::env::consts::OS, theme: prefs.theme, solid: prefs.solid, standby: prefs.standby, strip: prefs.strip, mode: mode.slug(), snapshots }
     }
 
     /// Stores the newest snapshot for its provider and returns what was stored. A failed lookup
@@ -380,11 +382,14 @@ fn apply_prefs(
 }
 
 #[tauri::command]
-fn set_ui_prefs(theme: String, solid: bool, state: State<'_, AppState>) -> Result<standby::UiPrefs, String> {
-    apply_prefs(&state, |prefs| {
+fn set_ui_prefs(theme: String, solid: bool, _app: AppHandle, state: State<'_, AppState>) -> Result<standby::UiPrefs, String> {
+    let prefs = apply_prefs(&state, |prefs| {
         prefs.theme = standby::normalize_theme(&theme).to_string();
         prefs.solid = solid;
-    })
+    })?;
+    #[cfg(target_os = "macos")]
+    desktop_shell::apply_window_theme(&_app);
+    Ok(prefs)
 }
 
 #[tauri::command]
@@ -396,7 +401,7 @@ fn set_standby(enabled: bool, state: State<'_, AppState>) -> Result<standby::UiP
 fn set_strip(enabled: bool, app: AppHandle, state: State<'_, AppState>) -> Result<standby::UiPrefs, String> {
     let prefs = apply_prefs(&state, |prefs| prefs.strip = enabled)?;
     desktop_shell::update_taskbar_strip(&app);
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
     if enabled {
         desktop_shell::ensure_usage_refresh_loop(&app);
     }
@@ -461,7 +466,7 @@ pub fn run() {
                 eprintln!("spectra: main window could not be shown at startup: {error}");
             }
             desktop_shell::update_taskbar_strip(app.handle());
-            #[cfg(target_os = "windows")]
+            #[cfg(any(target_os = "windows", target_os = "macos"))]
             if app.state::<AppState>().ui.lock().map(|prefs| prefs.strip).unwrap_or(false) {
                 desktop_shell::ensure_usage_refresh_loop(app.handle());
             }
@@ -488,6 +493,10 @@ pub fn run() {
         .expect("error while building SPECTRA native shell");
 
     app.run(|_app, event| {
+        #[cfg(target_os = "macos")]
+        if let tauri::RunEvent::Reopen { has_visible_windows: false, .. } = event {
+            let _ = desktop_shell::show_main_window(_app, desktop_shell::WindowMode::Mini);
+        }
         if let tauri::RunEvent::ExitRequested { ref api, code: None, .. } = event {
             api.prevent_exit();
         }

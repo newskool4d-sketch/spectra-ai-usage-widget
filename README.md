@@ -1,12 +1,13 @@
 # SPECTRA — AI 사용량 위젯
 
-> A+C 방향을 제품 화면으로 옮긴 React/TypeScript + Tauri 코드 퍼스트 프로젝트입니다. 이전 세 시안과 `app.js`는 시각 회귀 기준선으로만 보존합니다.
+> 포커스 도크 디자인을 사용하는 React/TypeScript + Tauri 프로젝트입니다. 이전 세 시안과 `app.js`는 시각 회귀 기준선으로 보존합니다.
 
-Claude와 OpenAI Codex의 **개인 요금제 잔여량**을 Windows 트레이에서 빠르게 확인합니다. macOS와 iOS는 후속 플랫폼입니다.
+Claude·OpenAI Codex·Antigravity의 **개인 요금제 잔여량**을 확인합니다. Windows 트레이·작업표시줄에 이어 macOS 메뉴 막대용 구현과 빌드 경로를 추가했습니다. Mac 설치파일과 검증 범위는 [macOS 안내](./docs/macos.md)를 확인하세요. iOS는 후속 플랫폼입니다.
 
 ## 현재 구현
 
 - Windows 미니 창·대시보드·트레이 숨김/복원·단일 실행
+- macOS 메뉴 막대와 공통 포커스 도크·미니 창, 다크/라이트 모드
 - Codex 공식 App Server의 ChatGPT 계정 및 rate limit 조회
 - Claude 공식 로그인 상태와 사용자가 동의해 설치하는 status line 한도 브리지
 - 브라우저에서는 디자인 확인용 예시 수치, 네이티브 앱에서는 실제 값이 없을 때 `—` 표시
@@ -35,6 +36,8 @@ Windows Tauri 실구동과 NSIS 패키징:
 npm run desktop:dev
 npm run desktop:build
 ```
+
+macOS에서는 같은 명령이 플랫폼 설정에 따라 `.app`과 `.dmg`를 생성합니다. Apple Silicon·Intel 빌드, 설치 및 미검증 항목은 [macOS 안내](./docs/macos.md)에 정리했습니다. Windows의 기존 NSIS 릴리스와 자동 업데이트 경로는 유지합니다.
 
 ## Windows 공개 릴리스 및 업데이트
 
@@ -115,6 +118,7 @@ Claude는 Claude Code 자격 증명에 구독 로그인이 있으면 `claude aut
 - 조직 API 사용량과 ChatGPT/Claude 개인 구독 잔여량의 동일시
 - 과거 사용량 분석·코드 서명
 - 모든 AI 서비스가 공식 한도 API를 제공한다는 전제
-- macOS 메뉴 막대 앱과 iOS SwiftUI/WidgetKit 실구현
+- macOS Developer ID 서명·공증과 자동 업데이트
+- iOS SwiftUI/WidgetKit 실구현
 
-선택된 A+C 화면과 Claude/Codex provider만 제품 런타임에 포함하고, B와 시안 전환 UI는 기준선으로 별도 보관합니다.
+제품 런타임은 포커스 도크와 Claude·Codex·Antigravity 공급자를 포함합니다. 이전 시안 전환 UI는 기준선으로 별도 보관합니다.
