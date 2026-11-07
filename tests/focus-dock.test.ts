@@ -12,7 +12,9 @@ const point = (overrides: Partial<UsageHistoryPoint> = {}): UsageHistoryPoint =>
 describe("focus dock models", () => {
   it("keeps model-group quota windows distinct and never fabricates an Argon rolling window", () => {
     const groups = modelGroups(planQuotas.antigravity);
-    assert.equal(groups.length, 3);
+    assert.deepEqual(groups.map(group => group.id), ["gemini", "gemini-4-argon", "claude-gpt"]);
+    const reversed = modelGroups({ ...planQuotas.antigravity, windows: [...planQuotas.antigravity.windows].reverse() });
+    assert.deepEqual(reversed.map(group => group.id), ["gemini", "gemini-4-argon", "claude-gpt"]);
     assert.deepEqual(groups.find(group => group.id === "gemini-4-argon")?.windows.map(window => window.id), ["weekly"]);
     assert.deepEqual(groups.find(group => group.id === "claude-gpt")?.windows.map(window => window.id), ["rolling", "weekly"]);
     assert.equal(modelGroups(planQuotas.claude).length, 1);
