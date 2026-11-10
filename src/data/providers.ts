@@ -26,8 +26,6 @@ export type QuotaWindow = Readonly<{
   kindLabel: string;
   resetsAt?: number | null; // epoch ms
   windowDurationMins?: number | null;
-  /** 계정 전체 한도를 모델군 보기에 함께 보여 준 창(focus-dock modelGroups). 서버가 준 모델별 값이 아니다. */
-  accountWide?: boolean;
 }>;
 
 export type PlanQuota = Readonly<{

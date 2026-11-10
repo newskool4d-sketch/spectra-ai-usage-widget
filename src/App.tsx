@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Icon, type IconName } from "./components/Icon";
-import { ACCOUNT_WIDE_NOTE, groupId, historyForWindow, historySegments, modelGroups, rangeStart, selectedModelGroup, summaryWindow, windowAvailable, type ModelGroup } from "./data/focus-dock";
+import { historyForWindow, historySegments, modelGroups, rangeStart, selectedModelGroup, summaryWindow, windowAvailable, type ModelGroup } from "./data/focus-dock";
 import { UpdateNotice, type UpdateState } from "./components/UpdateNotice";
 import { createRefreshSequencer } from "./data/refresh-sequence";
 import { LOOKUP_DELAYED, autoRefreshLabel, claudeFreshness, antigravityFreshness } from "./data/usage-freshness";
@@ -242,7 +242,7 @@ const QuotaHero = memo(function QuotaHero({ activeQuota, group, quotaWindow, now
     {!compact ? <h2>{group?.label ?? activeQuota.planName} · {quotaWindow?.label ?? "한도"}</h2> : null}
     <div className="hero-reading"><div className="hero-value">{percent ?? "—"}{percent !== null ? <span>%</span> : null}</div><span>{quotaWindow?.label ?? "한도"} {available ? "남음" : "확인 대기"}</span></div>
     <div className="quota-meter" role="meter" aria-label={quotaWindow?.label ?? "잔여량"} aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent ?? undefined} aria-valuetext={percent === null ? "확인된 데이터 없음" : `${percent}% 남음`}><i style={{ width: `${percent ?? 0}%` }} /></div>
-    <div className="hero-reset"><Icon name="refresh" size={15} /><span>{available ? quotaWindow?.resetsAt ? `${formatReset(quotaWindow.resetsAt / 1000)} 초기화` : quotaWindow?.resetLabel : quotaWindow?.resetsAt && quotaWindow.resetsAt <= now ? "초기화 후 새 데이터 대기" : activeQuota.statusMessage}{available && quotaWindow?.accountWide ? ` · ${ACCOUNT_WIDE_NOTE}` : ""}</span></div>
+    <div className="hero-reset"><Icon name="refresh" size={15} /><span>{available ? quotaWindow?.resetsAt ? `${formatReset(quotaWindow.resetsAt / 1000)} 초기화` : quotaWindow?.resetLabel : quotaWindow?.resetsAt && quotaWindow.resetsAt <= now ? "초기화 후 새 데이터 대기" : activeQuota.statusMessage}</span></div>
     {activeQuota.connectionState === "stale" || activeQuota.connectionState === "error" || (activeQuota.providerId === "antigravity" && activeQuota.confidence === "verified" && antigravityFreshness(activeQuota, now) === "CLI 실행 후 갱신 필요") ? <p className="freshness-note">{connectionLabel(activeQuota)} · 마지막 수집값입니다.</p> : null}
   </section>;
 });
@@ -250,16 +250,16 @@ const QuotaHero = memo(function QuotaHero({ activeQuota, group, quotaWindow, now
 const OtherLimits = memo(function OtherLimits({ activeQuota, group, quotaWindow, now, compact = false }: Pick<SharedViewProps, "activeQuota" | "group" | "quotaWindow" | "now"> & Readonly<{ compact?: boolean }>) {
   const groups = modelGroups(activeQuota);
   const otherGroups = groups.filter(item => item.id !== group?.id);
-  const otherWindows = group?.windows.filter(window => window.id !== quotaWindow?.id && !window.accountWide) ?? []; // 공용 창은 전체 모델 줄에 이미 있다.
+  const otherWindows = group?.windows.filter(window => window.id !== quotaWindow?.id) ?? [];
   if (!otherGroups.length && !otherWindows.length) return null;
   return <section className={`other-limits ${compact ? "compact" : ""}`}><h2>{otherGroups.length ? "다른 모델군" : "다른 한도"}</h2>
-    {otherGroups.map(item => <div className="other-limit-row" key={item.id}><strong>{item.label}</strong><div>{item.windows.filter(window => !window.accountWide).map(window => <span key={window.id}>{window.label.replace(" 한도", "")} <b>{percentFor(activeQuota, window, now)}</b></span>)}</div></div>)}
+    {otherGroups.map(item => <div className="other-limit-row" key={item.id}><strong>{item.label}</strong><div>{item.windows.map(window => <span key={window.id}>{window.label.replace(" 한도", "")} <b>{percentFor(activeQuota, window, now)}</b></span>)}</div></div>)}
     {otherWindows.map(window => <div className="other-limit-row" key={window.id}><strong>{window.label}</strong><div><b>{percentFor(activeQuota, window, now)}</b><span>{window.resetsAt ? formatReset(window.resetsAt / 1000) : window.resetLabel}</span></div></div>)}
   </section>;
 });
 
 const HistoryPanel = memo(function HistoryPanel({ history, historyState, activeProvider, group, quotaWindow, range, now }: Pick<SharedViewProps, "history" | "historyState" | "activeProvider" | "group" | "quotaWindow" | "range" | "now">) {
-  const points = historyForWindow(history, activeProvider.id, quotaWindow ? groupId(quotaWindow) : group?.id ?? "default", quotaWindow?.id ?? "weekly", range, now);
+  const points = historyForWindow(history, activeProvider.id, group?.id ?? "default", quotaWindow?.id ?? "weekly", range, now);
   const start = rangeStart(range, now);
   const end = Math.max(start + 1, now);
   const dateLabel = (ms: number) => new Intl.DateTimeFormat("ko-KR", { month: "2-digit", day: "2-digit" }).format(ms);
@@ -268,7 +268,7 @@ const HistoryPanel = memo(function HistoryPanel({ history, historyState, activeP
   const stride = Math.max(1, Math.ceil(points.length / 300));
   const sampled = points.filter((_, index) => index % stride === 0 || index === points.length - 1);
   return <section className="history-panel" aria-label={`${rangeLabels[range]} 잔여량 기록`}>
-    <div className="section-heading"><div><h2>{range === "24H" ? "오늘" : `최근 ${rangeLabels[range]}`} 잔여량</h2><p>{activeProvider.name} · {group?.label ?? "모델군"} · {quotaWindow?.label ?? "한도"}{quotaWindow?.accountWide ? ` (${ACCOUNT_WIDE_NOTE})` : ""}</p></div><span className="subtle-badge">{points.length}회 기록</span></div>
+    <div className="section-heading"><div><h2>{range === "24H" ? "오늘" : `최근 ${rangeLabels[range]}`} 잔여량</h2><p>{activeProvider.name} · {group?.label ?? "모델군"} · {quotaWindow?.label ?? "한도"}</p></div><span className="subtle-badge">{points.length}회 기록</span></div>
     <div className="history-period">{dateLabel(start)} — {dateLabel(now)}</div>
     {points.length ? <><svg className="history-chart" viewBox="0 0 700 184" role="img" aria-label={`${dateLabel(start)}부터 ${dateLabel(now)}까지 ${points.length}회 수집, 최신 잔여량 ${Math.round(points[points.length - 1].remainingPercent)}%`}>
       {[0, 25, 50, 75, 100].map(percent => <g key={percent}><text x="0" y={154 - percent * 1.2}>{percent}%</text><line x1="44" x2="664" y1={150 - percent * 1.2} y2={150 - percent * 1.2} /></g>)}
@@ -285,7 +285,7 @@ const SubscriptionPanel = memo(function SubscriptionPanel({ activeProvider, acti
   const groups = modelGroups(activeQuota);
   return <section className="subscription-panel"><div className="section-heading"><div><span className="eyebrow">연결된 구독 모델</span><h2>{activeQuota.planName}</h2><p>{activeQuota.accountLabel}</p></div><button type="button" className="secondary-action" onClick={() => onOpenOAuth(activeProvider.id)}>연결 관리</button></div>
     <dl className="subscription-meta"><div><dt>서비스</dt><dd>{activeProvider.name}</dd></div><div><dt>데이터 출처</dt><dd>{sourceLabel(activeQuota)}</dd></div><div><dt>마지막 수집</dt><dd>{activeQuota.lastSyncedAt ?? "아직 수집되지 않음"}</dd></div><div><dt>연결 상태</dt><dd>{connectionLabel(activeQuota)}</dd></div></dl>
-    <div className="subscription-groups">{groups.map(item => <section key={item.id}><h3>{item.label}</h3>{item.windows.map(window => <div className="subscription-window" key={window.id}><span>{window.label}{window.accountWide ? ` · ${ACCOUNT_WIDE_NOTE}` : ""}</span><strong>{percentFor(activeQuota, window, now)}</strong><small>{window.resetsAt ? `${formatReset(window.resetsAt / 1000)} 초기화` : window.resetLabel}</small></div>)}</section>)}</div>
+    <div className="subscription-groups">{groups.map(item => <section key={item.id}><h3>{item.label}</h3>{item.windows.map(window => <div className="subscription-window" key={window.id}><span>{window.label}</span><strong>{percentFor(activeQuota, window, now)}</strong><small>{window.resetsAt ? `${formatReset(window.resetsAt / 1000)} 초기화` : window.resetLabel}</small></div>)}</section>)}</div>
     {activeProvider.id === "antigravity" ? <p className="view-description">Claude 직접 구독과 별도 한도입니다. Antigravity CLI 실행 시 갱신됩니다.</p> : null}
   </section>;
 });

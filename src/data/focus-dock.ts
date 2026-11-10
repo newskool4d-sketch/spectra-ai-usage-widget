@@ -6,8 +6,6 @@ const DEFAULT_GROUP_ID = "default";
 export const groupId = (window: Pick<QuotaWindow, "modelGroupId">) => window.modelGroupId || DEFAULT_GROUP_ID;
 /** 모델별 한도(Claude의 Fable 등)가 함께 있을 때 모델군 없는 계정 전체 한도에 붙이는 이름. */
 export const ALL_MODELS_LABEL = "전체 모델";
-/** 모델군 보기에 함께 보여 주는 계정 전체 한도에 붙이는 표기. */
-export const ACCOUNT_WIDE_NOTE = "전체 모델 공용";
 
 // 모델군 표시 순서: 계정 전체 한도, 이어서 Antigravity 모델군. 목록에 없는 모델군은 indexOf의 -1이 `>>> 0`으로 최댓값이 되어 수집 순서대로 뒤에 온다.
 const groupOrder = [DEFAULT_GROUP_ID, "gemini", "gemini-4-argon", "claude-gpt"];
@@ -21,17 +19,8 @@ export function modelGroups(quota: PlanQuota): ModelGroup[] {
     groups.set(id, { id, label: window.modelGroupLabel || quota.planName, windows: [...(previous?.windows ?? []), window] });
   }
   const sorted = [...groups.values()].sort((a, b) => groupRank(a.id) - groupRank(b.id));
-  if (sorted.length < 2) return sorted;
-  // Claude의 5시간(세션) 한도는 범위가 전체 모델이라 Fable 같은 모델별 사용에도 그대로 적용된다.
-  // 서버가 모델별 5시간 한도를 따로 주지 않는 동안에는 그 창을 모델군에도 공용으로 표시해 함께 보여 준다.
-  const sharedRolling = quota.providerId === "claude"
-    ? groups.get(DEFAULT_GROUP_ID)?.windows.find(window => window.id === "rolling") : undefined;
-  return sorted.map(group => {
-    // 요금제 이름은 모델군 하나일 때만 모델군 이름을 겸한다.
-    if (group.id === DEFAULT_GROUP_ID) return { ...group, label: ALL_MODELS_LABEL };
-    if (!sharedRolling || group.windows.some(window => window.id === "rolling")) return group;
-    return { ...group, windows: [{ ...sharedRolling, accountWide: true }, ...group.windows] };
-  });
+  // 요금제 이름은 모델군 하나일 때만 모델군 이름을 겸한다. 모델군에는 서버가 준 창만 담는다(Fable은 주간 한도뿐).
+  return sorted.length > 1 ? sorted.map(group => group.id === DEFAULT_GROUP_ID ? { ...group, label: ALL_MODELS_LABEL } : group) : sorted;
 }
 
 export function windowAvailable(quota: PlanQuota, window: QuotaWindow | undefined, now = Date.now()): boolean {
