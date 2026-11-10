@@ -5,9 +5,10 @@ use crate::provider_usage::{app_data_dir, unix_now, ProviderUsageSnapshot};
 
 const RETENTION_SECS: u64 = 31 * 24 * 60 * 60;
 const BUCKET_SECS: u64 = 15 * 60;
-// Nine shipped quota series × 96 quarter-hour samples × 31 days = 26,784;
-// reserve additional room for reset transitions without truncating the 30-day view.
-const MAX_POINTS: usize = 32_000;
+// Ten shipped quota series (nine plus Claude's per-model weekly limit) × 96 quarter-hour
+// samples × 31 days = 29,760. The cap holds twelve series (35,712) so one more per-model
+// window and reset transitions fit without truncating the 30-day view.
+const MAX_POINTS: usize = 36_000;
 const MAX_BYTES: u64 = 16 * 1024 * 1024;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -140,11 +141,11 @@ mod tests {
         record(&mut points, &sample, 1000010); assert_eq!(points.len(), 2);
     }
     #[test]
-    fn thirty_one_days_of_all_nine_quota_series_fit_without_truncation() {
+    fn thirty_one_days_of_twelve_quota_series_fit_without_truncation() {
         let now = 4_000_000;
         let base = sample(now).windows.remove(0);
         let mut points = Vec::new();
-        for series in 0..9 {
+        for series in 0..12 {
             for bucket in 0..31 * 96 {
                 points.push(UsageHistoryPoint {
                     provider_id: "antigravity".into(), model_group_id: Some(format!("series-{series}")),
@@ -155,7 +156,7 @@ mod tests {
             }
         }
         let count = points.len(); prune(&mut points, now); assert_eq!(points.len(), count);
-        assert_eq!(count, 26_784);
+        assert_eq!(count, 35_712);
     }
 
     #[test]

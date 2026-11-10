@@ -87,6 +87,10 @@ function planName(providerId: ProviderId, planType: string | null) {
   return providerId === "codex" ? `ChatGPT ${title} · Codex` : `Claude ${title}`;
 }
 
+// 실제 값이 오기 전 자리표시. 계정에 없을 수 있는 모델군(예시의 Fable·Antigravity 모델군)은 만들지 않는다.
+const pendingWindows = (fallback: PlanQuota): QuotaWindow[] => fallback.windows.filter(window => !window.modelGroupId)
+  .map(window => ({ ...window, usedPercent: 0, remainingPercent: 0, resetLabel: "연결 후 표시", kindLabel: "실제 데이터 대기" }));
+
 function quotaFromSnapshot(snapshot: NativeProviderUsageSnapshot, fallback: PlanQuota): PlanQuota {
   const connectionState: PlanQuota["connectionState"] = snapshot.connectionState === "not-installed"
     ? "not_installed"
@@ -109,7 +113,7 @@ function quotaFromSnapshot(snapshot: NativeProviderUsageSnapshot, fallback: Plan
         resetsAt: window.resetsAt ? window.resetsAt * 1000 : null,
         windowDurationMins: window.windowDurationMins
       }))
-    : fallback.providerId === "antigravity" ? [] : fallback.windows.map(window => ({ ...window, usedPercent: 0, remainingPercent: 0, resetLabel: "연결 후 표시", kindLabel: "실제 데이터 대기" }));
+    : pendingWindows(fallback);
   return {
     ...fallback,
     planName: planName(snapshot.providerId, snapshot.planType),
@@ -138,13 +142,7 @@ function nativePendingQuota(fallback: PlanQuota): PlanQuota {
     lastSyncedAtMs: null,
     bridgeInstalled: false,
     statusMessage: "연결 상태를 확인하고 있습니다.",
-    windows: fallback.providerId === "antigravity" ? [] : fallback.windows.map(window => ({
-      ...window,
-      usedPercent: 0,
-      remainingPercent: 0,
-      resetLabel: "연결 후 표시",
-      kindLabel: "실제 데이터 대기"
-    }))
+    windows: pendingWindows(fallback)
   };
 }
 

@@ -41,10 +41,15 @@ fn stale(snapshot: &ProviderUsageSnapshot, now: u64) -> bool {
         || !snapshot.last_synced_at.is_some_and(|captured| captured > 0 && captured <= now && now - captured < fresh_secs)
 }
 
-/// Antigravity's title follows the Gemini group alone, the same rule as the Windows strip and
-/// tray badge. Other groups stay in the tooltip.
+/// Antigravity's title follows the Gemini group alone, and per-model limits of the other
+/// services (Claude's Fable allowance) never stand in for the service value: the same rule as
+/// the Windows strip and tray badge. Those groups stay in the tooltip.
 fn counts_toward_title(snapshot: &ProviderUsageSnapshot, window: &ProviderQuotaWindow) -> bool {
-    snapshot.provider_id != "antigravity" || crate::antigravity::is_summary_window(window)
+    if snapshot.provider_id == "antigravity" {
+        crate::antigravity::is_summary_window(window)
+    } else {
+        window.model_group_id.is_none()
+    }
 }
 
 pub fn build_model(snapshots: &[ProviderUsageSnapshot], now: u64) -> MenuBarModel {
@@ -151,6 +156,20 @@ mod tests {
             window.model_group_id = Some((*group).into());
         }
         result
+    }
+
+    #[test]
+    fn claude_per_model_limits_stay_out_of_the_title_and_are_named_in_the_tooltip() {
+        let mut claude = snapshot("claude", &[81.0, 74.0, 3.0]);
+        claude.windows[2].model_group_id = Some("fable".into());
+        claude.windows[2].model_group_label = Some("Fable".into());
+        claude.windows[2].label = "주간 한도".into();
+        let model = build_model(&[claude.clone()], 1_000);
+        assert_eq!(model.title, "CX—  CL74%  AG—");
+        assert!(model.tooltip.contains("Fable / 주간 한도: 3%"), "{}", model.tooltip);
+        // Only a per-model window left: no title value rather than the Fable one.
+        claude.windows.drain(..2);
+        assert_eq!(build_model(&[claude], 1_000).title, "CX—  CL—  AG—");
     }
 
     #[test]
