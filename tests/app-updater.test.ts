@@ -43,6 +43,12 @@ afterEach(() => {
 });
 
 describe("app updater through the installed Tauri JS plugins", () => {
+  it("never queries the Windows manifest from a Mac preview build", async () => {
+    window.__SPECTRA_BOOT__ = { platform: "macos", theme: "light", mode: "mini", solid: false, standby: false, strip: true, snapshots: [] };
+    bridge(() => { throw new Error("must not invoke IPC"); });
+    await assert.rejects(checkForAppUpdate(), /Mac 시험판/);
+    assert.deepEqual(calls, []);
+  });
   it("does not make an update request outside the native runtime", async () => {
     Reflect.deleteProperty(window, "__TAURI__");
     bridge(() => { throw new Error("must not invoke IPC"); });

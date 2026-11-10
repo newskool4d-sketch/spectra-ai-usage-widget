@@ -100,6 +100,12 @@ impl CommandSpec {
             }
         };
         command.args(args);
+        #[cfg(target_os = "macos")]
+        if let Ok(path) = env::join_paths(command_directories()) {
+            // Finder does not inherit the interactive shell PATH. npm-installed CLIs
+            // also need their Node runtime to be discoverable by `/usr/bin/env node`.
+            command.env("PATH", path);
+        }
         hide_window(&mut command);
         command
     }
@@ -116,22 +122,79 @@ fn hide_window(command: &mut Command) {
 fn hide_window(_command: &mut Command) {}
 
 fn resolve_command(name: &str) -> Option<CommandSpec> {
-    let path = env::var_os("PATH")?;
-    let directories: Vec<PathBuf> = env::split_paths(&path).collect();
+    let directories = command_directories();
 
     #[cfg(target_os = "windows")]
     return resolve_windows_command(name, &directories);
 
     #[cfg(not(target_os = "windows"))]
     {
-        directories.into_iter().find_map(|directory| {
-            let path = directory.join(name);
-            path.is_file().then_some(CommandSpec {
-                path,
-                kind: CommandKind::Direct,
-            })
-        })
+        resolve_unix_command(name, &directories)
     }
+}
+
+fn command_directories() -> Vec<PathBuf> {
+    let directories = env::var_os("PATH")
+        .map(|path| env::split_paths(&path).collect()).unwrap_or_default();
+    #[cfg(target_os = "macos")]
+    return mac_command_directories(directories, provider_home_dir().as_deref());
+    #[cfg(not(target_os = "macos"))]
+    directories
+}
+
+/// Keep explicit PATH precedence, then cover native CLI and Homebrew installs without
+/// executing shell startup files or changing the user's global environment.
+#[cfg(any(target_os = "macos", test))]
+fn mac_command_directories(mut directories: Vec<PathBuf>, home: Option<&Path>) -> Vec<PathBuf> {
+    directories.retain(|path| path.is_absolute());
+    let mut fallback = Vec::new();
+    if let Some(home) = home.filter(|home| home.is_absolute()) {
+        fallback.extend([home.join(".local/bin"), home.join(".npm-global/bin"), home.join(".volta/bin")]);
+        fallback.extend(nvm_bin_directories(home));
+    }
+    fallback.extend(["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"].map(PathBuf::from));
+    for path in fallback {
+        if !directories.contains(&path) { directories.push(path); }
+    }
+    directories
+}
+
+/// nvm is only activated by shell startup files, which Finder never runs, so its CLIs and
+/// their Node runtime have to be listed explicitly. Newest version first, as a shell would pick.
+#[cfg(any(target_os = "macos", test))]
+fn nvm_bin_directories(home: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = fs::read_dir(home.join(".nvm/versions/node")) else { return Vec::new(); };
+    let mut versions: Vec<(Vec<u64>, PathBuf)> = entries.flatten().filter_map(|entry| {
+        let name = entry.file_name();
+        let version = name.to_str()?.strip_prefix('v')?.split('.')
+            .map(|part| part.parse().ok()).collect::<Option<Vec<u64>>>()?;
+        Some((version, entry.path().join("bin")))
+    }).collect();
+    versions.sort_by(|left, right| right.0.cmp(&left.0));
+    versions.into_iter().map(|(_, bin)| bin).collect()
+}
+
+#[cfg(unix)]
+fn resolve_unix_command(name: &str, directories: &[PathBuf]) -> Option<CommandSpec> {
+    use std::os::unix::fs::PermissionsExt;
+    directories.iter().find_map(|directory| {
+        let path = directory.join(name);
+        let metadata = fs::metadata(&path).ok()?;
+        (metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+            .then_some(CommandSpec { path, kind: CommandKind::Direct })
+    })
+}
+
+pub(crate) fn command_available(name: &str) -> bool {
+    resolve_command(name).is_some()
+}
+
+pub(crate) fn provider_home_dir() -> Option<PathBuf> {
+    #[cfg(target_os = "windows")]
+    let home = env::var_os("USERPROFILE").or_else(|| env::var_os("HOME"));
+    #[cfg(not(target_os = "windows"))]
+    let home = env::var_os("HOME");
+    home.filter(|home| !home.is_empty()).map(PathBuf::from)
 }
 
 #[cfg(target_os = "windows")]
@@ -515,16 +578,39 @@ struct ClaudeRateWindow {
     resets_at: Option<u64>,
 }
 
+/// A limit the usage endpoint scopes to one model (`limits[].scope.model`), such as the
+/// weekly Fable allowance. `window_id` is `"rolling"` (session, five hours) or `"weekly"`.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+struct ClaudeScopedWindow {
+    group_id: String,
+    group_label: String,
+    window_id: String,
+    used_percentage: f64,
+    resets_at: Option<u64>,
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 struct ClaudeUsageCache {
     captured_at: u64,
     five_hour: Option<ClaudeRateWindow>,
     seven_day: Option<ClaudeRateWindow>,
+    /// Only the direct lookup fills this. The status line input carries no per-model limits,
+    /// so a bridge write leaves it empty instead of pairing old values with a new capture time.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    scoped: Vec<ClaudeScopedWindow>,
 }
 
 fn claude_cache_is_stale(cache: &ClaudeUsageCache, source_is_live: bool, now: u64) -> bool {
     // A failed direct lookup must not make a recent fallback look freshly checked.
     !source_is_live || cache.captured_at > now || now.saturating_sub(cache.captured_at) > 24 * 60 * 60
+        // Per-model limits stay out of this: `claude_windows` drops an expired one instead, so
+        // an add-on value can never mark the account-wide windows stale.
+        || [&cache.five_hour, &cache.seven_day].into_iter().flatten()
+            .any(|window| window.resets_at.is_some_and(|reset| reset <= now))
+}
+
+fn claude_bridge_cache_is_stale(cache: &ClaudeUsageCache, bridge_installed: bool, now: u64) -> bool {
+    !bridge_installed || cache.captured_at > now || now.saturating_sub(cache.captured_at) > 300
         || [&cache.five_hour, &cache.seven_day].into_iter().flatten()
             .any(|window| window.resets_at.is_some_and(|reset| reset <= now))
 }
@@ -544,19 +630,17 @@ pub(crate) fn app_data_dir() -> Option<PathBuf> {
     if let Some(path) = env::var_os("LOCALAPPDATA") {
         return Some(PathBuf::from(path).join("SPECTRA"));
     }
-    env::var_os("HOME")
-        .map(PathBuf::from)
-        .map(|path| path.join(".local").join("share").join("spectra"))
+    #[cfg(target_os = "macos")]
+    return provider_home_dir().map(|path| path.join("Library/Application Support/SPECTRA"));
+    #[cfg(not(target_os = "macos"))]
+    provider_home_dir().map(|path| path.join(".local/share/spectra"))
 }
 
 fn claude_settings_path() -> Option<PathBuf> {
     if let Some(path) = env::var_os("SPECTRA_CLAUDE_SETTINGS") {
         return Some(PathBuf::from(path));
     }
-    env::var_os("USERPROFILE")
-        .or_else(|| env::var_os("HOME"))
-        .map(PathBuf::from)
-        .map(|path| path.join(".claude").join("settings.json"))
+    provider_home_dir().map(|path| path.join(".claude").join("settings.json"))
 }
 
 fn claude_cache_path() -> Option<PathBuf> {
@@ -586,10 +670,7 @@ fn claude_credentials_path() -> Option<PathBuf> {
     if let Some(path) = env::var_os(CLAUDE_CREDENTIALS_ENV) {
         return Some(PathBuf::from(path));
     }
-    env::var_os("USERPROFILE")
-        .or_else(|| env::var_os("HOME"))
-        .map(PathBuf::from)
-        .map(|path| path.join(".claude").join(".credentials.json"))
+    provider_home_dir().map(|path| path.join(".claude").join(".credentials.json"))
 }
 
 /// Modification stamp (unix milliseconds) of the file at `path`, `None` when unreadable.
@@ -718,27 +799,130 @@ pub(crate) fn parse_rfc3339_seconds(input: &str) -> Option<u64> {
     u64::try_from(seconds).ok()
 }
 
-fn parse_claude_usage_window(value: &Value) -> Option<ClaudeRateWindow> {
-    let used = value.get("utilization")?.as_f64()?.clamp(0.0, 100.0);
-    let resets_at = value.get("resets_at").and_then(|reset| {
+fn parse_claude_reset(value: &Value) -> Option<u64> {
+    value.get("resets_at").and_then(|reset| {
         reset
             .as_u64()
             .or_else(|| reset.as_str().and_then(parse_rfc3339_seconds))
-    });
+    })
+}
+
+fn parse_claude_usage_window(value: &Value) -> Option<ClaudeRateWindow> {
+    let used = value.get("utilization")?.as_f64()?.clamp(0.0, 100.0);
     Some(ClaudeRateWindow {
         used_percentage: used,
-        resets_at,
+        resets_at: parse_claude_reset(value),
     })
+}
+
+const MAX_CLAUDE_SCOPED_WINDOWS: usize = 8;
+const MAX_CLAUDE_MODEL_NAME_CHARS: usize = 40;
+
+/// Model group id for a display name: lowercase ASCII letters and digits, other runs become
+/// one hyphen (`"Fable"` → `"fable"`). `None` when nothing usable remains or the result would
+/// collide with the id the frontend gives un-grouped windows.
+fn claude_model_group_id(display_name: &str) -> Option<String> {
+    let mut id = String::new();
+    for character in display_name.chars() {
+        if character.is_ascii_alphanumeric() {
+            id.push(character.to_ascii_lowercase());
+        } else if !id.is_empty() && !id.ends_with('-') {
+            id.push('-');
+        }
+    }
+    let id = id.trim_end_matches('-');
+    (!id.is_empty() && id != "default").then(|| id.to_string())
+}
+
+/// Per-model limits from the endpoint's `limits` array (observed 2026-11-10: `kind`
+/// `weekly_scoped`, `group` `weekly`, `scope.model.display_name` `Fable`). The account-wide
+/// entries of the same array repeat `five_hour`/`seven_day` and are skipped; so is every entry
+/// whose `group` is neither `session` nor `weekly`, because its window length is unknown.
+fn parse_claude_scoped_limits(body: &Value) -> Vec<ClaudeScopedWindow> {
+    let mut scoped: Vec<ClaudeScopedWindow> = Vec::new();
+    for limit in body.get("limits").and_then(Value::as_array).into_iter().flatten() {
+        let Some(label) = limit.pointer("/scope/model/display_name").and_then(Value::as_str).map(str::trim) else { continue };
+        if label.chars().count() > MAX_CLAUDE_MODEL_NAME_CHARS || label.contains(['@', '\\', '\n', '\r']) {
+            continue;
+        }
+        let Some(group_id) = claude_model_group_id(label) else { continue };
+        let window_id = match limit.get("group").and_then(Value::as_str) {
+            Some("session") => "rolling",
+            Some("weekly") => "weekly",
+            _ => continue,
+        };
+        let Some(used) = limit.get("percent").and_then(Value::as_f64).filter(|percent| percent.is_finite()) else { continue };
+        if scoped.iter().any(|window| window.group_id == group_id && window.window_id == window_id) {
+            continue;
+        }
+        scoped.push(ClaudeScopedWindow {
+            group_id,
+            group_label: label.to_string(),
+            window_id: window_id.to_string(),
+            used_percentage: used.clamp(0.0, 100.0),
+            resets_at: parse_claude_reset(limit),
+        });
+        if scoped.len() == MAX_CLAUDE_SCOPED_WINDOWS {
+            break;
+        }
+    }
+    scoped
 }
 
 fn parse_claude_usage_response(body: &Value, now: u64) -> Option<ClaudeUsageCache> {
     let five_hour = body.get("five_hour").and_then(parse_claude_usage_window);
     let seven_day = body.get("seven_day").and_then(parse_claude_usage_window);
-    (five_hour.is_some() || seven_day.is_some()).then_some(ClaudeUsageCache {
+    (five_hour.is_some() || seven_day.is_some()).then(|| ClaudeUsageCache {
         captured_at: now,
         five_hour,
         seven_day,
+        scoped: parse_claude_scoped_limits(body),
     })
+}
+
+/// Snapshot window for one Claude limit. `window_id` is `"rolling"` (five hours) or `"weekly"`;
+/// `group` is the `(id, label)` of a per-model limit and `None` for the account-wide ones.
+fn claude_quota_window(window_id: &str, group: Option<(&str, &str)>, used_percentage: f64, resets_at: Option<u64>) -> ProviderQuotaWindow {
+    let used = used_percentage.clamp(0.0, 100.0);
+    let weekly = window_id == "weekly";
+    ProviderQuotaWindow {
+        id: if weekly { "weekly" } else { "rolling" }.to_string(),
+        model_group_id: group.map(|(id, _)| id.to_string()),
+        model_group_label: group.map(|(_, label)| label.to_string()),
+        label: if weekly { "주간 한도" } else { "5시간 한도" }.to_string(),
+        used_percent: used,
+        remaining_percent: (100.0 - used).clamp(0.0, 100.0),
+        resets_at,
+        window_duration_mins: Some(if weekly { 7 * 24 * 60 } else { 5 * 60 }),
+    }
+}
+
+/// Account-wide windows first, then the per-model ones: the strip, the tray badge and the
+/// history keys of the first two stay exactly as before. A per-model limit whose window has
+/// already reset is left out until a new lookup reports it; it is never shown as today's value
+/// and never affects the freshness of the account-wide windows.
+fn claude_windows(cache: &ClaudeUsageCache, now: u64) -> Vec<ProviderQuotaWindow> {
+    let mut windows = Vec::new();
+    if let Some(window) = &cache.five_hour {
+        windows.push(claude_quota_window("rolling", None, window.used_percentage, window.resets_at));
+    }
+    if let Some(window) = &cache.seven_day {
+        windows.push(claude_quota_window("weekly", None, window.used_percentage, window.resets_at));
+    }
+    // The cache file is user-writable; accept only the two window ids the snapshot knows.
+    for window in cache.scoped.iter()
+        .filter(|window| matches!(window.window_id.as_str(), "rolling" | "weekly"))
+        .filter(|window| !window.resets_at.is_some_and(|reset| reset <= now))
+        .take(MAX_CLAUDE_SCOPED_WINDOWS)
+    {
+        windows.push(claude_quota_window(
+            &window.window_id,
+            Some((&window.group_id, &window.group_label)),
+            window.used_percentage,
+            window.resets_at,
+        ));
+    }
+    windows
 }
 
 fn fetch_claude_usage_live(token: &str) -> Result<ClaudeUsageCache, String> {
@@ -1042,6 +1226,9 @@ fn claude_snapshot() -> ProviderUsageSnapshot {
     let login = claude_credentials_path()
         .ok_or_else(|| "claude-credentials-path-unavailable".to_string())
         .and_then(|path| read_claude_oauth_at(&path, unix_now_millis()));
+    // Claude Code normally keeps macOS credentials in Keychain. Do not copy or read
+    // those secrets: verify login through the CLI and consume its official status line.
+    let bridge_is_primary = cfg!(target_os = "macos") && login.is_err();
     let (auth_method, plan_type, live_result) = match login {
         // The credentials file already says signed in through Claude.ai and names the plan,
         // so no CLI start is needed on this two-minute path.
@@ -1083,7 +1270,7 @@ fn claude_snapshot() -> ProviderUsageSnapshot {
             Ok(Some(status)) => (status.auth_method, status.subscription_type, Err(reason)),
         },
     };
-    let live_error = live_result.as_ref().err().cloned();
+    let live_error = if bridge_is_primary { None } else { live_result.as_ref().err().cloned() };
     let source_is_live = live_result.is_ok();
     let cache = match live_result {
         Ok(fresh) => {
@@ -1102,33 +1289,12 @@ fn claude_snapshot() -> ProviderUsageSnapshot {
     if let Some(cache) = cache {
         captured_at = Some(cache.captured_at);
         let now = unix_now();
-        stale = claude_cache_is_stale(&cache, source_is_live, now);
-        if let Some(window) = cache.five_hour {
-            let used = window.used_percentage.clamp(0.0, 100.0);
-            windows.push(ProviderQuotaWindow {
-                id: "rolling".to_string(),
-                model_group_id: None,
-                model_group_label: None,
-                label: "5시간 한도".to_string(),
-                used_percent: used,
-                remaining_percent: (100.0 - used).clamp(0.0, 100.0),
-                resets_at: window.resets_at,
-                window_duration_mins: Some(5 * 60),
-            });
-        }
-        if let Some(window) = cache.seven_day {
-            let used = window.used_percentage.clamp(0.0, 100.0);
-            windows.push(ProviderQuotaWindow {
-                id: "weekly".to_string(),
-                model_group_id: None,
-                model_group_label: None,
-                label: "주간 한도".to_string(),
-                used_percent: used,
-                remaining_percent: (100.0 - used).clamp(0.0, 100.0),
-                resets_at: window.resets_at,
-                window_duration_mins: Some(7 * 24 * 60),
-            });
-        }
+        stale = if bridge_is_primary {
+            claude_bridge_cache_is_stale(&cache, bridge_installed, now)
+        } else {
+            claude_cache_is_stale(&cache, source_is_live, now)
+        };
+        windows = claude_windows(&cache, now);
     }
     let has_usage = !windows.is_empty();
     let connection_state = if has_usage && stale {
@@ -1274,11 +1440,21 @@ pub fn start_login(provider_id: &str) -> ProviderActionResult {
     }
 }
 
+fn claude_bridge_command(executable: &Path) -> Result<String, String> {
+    let executable = executable.to_str().filter(|path| !path.contains(['\0', '\n', '\r']))
+        .ok_or_else(|| "claude-executable-path-invalid".to_string())?;
+    #[cfg(target_os = "windows")]
+    { Ok(format!("\"{}\" {CLAUDE_BRIDGE_FLAG}", executable.replace('"', ""))) }
+    #[cfg(not(target_os = "windows"))]
+    { Ok(format!("'{}' {CLAUDE_BRIDGE_FLAG}", executable.replace('\'', "'\"'\"'"))) }
+}
+
 fn install_claude_bridge_at(
     settings_path: &Path,
     bridge_config_path: &Path,
     executable: &Path,
 ) -> Result<(), String> {
+    let command = claude_bridge_command(executable)?;
     let mut settings = if settings_path.exists() {
         read_json(settings_path)?
     } else {
@@ -1294,10 +1470,15 @@ fn install_claude_bridge_at(
         .and_then(Value::as_str)
         .is_some_and(|command| command.contains(CLAUDE_BRIDGE_FLAG))
     {
-        return bridge_config_path
-            .is_file()
-            .then_some(())
-            .ok_or_else(|| "claude-bridge-config-missing".to_string());
+        // Reconnecting after moving a macOS .app must update its absolute path while
+        // preserving the original user status line stored in the first backup.
+        let _: ClaudeBridgeConfig = serde_json::from_value(read_json(bridge_config_path)
+            .map_err(|_| "claude-bridge-config-missing".to_string())?)
+            .map_err(|_| "claude-bridge-config-invalid".to_string())?;
+        settings_object.get_mut("statusLine").and_then(Value::as_object_mut)
+            .ok_or_else(|| "claude-statusline-invalid".to_string())?
+            .insert("command".to_string(), Value::String(command));
+        return write_json(settings_path, &settings);
     }
     if previous
         .as_ref()
@@ -1319,10 +1500,6 @@ fn install_claude_bridge_at(
         &serde_json::to_value(bridge_config).map_err(|_| "bridge-config-invalid".to_string())?,
     )?;
 
-    let command = format!(
-        "\"{}\" {CLAUDE_BRIDGE_FLAG}",
-        executable.to_string_lossy().replace('"', "")
-    );
     let mut status_line = previous
         .and_then(|value| value.as_object().cloned())
         .unwrap_or_default();
@@ -1448,6 +1625,7 @@ fn extract_claude_cache(input: &Value) -> Option<ClaudeUsageCache> {
         captured_at: unix_now(),
         five_hour,
         seven_day,
+        scoped: Vec::new(),
     })
 }
 
@@ -1568,6 +1746,108 @@ mod tests {
     }
 
     #[test]
+    fn mac_finder_search_adds_native_and_homebrew_paths_without_shell_startup() {
+        let home = temp_dir("mac-home");
+        let explicit = home.join("explicit/bin");
+        let native = home.join(".local/bin");
+        let directories = mac_command_directories(vec![explicit.clone(), native.clone(), PathBuf::from("relative")], Some(&home));
+        assert_eq!(&directories[..2], &[explicit, native.clone()]);
+        assert_eq!(directories.iter().filter(|path| **path == native).count(), 1);
+        assert!(!directories.contains(&PathBuf::from("relative")));
+        for path in ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"] {
+            assert!(directories.contains(&PathBuf::from(path)));
+        }
+        assert!(mac_command_directories(Vec::new(), None).contains(&PathBuf::from("/usr/bin")));
+        fs::remove_dir_all(home).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn mac_finder_search_finds_nvm_cli_with_newest_version_first() {
+        use std::os::unix::fs::PermissionsExt;
+        let home = temp_dir("mac-nvm");
+        let nvm = home.join(".nvm/versions/node");
+        for version in ["v9.0.0", "v24.2.0", "v24.14.1", "not-a-version"] {
+            fs::create_dir_all(nvm.join(version).join("bin")).unwrap();
+        }
+        let explicit = home.join("explicit/bin");
+        let directories = mac_command_directories(vec![explicit.clone()], Some(&home));
+        assert_eq!(directories[0], explicit, "an explicit PATH keeps precedence");
+        let nvm_order: Vec<_> = directories.iter().filter(|path| path.starts_with(&nvm)).cloned().collect();
+        assert_eq!(nvm_order, ["v24.14.1", "v24.2.0", "v9.0.0"].map(|version| nvm.join(version).join("bin")));
+
+        let codex = nvm.join("v24.2.0/bin/codex");
+        fs::write(&codex, "#!/bin/sh\n").unwrap();
+        fs::set_permissions(&codex, fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(resolve_unix_command("codex", &directories).unwrap().path, codex);
+        fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn mac_claude_statusline_freshness_uses_capture_time_and_reset_boundary() {
+        let mut cache = ClaudeUsageCache {
+            captured_at: 1_000,
+            five_hour: Some(ClaudeRateWindow { used_percentage: 20.0, resets_at: Some(2_000) }),
+            seven_day: None,
+            scoped: Vec::new(),
+        };
+        assert!(!claude_bridge_cache_is_stale(&cache, true, 1_300));
+        assert!(claude_bridge_cache_is_stale(&cache, true, 1_301));
+        assert!(claude_bridge_cache_is_stale(&cache, false, 1_100));
+        assert!(claude_bridge_cache_is_stale(&cache, true, 999));
+        cache.captured_at = 1_950;
+        assert!(claude_bridge_cache_is_stale(&cache, true, 2_000));
+        assert!(claude_cache_is_stale(&cache, false, 1_951), "failed direct lookups keep their original stale semantics");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_cli_lookup_skips_non_executables_and_follows_native_symlinks() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+        let root = temp_dir("unix-command-resolution");
+        let first = root.join("first");
+        let second = root.join("second");
+        fs::create_dir_all(&first).unwrap();
+        fs::create_dir_all(&second).unwrap();
+        fs::write(first.join("claude"), b"not executable").unwrap();
+        fs::set_permissions(first.join("claude"), fs::Permissions::from_mode(0o644)).unwrap();
+        let binary = root.join("native-cli");
+        fs::write(&binary, b"#!/bin/sh\nexit 0\n").unwrap();
+        fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).unwrap();
+        symlink(&binary, second.join("claude")).unwrap();
+        let resolved = resolve_unix_command("claude", &[first, second.clone()]).unwrap();
+        assert_eq!(resolved.path, second.join("claude"));
+        assert!(resolved.command(&[]).status().unwrap().success());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn mac_cli_child_receives_the_same_finder_fallback_search_path() {
+        let spec = CommandSpec { path: PathBuf::from("/opt/homebrew/bin/codex"), kind: CommandKind::Direct };
+        let command = spec.command(&["app-server"]);
+        let child_path = command.get_envs().find(|(name, _)| *name == "PATH").and_then(|(_, value)| value).unwrap();
+        let paths: Vec<_> = env::split_paths(child_path).collect();
+        assert!(paths.contains(&PathBuf::from("/opt/homebrew/bin")));
+        assert!(paths.contains(&PathBuf::from("/usr/local/bin")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_claude_bridge_preserves_unicode_spaces_and_shell_metacharacters() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = temp_dir("한글 user's $(printf BAD) `printf BAD`");
+        let executable = root.join("spectra-native");
+        fs::write(&executable, b"#!/bin/sh\nprintf '%s\\n' \"$1\"\ncat\n").unwrap();
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o755)).unwrap();
+        let mut shell = Command::new("/bin/sh");
+        shell.args(["-c", &claude_bridge_command(&executable).unwrap()]);
+        let output = run_statusline_command(&mut shell, "한글 입력".as_bytes()).unwrap();
+        assert_eq!(output, format!("{CLAUDE_BRIDGE_FLAG}\n한글 입력"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn modified_stamp_tracks_rewrites_and_missing_files() {
         let dir = temp_dir("stamp");
         let path = dir.join("credentials.json");
@@ -1661,6 +1941,7 @@ mod tests {
             captured_at: 1_000,
             five_hour: Some(ClaudeRateWindow { used_percentage: 20.0, resets_at: Some(1_200) }),
             seven_day: None,
+            scoped: Vec::new(),
         };
         assert!(!claude_cache_is_stale(&cache, true, 1_100));
         assert!(claude_cache_is_stale(&cache, false, 1_100));
@@ -1701,6 +1982,137 @@ mod tests {
     fn claude_usage_response_without_any_window_is_rejected() {
         assert!(parse_claude_usage_response(&json!({ "extra_usage": {} }), 1).is_none());
         assert!(parse_claude_usage_response(&json!("nope"), 1).is_none());
+    }
+
+    /// Shape observed from the usage endpoint on 2026-11-10 (Max plan), trimmed to the fields
+    /// the parser reads plus a few it must ignore.
+    fn claude_usage_sample() -> Value {
+        json!({
+            "five_hour": { "utilization": 19, "resets_at": "2026-11-10T04:20:00.015802+00:00", "limit_dollars": null },
+            "seven_day": { "utilization": 26, "resets_at": "2026-11-15T14:00:00.015823+00:00", "locked_reason": null },
+            "seven_day_opus": null,
+            "extra_usage": { "is_enabled": false },
+            "limits": [
+                { "kind": "session", "group": "session", "percent": 19, "severity": "normal",
+                  "resets_at": "2026-11-10T04:20:00.015802+00:00", "scope": null, "is_active": false },
+                { "kind": "weekly_all", "group": "weekly", "percent": 26, "severity": "normal",
+                  "resets_at": "2026-11-15T14:00:00.015823+00:00", "scope": null, "is_active": true },
+                { "kind": "weekly_scoped", "group": "weekly", "percent": 10, "severity": "normal",
+                  "resets_at": "2026-11-15T14:00:00.015949+00:00",
+                  "scope": { "model": { "id": null, "display_name": "Fable" }, "surface": null }, "is_active": false }
+            ],
+            "weekly_scoped_shares": [{ "limit_index": 2, "used_percent_of_weekly": 5, "allowance_percent_of_weekly": 50 }]
+        })
+    }
+
+    #[test]
+    fn claude_usage_response_adds_the_per_model_limit_after_the_account_wide_windows() {
+        let now = 1_794_270_000;
+        let cache = parse_claude_usage_response(&claude_usage_sample(), now).unwrap();
+        assert_eq!(cache.scoped, vec![ClaudeScopedWindow {
+            group_id: "fable".into(), group_label: "Fable".into(), window_id: "weekly".into(),
+            used_percentage: 10.0, resets_at: Some(1_794_751_200),
+        }]);
+
+        let windows = claude_windows(&cache, now);
+        let summary: Vec<_> = windows.iter()
+            .map(|w| (w.id.as_str(), w.model_group_id.as_deref(), w.model_group_label.as_deref(), w.label.as_str(), w.remaining_percent, w.resets_at, w.window_duration_mins))
+            .collect();
+        assert_eq!(summary, vec![
+            ("rolling", None, None, "5시간 한도", 81.0, Some(1_794_284_400), Some(300)),
+            ("weekly", None, None, "주간 한도", 74.0, Some(1_794_751_200), Some(10_080)),
+            ("weekly", Some("fable"), Some("Fable"), "주간 한도", 90.0, Some(1_794_751_200), Some(10_080)),
+        ]);
+        assert!(!claude_cache_is_stale(&cache, true, now));
+    }
+
+    #[test]
+    fn claude_usage_response_without_per_model_limits_keeps_the_two_windows() {
+        for limits in [json!(null), json!("nope"), json!([]), json!([{ "kind": "weekly_all", "group": "weekly", "percent": 26, "scope": null }])] {
+            let mut body = claude_usage_sample();
+            body["limits"] = limits;
+            let cache = parse_claude_usage_response(&body, 1).unwrap();
+            assert!(cache.scoped.is_empty());
+            let windows = claude_windows(&cache, 1);
+            assert_eq!(windows.iter().map(|w| (w.id.as_str(), w.model_group_id.is_none())).collect::<Vec<_>>(),
+                vec![("rolling", true), ("weekly", true)]);
+        }
+        let mut body = claude_usage_sample();
+        body.as_object_mut().unwrap().remove("limits");
+        assert!(parse_claude_usage_response(&body, 1).unwrap().scoped.is_empty());
+    }
+
+    #[test]
+    fn claude_per_model_limits_accept_a_session_window_and_reject_what_cannot_be_labelled() {
+        let scoped = |name: Value, group: &str, percent: Value| json!({
+            "kind": "x", "group": group, "percent": percent, "resets_at": 2_000,
+            "scope": { "model": { "id": null, "display_name": name } }
+        });
+        let body = json!({ "limits": [
+            scoped(json!("Fable"), "session", json!(140)),          // a five-hour per-model limit, clamped
+            scoped(json!("Fable"), "weekly", json!(10.5)),
+            scoped(json!("Fable"), "weekly", json!(99)),            // duplicate (group, window): first wins
+            scoped(json!("Opus 5.5"), "weekly", json!(-3)),
+            scoped(json!("Fable"), "monthly", json!(1)),            // unknown window length
+            scoped(json!(""), "weekly", json!(1)),                  // no name
+            scoped(json!("한글"), "weekly", json!(1)),              // no ASCII id
+            scoped(json!("Default"), "weekly", json!(1)),           // reserved id of un-grouped windows
+            scoped(json!("a@b"), "weekly", json!(1)),               // looks like an account
+            scoped(json!("x".repeat(41)), "weekly", json!(1)),      // too long
+            scoped(json!(7), "weekly", json!(1)),                   // name is not text
+            scoped(json!("Sonnet"), "weekly", json!("12")),         // percent is not a number
+            { "group": "weekly", "percent": 5, "scope": { "surface": "cowork", "model": null } }
+        ] });
+        let parsed = parse_claude_scoped_limits(&body);
+        assert_eq!(parsed.iter().map(|w| (w.group_id.as_str(), w.group_label.as_str(), w.window_id.as_str(), w.used_percentage, w.resets_at)).collect::<Vec<_>>(), vec![
+            ("fable", "Fable", "rolling", 100.0, Some(2_000)),
+            ("fable", "Fable", "weekly", 10.5, Some(2_000)),
+            ("opus-5-5", "Opus 5.5", "weekly", 0.0, Some(2_000)),
+        ]);
+        let cache = ClaudeUsageCache { captured_at: 1_000, five_hour: None, seven_day: None, scoped: parsed };
+        let windows = claude_windows(&cache, 1_000);
+        assert_eq!(windows[0].label, "5시간 한도");
+        assert_eq!(windows[0].window_duration_mins, Some(300));
+        assert_eq!(windows[0].model_group_id.as_deref(), Some("fable"));
+
+        let many = json!({ "limits": (0..20).map(|index| scoped(json!(format!("Model {index}")), "weekly", json!(1))).collect::<Vec<_>>() });
+        assert_eq!(parse_claude_scoped_limits(&many).len(), MAX_CLAUDE_SCOPED_WINDOWS);
+    }
+
+    #[test]
+    fn expired_per_model_limit_is_dropped_without_marking_the_account_wide_windows_stale() {
+        let mut cache = parse_claude_usage_response(&claude_usage_sample(), 1_794_270_000).unwrap();
+        cache.scoped[0].resets_at = Some(1_794_270_100);
+        let now = 1_794_270_100;
+        assert!(!claude_cache_is_stale(&cache, true, now));
+        assert_eq!(claude_windows(&cache, now).len(), 2);
+        assert_eq!(claude_windows(&cache, now - 1).len(), 3);
+        // A limit without a reset time stays; a cache edited to carry an unknown window id does not.
+        cache.scoped[0].resets_at = None;
+        assert_eq!(claude_windows(&cache, now).len(), 3);
+        cache.scoped[0].window_id = "monthly".into();
+        assert_eq!(claude_windows(&cache, now).len(), 2);
+    }
+
+    #[test]
+    fn claude_cache_file_stays_compatible_with_and_without_per_model_limits() {
+        // A cache written by v0.3.4 or by the status line bridge has no `scoped` key.
+        let old: ClaudeUsageCache = serde_json::from_value(json!({
+            "captured_at": 1_794_271_305u64,
+            "five_hour": { "resets_at": 1_794_284_399u64, "used_percentage": 18.0 },
+            "seven_day": { "resets_at": 1_794_751_199u64, "used_percentage": 26.0 }
+        })).unwrap();
+        assert!(old.scoped.is_empty());
+        assert_eq!(claude_windows(&old, 1_794_271_305).len(), 2);
+        assert!(serde_json::to_value(&old).unwrap().get("scoped").is_none());
+
+        let bridge = extract_claude_cache(&json!({ "rate_limits": {
+            "five_hour": { "used_percentage": 23.5, "resets_at": 1_800_000_000u64 } } })).unwrap();
+        assert!(bridge.scoped.is_empty());
+
+        let live = parse_claude_usage_response(&claude_usage_sample(), 1).unwrap();
+        let round_trip: ClaudeUsageCache = serde_json::from_value(serde_json::to_value(&live).unwrap()).unwrap();
+        assert_eq!(round_trip.scoped, live.scoped);
     }
 
     #[test]
@@ -1891,6 +2303,24 @@ mod tests {
     }
 
     #[test]
+    fn reconnecting_claude_after_app_move_rebinds_without_replacing_backup() {
+        let root = temp_dir("bridge-rebind");
+        let settings = root.join("settings.json");
+        let bridge = root.join("bridge.json");
+        let original = json!({"statusLine":{"type":"command","command":"original","padding":2}});
+        write_json(&settings, &original).unwrap();
+        install_claude_bridge_at(&settings, &bridge, &root.join("Downloads/SPECTRA.app/Contents/MacOS/spectra-native")).unwrap();
+        let original_backup = read_json(&bridge).unwrap();
+        let installed = root.join("Applications/SPECTRA.app/Contents/MacOS/spectra-native");
+        install_claude_bridge_at(&settings, &bridge, &installed).unwrap();
+        assert_eq!(read_json(&bridge).unwrap(), original_backup);
+        assert_eq!(read_json(&settings).unwrap()["statusLine"]["command"], claude_bridge_command(&installed).unwrap());
+        remove_claude_bridge_at(&settings, &bridge).unwrap();
+        assert_eq!(read_json(&settings).unwrap(), original);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn bridge_remove_does_not_overwrite_a_newer_user_statusline() {
         let root = temp_dir("bridge-user-change");
         let settings = root.join("settings.json");
@@ -1953,7 +2383,6 @@ mod tests {
         assert_eq!(args, [OsStr::new("app-server"), OsStr::new("--stdio")]);
     }
 
-    #[cfg(target_os = "windows")]
     #[test]
     fn command_io_fixture() {
         let Ok(mode) = env::var("SPECTRA_TEST_IO_MODE") else { return };
@@ -1976,7 +2405,6 @@ mod tests {
         std::process::exit(0);
     }
 
-    #[cfg(target_os = "windows")]
     fn io_fixture_command(mode: &str) -> Command {
         let mut command = Command::new(env::current_exe().unwrap());
         command.args(["--exact", "provider_usage::tests::command_io_fixture", "--nocapture"]);
@@ -1985,7 +2413,6 @@ mod tests {
         command
     }
 
-    #[cfg(target_os = "windows")]
     #[test]
     fn output_with_timeout_bounds_inherited_stdout() {
         let mut child = io_fixture_command("inherit-stdout")
@@ -1998,7 +2425,6 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(2));
     }
 
-    #[cfg(target_os = "windows")]
     #[test]
     fn previous_statusline_times_out_when_stdin_is_not_consumed() {
         let started = Instant::now();
@@ -2010,7 +2436,6 @@ mod tests {
         assert!(started.elapsed() < Duration::from_millis(3500), "stdin exceeded the two-second deadline: {:?}", started.elapsed());
     }
 
-    #[cfg(target_os = "windows")]
     #[test]
     fn previous_statusline_sends_input_while_draining_stdout() {
         let output = run_statusline_command(

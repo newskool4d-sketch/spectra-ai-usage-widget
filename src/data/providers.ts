@@ -89,7 +89,8 @@ export const planQuotas: Readonly<Record<ProviderId, PlanQuota>> = Object.freeze
     statusMessage: "설치된 앱에서 Claude 한도를 확인합니다.",
     windows: Object.freeze([
       exampleWindow("rolling", 32, "3시간 42분 후"),
-      exampleWindow("weekly", 49, "4일 2시간 후")
+      exampleWindow("weekly", 49, "4일 2시간 후"),
+      exampleWindow("weekly", 77, "4일 2시간 후", "fable", "Fable")
     ] as const)
   },
   antigravity: {

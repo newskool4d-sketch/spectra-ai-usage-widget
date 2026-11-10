@@ -2,7 +2,7 @@ use tauri::menu::MenuBuilder;
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{App, AppHandle, LogicalSize, Manager, Runtime, Size, WebviewWindow};
 use std::sync::atomic::{AtomicBool, Ordering};
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::image::Image;
 
@@ -86,10 +86,92 @@ fn present<R: Runtime>(window: &WebviewWindow<R>, mode: WindowMode) -> tauri::Re
         window.unminimize()?;
     }
 
+    #[cfg(target_os = "macos")]
+    {
+        apply_window_theme(window.app_handle());
+        let positioned = mode == WindowMode::Mini && position_below_menu_bar(window, profile).unwrap_or_else(|error| {
+            eprintln!("spectra: menu bar positioning unavailable: {error}");
+            false
+        });
+        if !positioned {
+            center_for_profile(window, profile)?;
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
     window.center()?;
     window.show()?;
     window.set_focus()?;
     window.eval(&mode_script(mode))
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn apply_window_theme<R: Runtime>(app: &AppHandle<R>) {
+    if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
+        let theme = app.state::<crate::AppState>().ui.lock()
+            .map(|prefs| crate::standby::native_theme(&prefs.theme))
+            .unwrap_or(tauri::Theme::Dark);
+        let _ = window.set_theme(Some(theme));
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn position_below_menu_bar<R: Runtime>(window: &WebviewWindow<R>, target: WindowProfile) -> tauri::Result<bool> {
+    use crate::macos_menu::{logical_anchor, ScreenRect};
+    let app = window.app_handle();
+    let Some(tray) = app.tray_by_id(TRAY_ID) else { return Ok(false) };
+    let Some(rect) = tray.rect()? else { return Ok(false) };
+    // tray-icon returns physical coordinates, while macOS monitor_from_point expects
+    // logical points. Match physical monitor rectangles, rejecting mixed-DPI ambiguity.
+    let point = rect.position.to_physical::<f64>(1.0);
+    let size = rect.size.to_physical::<f64>(1.0);
+    let monitors = app.available_monitors()?;
+    let bounds = monitors.iter().map(|monitor| (
+        ScreenRect { x: monitor.position().x as f64, y: monitor.position().y as f64, width: monitor.size().width as f64, height: monitor.size().height as f64 },
+        monitor.scale_factor(),
+    )).collect::<Vec<_>>();
+    let Some((index, anchor)) = logical_anchor(ScreenRect { x: point.x, y: point.y, width: size.width, height: size.height }, &bounds) else { return Ok(false) };
+    position_on_monitor(window, target, &monitors[index], Some(anchor))?;
+    Ok(true)
+}
+
+#[cfg(target_os = "macos")]
+fn center_for_profile<R: Runtime>(window: &WebviewWindow<R>, target: WindowProfile) -> tauri::Result<()> {
+    let monitor = window.current_monitor()?.or(window.primary_monitor()?);
+    match monitor {
+        Some(monitor) => position_on_monitor(window, target, &monitor, None),
+        None => window.center(),
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn position_on_monitor<R: Runtime>(
+    window: &WebviewWindow<R>, target: WindowProfile, monitor: &tauri::Monitor,
+    anchor: Option<crate::macos_menu::ScreenRect>,
+) -> tauri::Result<()> {
+    use crate::macos_menu::{anchored_position, ScreenRect};
+    let scale = monitor.scale_factor();
+    let work = monitor.work_area();
+    let work_position = work.position.to_logical::<f64>(scale);
+    let work_size = work.size.to_logical::<f64>(scale);
+    let current_scale = window.scale_factor()?;
+    let outer = window.outer_size()?.to_logical::<f64>(current_scale);
+    let inner = window.inner_size()?.to_logical::<f64>(current_scale);
+    // Cocoa applies set_size asynchronously. Use the requested mini profile, not the
+    // still-visible dashboard size, and read current geometry only for decorations.
+    let frame_width = (outer.width - inner.width).max(0.0);
+    let frame_height = (outer.height - inner.height).max(0.0);
+    let width = target.width.min((work_size.width - frame_width).max(1.0));
+    let height = target.height.min((work_size.height - frame_height).max(1.0));
+    window.set_min_size(Some(LogicalSize::new(380.0_f64.min(width), 600.0_f64.min(height))))?;
+    window.set_size(LogicalSize::new(width, height))?;
+    let work = ScreenRect { x: work_position.x, y: work_position.y, width: work_size.width, height: work_size.height };
+    let (x, y) = match anchor {
+        Some(anchor) => anchored_position(anchor, work, width + frame_width, height + frame_height, 6.0),
+        None => ((work.x + (work.width - width - frame_width) / 2.0).round() as i32,
+                 (work.y + (work.height - height - frame_height) / 2.0).round() as i32),
+    };
+    // Using logical coordinates avoids Tao dividing by the previous monitor's scale.
+    window.set_position(tauri::LogicalPosition::new(x, y))
 }
 
 fn recreate_and_present<R: Runtime>(app: &AppHandle<R>, mode: WindowMode) -> tauri::Result<()> {
@@ -176,6 +258,7 @@ fn hide_main_window<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     Ok(())
 }
 
+#[cfg(not(target_os = "macos"))]
 fn toggle_main_window<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) else {
         return show_main_window(app, stored_mode(app));
@@ -186,6 +269,18 @@ fn toggle_main_window<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     } else {
         show_main_window(app, stored_mode(app))
     }
+}
+
+#[cfg(target_os = "macos")]
+fn toggle_main_window<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
+    if stored_mode(app) == WindowMode::Mini {
+        if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
+            if window.is_visible()? && !window.is_minimized()? {
+                return dismiss(&window, standby_enabled(app));
+            }
+        }
+    }
+    show_main_window(app, WindowMode::Mini)
 }
 
 pub(crate) fn install<R: Runtime>(app: &mut App<R>) -> tauri::Result<()> {
@@ -226,6 +321,12 @@ pub(crate) fn install<R: Runtime>(app: &mut App<R>) -> tauri::Result<()> {
             }
         });
 
+    #[cfg(target_os = "macos")]
+    {
+        tray = tray.icon(Image::new_owned(crate::macos_menu::template_icon(), crate::macos_menu::ICON_SIZE, crate::macos_menu::ICON_SIZE))
+            .icon_as_template(true);
+    }
+    #[cfg(not(target_os = "macos"))]
     if let Some(icon) = app.default_window_icon().cloned() {
         tray = tray.icon(icon);
     }
@@ -237,6 +338,7 @@ pub(crate) fn install<R: Runtime>(app: &mut App<R>) -> tauri::Result<()> {
 const TRAY_ID: &str = "spectra-main";
 const TRAY_TOOLTIP: &str = "SPECTRA · 개인 요금제 사용 현황";
 
+#[cfg(not(target_os = "macos"))]
 pub(crate) fn update_tray_badge<R: Runtime>(app: &AppHandle<R>) {
     let Some(tray) = app.tray_by_id(TRAY_ID) else { return };
     let snapshots = app
@@ -256,6 +358,23 @@ pub(crate) fn update_tray_badge<R: Runtime>(app: &AppHandle<R>) {
             let _ = tray.set_tooltip(Some(TRAY_TOOLTIP));
         }
     }
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn update_tray_badge<R: Runtime>(app: &AppHandle<R>) {
+    let current = app.clone();
+    // Reconcile from current state on the main thread, so an earlier provider callback
+    // cannot restore the title after a newer preference toggle has turned it off.
+    let _ = app.run_on_main_thread(move || {
+        let Some(tray) = current.tray_by_id(TRAY_ID) else { return };
+        let state = current.state::<crate::AppState>();
+        let enabled = state.ui.lock().map(|prefs| prefs.strip).unwrap_or(true);
+        let snapshots = state.last_snapshots.lock().map(|list| list.clone()).unwrap_or_default();
+        let model = crate::macos_menu::build_model(&snapshots, crate::provider_usage::unix_now());
+        // Keep the template icon installed; AppKit renders it for the system appearance.
+        let _ = tray.set_title(Some(if enabled { model.title.as_str() } else { "" }));
+        let _ = tray.set_tooltip(Some(model.tooltip));
+    });
 }
 
 /// Uses only the latest cached snapshots. Closing the WebView leaves this native window alive.
@@ -291,7 +410,7 @@ pub(crate) fn update_taskbar_strip<R: Runtime>(app: &AppHandle<R>) {
 /// Periodic provider refresh while the strip is visible: two-minute cadence, the Claude reset
 /// boundary, an immediate retry when Claude Code rewrites its credentials, exponential backoff
 /// on failures, including an OAuth token that stays expired (spec 2026-09-18 §2-3).
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 pub(crate) fn ensure_usage_refresh_loop(app: &AppHandle) {
     let state = app.state::<crate::AppState>();
     if !state.ui.lock().map(|prefs| prefs.strip).unwrap_or(false) {
@@ -348,12 +467,12 @@ pub(crate) fn ensure_usage_refresh_loop(app: &AppHandle) {
     }
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 fn unix_now() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 fn claude_reset_due(snapshots: &[crate::provider_usage::ProviderUsageSnapshot], now: u64) -> bool {
     snapshots
         .iter()
@@ -361,7 +480,12 @@ fn claude_reset_due(snapshots: &[crate::provider_usage::ProviderUsageSnapshot], 
         .is_some_and(|snapshot| snapshot.windows.iter().any(|window| window.resets_at.is_some_and(|reset| reset <= now)))
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
+pub(crate) fn update_taskbar_strip<R: Runtime>(app: &AppHandle<R>) {
+    update_tray_badge(app);
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 pub(crate) fn update_taskbar_strip<R: Runtime>(_app: &AppHandle<R>) {}
 
 #[cfg(test)]
@@ -419,7 +543,7 @@ mod tests {
         assert!(try_begin_recreate(&flag));
     }
 
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
     #[test]
     fn claude_reset_refresh_starts_only_after_a_window_reset() {
         let snapshot = crate::provider_usage::ProviderUsageSnapshot {

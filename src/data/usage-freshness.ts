@@ -28,7 +28,8 @@ export function claudeFreshness(quota: PlanQuota, now: number): Readonly<{ label
   let label: string;
   const captured = quota.lastSyncedAtMs;
   const hasUsage = quota.confidence === "verified" && quota.windows.length > 0;
-  const expired = quota.windows.some(window => window.resetsAt != null && window.resetsAt <= now);
+  // 모델별 한도는 계정 전체 한도의 신선도 판정에 쓰지 않는다(taskbar_strip::claude_status와 같은 기준).
+  const expired = quota.windows.some(window => !window.modelGroupId && window.resetsAt != null && window.resetsAt <= now);
   const capturedRecently = captured != null && Number.isFinite(captured) && captured <= now && now - captured <= 86_400_000;
 
   if (quota.source === "example") label = "브라우저 데모";

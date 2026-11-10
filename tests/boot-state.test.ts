@@ -10,6 +10,22 @@ const snapshot = {
 };
 
 describe("parseBootState", () => {
+  it("preserves platform and both themes across mini and dashboard restoration", () => {
+    for (const platform of ["windows", "macos", "linux"]) {
+      for (const theme of ["light", "dark"]) {
+        for (const mode of ["mini", "dashboard"]) {
+          const boot = parseBootState({ platform, theme, mode, solid: false, standby: true, strip: true, snapshots: [snapshot] });
+          assert.equal(boot?.platform, platform);
+          assert.equal(boot?.theme, theme);
+          assert.equal(boot?.mode, mode);
+          assert.equal(boot?.strip, true);
+        }
+      }
+    }
+    for (const platform of [undefined, null, "darwin", 1]) {
+      assert.equal(parseBootState({ platform, theme: "dark", mode: "mini", solid: false, standby: false, snapshots: [] })?.platform, "unknown");
+    }
+  });
   it("defaults strip to false for absent or non-boolean values", () => {
     for (const strip of [undefined, null, "true", 1]) {
       const boot = parseBootState({ theme: "dark", solid: false, standby: true, strip, mode: "mini", snapshots: [snapshot] });

@@ -24,12 +24,17 @@ pub struct UiPrefs {
 
 impl Default for UiPrefs {
     fn default() -> Self {
-        Self { theme: "dark".to_string(), solid: false, standby: false, strip: false }
+        Self { theme: "dark".to_string(), solid: false, standby: false, strip: cfg!(target_os = "macos") }
     }
 }
 
 pub fn normalize_theme(raw: &str) -> &'static str {
     if raw == "light" { "light" } else { "dark" }
+}
+
+#[cfg(target_os = "macos")]
+pub fn native_theme(raw: &str) -> tauri::Theme {
+    if normalize_theme(raw) == "light" { tauri::Theme::Light } else { tauri::Theme::Dark }
 }
 
 pub fn prefs_path() -> Option<PathBuf> {
@@ -106,6 +111,7 @@ pub fn save_prefs(prefs: &UiPrefs) -> std::io::Result<()> {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BootState {
+    pub platform: &'static str,
     pub theme: String,
     pub solid: bool,
     pub standby: bool,
@@ -136,15 +142,17 @@ pub fn create_main_window<R: Runtime>(
 ) -> tauri::Result<WebviewWindow<R>> {
     let profile = mode.profile();
     let started = std::time::Instant::now();
-    let window = WebviewWindowBuilder::new(app, MAIN_WINDOW_LABEL, WebviewUrl::App("index.html".into()))
+    let builder = WebviewWindowBuilder::new(app, MAIN_WINDOW_LABEL, WebviewUrl::App("index.html".into()))
         .title(WINDOW_TITLE)
         .inner_size(profile.width, profile.height)
         .min_inner_size(380.0, 600.0)
         .resizable(true)
         .center()
         .always_on_top(profile.always_on_top)
-        .initialization_script(&boot_script(boot))
-        .build()?;
+        .initialization_script(&boot_script(boot));
+    #[cfg(target_os = "macos")]
+    let builder = builder.theme(Some(native_theme(&boot.theme))).visible(false);
+    let window = builder.build()?;
     log_timing("create_main_window", started.elapsed());
     Ok(window)
 }
@@ -208,8 +216,8 @@ mod tests {
     }
 
     #[test]
-    fn strip_defaults_to_off_and_round_trips() {
-        assert!(!UiPrefs::default().strip);
+    fn strip_defaults_to_platform_choice_and_round_trips() {
+        assert_eq!(UiPrefs::default().strip, cfg!(target_os = "macos"));
         let path = temp_prefs_path("strip");
         let mut prefs = UiPrefs { theme: "light".into(), solid: true, standby: true, strip: true };
         save_prefs_to(&path, &prefs).unwrap();
@@ -227,7 +235,7 @@ mod tests {
         assert_eq!(loaded.theme, "light");
         assert!(loaded.solid);
         assert!(loaded.standby);
-        assert!(!loaded.strip);
+        assert_eq!(loaded.strip, cfg!(target_os = "macos"));
     }
 
     #[test]
@@ -263,13 +271,14 @@ mod tests {
 
     #[test]
     fn boot_script_embeds_json_and_mode() {
-        let boot = BootState { theme: "light".into(), solid: false, standby: true, strip: true, mode: "dashboard", snapshots: Vec::<ProviderUsageSnapshot>::new() };
+        let boot = BootState { platform: "macos", theme: "light".into(), solid: false, standby: true, strip: true, mode: "dashboard", snapshots: Vec::<ProviderUsageSnapshot>::new() };
         let script = boot_script(&boot);
         assert!(script.starts_with("window.__SPECTRA_BOOT__={"));
         assert!(script.ends_with("window.__SPECTRA_MODE__='dashboard';"));
         let json_part = script.trim_start_matches("window.__SPECTRA_BOOT__=").split(";window.__SPECTRA_MODE__").next().unwrap();
         let parsed: serde_json::Value = serde_json::from_str(json_part).unwrap();
         assert_eq!(parsed["theme"], "light");
+        assert_eq!(parsed["platform"], "macos");
         assert_eq!(parsed["standby"], true);
         assert_eq!(parsed["strip"], true);
         assert_eq!(parsed["mode"], "dashboard");

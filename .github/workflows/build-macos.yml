@@ -1,0 +1,148 @@
+name: Build SPECTRA for macOS
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, "codex/**"]
+    paths:
+      - "src/**"
+      - "styles/**"
+      - "src-tauri/**"
+      - "tests/**"
+      - "scripts/**"
+      - "package*.json"
+      - "index.html"
+      - "vite.config.*"
+      - "tsconfig*.json"
+      - ".github/workflows/build-macos.yml"
+  pull_request:
+    paths:
+      - "src/**"
+      - "styles/**"
+      - "src-tauri/**"
+      - "tests/**"
+      - "scripts/**"
+      - "package*.json"
+      - "index.html"
+      - "vite.config.*"
+      - "tsconfig*.json"
+      - ".github/workflows/build-macos.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: macOS / ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+            target: aarch64-apple-darwin
+          - runner: macos-15-intel
+            arch: x86_64
+            target: x86_64-apple-darwin
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "13.0"
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Prepare native Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add "${{ matrix.target }}"
+          test "$(uname -m)" = "${{ matrix.arch }}"
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Verify versions and design
+        run: |
+          npm run verify:release
+          npm run verify:baseline
+          npm run verify:tokens
+
+      - name: Test frontend
+        run: npm test
+
+      - name: Test native library on this architecture
+        run: cargo test --manifest-path src-tauri/Cargo.toml --lib --target "${{ matrix.target }}" --locked -- --test-threads=1
+
+      - name: Build ad-hoc signed application and DMG
+        run: npm run desktop:build:mac -- --target "${{ matrix.target }}" -- --locked
+
+      - name: Verify shipped frontend size
+        run: npm run verify:memory
+
+      - name: Verify application, architecture, signature and disk image
+        env:
+          BUILD_TARGET: ${{ matrix.target }}
+          BUILD_ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          bundle="src-tauri/target/$BUILD_TARGET/release/bundle"
+          app="$bundle/macos/SPECTRA.app"
+          executable="$app/Contents/MacOS/spectra-native"
+          version="$(node -p 'JSON.parse(require("fs").readFileSync("package.json", "utf8")).version')"
+          test -x "$executable"
+          test "$(lipo -archs "$executable")" = "$BUILD_ARCH"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist")" = "com.spectra.ai-usage-widget"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")" = "$version"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          node - "$executable" <<'NODE'
+          const assert = require('node:assert/strict');
+          const { spawnSync } = require('node:child_process');
+          // An unknown provider takes the local error path: no login, network or GUI.
+          const result = spawnSync(process.argv[2], ['--provider-snapshot', 'spectra-build-smoke'], {
+            encoding: 'utf8', timeout: 10000,
+          });
+          assert.ifError(result.error);
+          assert.equal(result.status, 0, result.stderr);
+          const snapshot = JSON.parse(result.stdout);
+          assert.equal(snapshot.providerId, 'spectra-build-smoke');
+          assert.deepEqual(snapshot.windows, []);
+          console.log('Packaged native executable smoke PASS (CLI only)');
+          NODE
+          dmg_files=("$bundle"/dmg/*.dmg)
+          test "${#dmg_files[@]}" -eq 1
+          hdiutil verify "${dmg_files[0]}"
+          mkdir -p artifacts
+          cp "${dmg_files[0]}" "artifacts/SPECTRA_${version}_${BUILD_ARCH}.dmg"
+          ditto -c -k --sequesterRsrc --keepParent "$app" "artifacts/SPECTRA_${version}_${BUILD_ARCH}.app.zip"
+          (
+            cd artifacts
+            shasum -a 256 *.dmg *.app.zip > SHA256SUMS.txt
+          )
+          {
+            printf 'Version: %s\nCommit: %s\nTarget: %s\n' "$version" "$GITHUB_SHA" "$BUILD_TARGET"
+            printf 'Signing: ad-hoc (not Developer ID)\nNotarization: not performed\n'
+            printf 'Checks: native tests, Mach-O architecture, bundle metadata, codesign integrity, CLI launch, DMG integrity\n'
+            printf 'Interactive menu-bar and theme checks: require a Mac desktop session\n'
+            sw_vers
+          } > artifacts/build-info.txt
+
+      - name: Upload Mac installation artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: SPECTRA-macos-${{ matrix.arch }}-${{ github.sha }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 14
