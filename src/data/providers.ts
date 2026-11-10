@@ -26,6 +26,8 @@ export type QuotaWindow = Readonly<{
   kindLabel: string;
   resetsAt?: number | null; // epoch ms
   windowDurationMins?: number | null;
+  /** 계정 전체 한도를 모델군 보기에 함께 보여 준 창(focus-dock modelGroups). 서버가 준 모델별 값이 아니다. */
+  accountWide?: boolean;
 }>;
 
 export type PlanQuota = Readonly<{
@@ -89,7 +91,8 @@ export const planQuotas: Readonly<Record<ProviderId, PlanQuota>> = Object.freeze
     statusMessage: "설치된 앱에서 Claude 한도를 확인합니다.",
     windows: Object.freeze([
       exampleWindow("rolling", 32, "3시간 42분 후"),
-      exampleWindow("weekly", 49, "4일 2시간 후")
+      exampleWindow("weekly", 49, "4일 2시간 후"),
+      exampleWindow("weekly", 77, "4일 2시간 후", "fable", "Fable")
     ] as const)
   },
   antigravity: {

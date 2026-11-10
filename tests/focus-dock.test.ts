@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { historyForWindow, historySegments, modelGroups, rangeStart, selectedModelGroup, summaryWindow, windowAvailable } from "../src/data/focus-dock.ts";
+import { ALL_MODELS_LABEL, historyForWindow, historySegments, modelGroups, rangeStart, selectedModelGroup, summaryWindow, windowAvailable } from "../src/data/focus-dock.ts";
 import { planQuotas, metricLabels } from "../src/data/providers.ts";
 import { parseBootState, providersToRefreshAfterBoot } from "../src/integrations/boot-state.ts";
 import { antigravityFreshness } from "../src/data/usage-freshness.ts";
@@ -17,7 +17,48 @@ describe("focus dock models", () => {
     assert.deepEqual(reversed.map(group => group.id), ["gemini", "gemini-4-argon", "claude-gpt"]);
     assert.deepEqual(groups.find(group => group.id === "gemini-4-argon")?.windows.map(window => window.id), ["weekly"]);
     assert.deepEqual(groups.find(group => group.id === "claude-gpt")?.windows.map(window => window.id), ["rolling", "weekly"]);
-    assert.equal(modelGroups(planQuotas.claude).length, 1);
+    assert.equal(modelGroups(planQuotas.codex).length, 1);
+  });
+  it("lists a per-model Claude limit as its own group after the account-wide windows", () => {
+    const groups = modelGroups(planQuotas.claude);
+    assert.deepEqual(groups.map(group => [group.id, group.label, group.windows.map(window => window.id)]),
+      [["default", ALL_MODELS_LABEL, ["rolling", "weekly"]], ["fable", "Fable", ["rolling", "weekly"]]]);
+    // 수집 순서가 바뀌어도 계정 전체 한도가 먼저 온다.
+    const reversed = modelGroups({ ...planQuotas.claude, windows: [...planQuotas.claude.windows].reverse() });
+    assert.deepEqual(reversed.map(group => group.id), ["default", "fable"]);
+    // 모델군이 하나뿐이면 요금제 이름이 그대로 모델군 이름이다.
+    const accountOnly = { ...planQuotas.claude, windows: planQuotas.claude.windows.filter(window => !window.modelGroupId) };
+    assert.deepEqual(modelGroups(accountOnly).map(group => group.label), [planQuotas.claude.planName]);
+  });
+  it("shows the account-wide five-hour window under a Claude model group, marked as shared, until the server sends a per-model one", () => {
+    const [all, fable] = modelGroups(planQuotas.claude);
+    const shared = fable.windows[0];
+    assert.equal(shared.accountWide, true);
+    assert.equal(shared.modelGroupId, undefined); // 기록은 계정 전체 5시간 계열을 그대로 쓴다.
+    assert.equal(shared.remainingPercent, all.windows[0].remainingPercent);
+    assert.equal(all.windows.some(window => window.accountWide), false);
+    assert.equal(fable.windows[1].accountWide, undefined);
+    assert.equal(planQuotas.claude.windows.some(window => window.accountWide), false); // 원본 창 목록은 그대로다.
+
+    // 서버가 모델별 5시간 한도를 주면 그 값이 공용 값을 대신한다.
+    const own = { ...planQuotas.claude.windows[0], modelGroupId: "fable", modelGroupLabel: "Fable", usedPercent: 60, remainingPercent: 40 };
+    const withOwn = modelGroups({ ...planQuotas.claude, windows: [...planQuotas.claude.windows, own] })[1];
+    assert.deepEqual(withOwn.windows.map(window => [window.id, window.remainingPercent, window.accountWide]), [["weekly", 77, undefined], ["rolling", 40, undefined]]);
+
+    // 계정 전체 5시간 창이 없으면 만들지 않고, 다른 서비스의 모델군에는 넣지 않는다.
+    const noRolling = modelGroups({ ...planQuotas.claude, windows: planQuotas.claude.windows.filter(window => window.id !== "rolling") })[1];
+    assert.deepEqual(noRolling.windows.map(window => window.id), ["weekly"]);
+    const otherProvider = modelGroups({ ...planQuotas.claude, providerId: "antigravity" })[1];
+    assert.deepEqual(otherProvider.windows.map(window => window.id), ["weekly"]);
+  });
+  it("keeps the account-wide Claude group selected by default even when the per-model limit is lower", () => {
+    const fableLow = { ...planQuotas.claude, windows: planQuotas.claude.windows.map(window => window.modelGroupId ? { ...window, usedPercent: 99, remainingPercent: 1 } : window) };
+    assert.equal(summaryWindow(fableLow, now)?.modelGroupId, "fable");
+    assert.equal(selectedModelGroup(fableLow, undefined)?.id, "default");
+    assert.equal(selectedModelGroup(fableLow, "fable")?.id, "fable");
+    // 선택해 둔 모델별 한도가 응답에서 빠지면 계정 전체 한도로 돌아간다.
+    const withoutFable = { ...fableLow, windows: fableLow.windows.filter(window => !window.modelGroupId) };
+    assert.equal(selectedModelGroup(withoutFable, "fable")?.id, "default");
   });
   it("defaults to the constrained model group and follows an explicit selection", () => {
     assert.equal(selectedModelGroup(planQuotas.antigravity, undefined)?.id, "gemini-4-argon");

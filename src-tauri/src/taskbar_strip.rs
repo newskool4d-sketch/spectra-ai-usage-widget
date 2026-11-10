@@ -77,7 +77,7 @@ pub fn provider_remaining(snapshot: &ProviderUsageSnapshot, now: u64) -> Option<
     snapshot
         .windows
         .iter()
-        .filter(|w| snapshot.provider_id != "antigravity" || crate::antigravity::is_summary_window(w))
+        .filter(|w| if snapshot.provider_id == "antigravity" { crate::antigravity::is_summary_window(w) } else { w.model_group_id.is_none() })
         .filter_map(|w| window_percent(snapshot, w, now))
         .min()
 }
@@ -157,7 +157,9 @@ fn claude_status(snapshot: &ProviderUsageSnapshot, now: u64) -> &'static str {
     if snapshot.windows.is_empty() {
         return "사용량 갱신 대기";
     }
-    let expired = snapshot.windows.iter().any(|window| window.resets_at.is_some_and(|reset| reset <= now));
+    // 모델별 한도는 전체 한도의 신선도 판정에 쓰지 않는다(provider_usage::claude_cache_is_stale과 같은 기준).
+    let expired = snapshot.windows.iter().filter(|window| window.model_group_id.is_none())
+        .any(|window| window.resets_at.is_some_and(|reset| reset <= now));
     let captured_recently = snapshot.last_synced_at
         .is_some_and(|captured| captured <= now && now - captured <= 24 * 60 * 60);
     if snapshot.connection_state != "connected" || expired || !captured_recently
@@ -209,12 +211,13 @@ fn build_model_at(snapshots: &[ProviderUsageSnapshot], theme: StripTheme, now: u
         // Codex는 5시간 창이 있는 요금제(Plus 등)일 때만 두 기간을 나눠 표시하고,
         // 주간 창만 있는 요금제(Pro 등)는 기존 단일 값을 유지한다.
         let codex_has_short_window = id == "codex" && snapshot.filter(|s| usable(s))
-            .is_some_and(|s| s.windows.iter().any(|window| window.id == "rolling"));
+            .is_some_and(|s| s.windows.iter().any(|window| window.id == "rolling" && window.model_group_id.is_none()));
         if id == "claude" || codex_has_short_window {
             // 데이터 순서·잔여량 크기·누락 여부에 따라 표시 기준이 바뀌지 않는다.
+            // 모델별 한도(Claude의 Fable 등)는 칸에 쓰지 않고 tooltip에만 남긴다.
             for (window_id, label) in [("rolling", "5h"), ("weekly", "7d")] {
                 let remaining = snapshot.filter(|s| usable(s)).and_then(|s| {
-                    s.windows.iter().find(|window| window.id == window_id)
+                    s.windows.iter().find(|window| window.id == window_id && window.model_group_id.is_none())
                         .and_then(|window| window_percent(s, window, now))
                 });
                 append_segment(Some(label), remaining);
@@ -225,9 +228,12 @@ fn build_model_at(snapshots: &[ProviderUsageSnapshot], theme: StripTheme, now: u
         if let Some(snapshot) = snapshot.filter(|s| usable(s)) {
             let detail = snapshot.windows.iter()
                 .map(|w| {
-                    let label = if id == "antigravity" {
-                        format!("{} / {}", w.model_group_label.as_deref().or(w.model_group_id.as_deref()).unwrap_or("모델군 확인 대기"), w.label)
-                    } else { w.label.clone() };
+                    let group = w.model_group_label.as_deref().or(w.model_group_id.as_deref());
+                    let label = match group {
+                        Some(group) => format!("{group} / {}", w.label),
+                        None if id == "antigravity" => format!("모델군 확인 대기 / {}", w.label),
+                        None => w.label.clone(),
+                    };
                     match window_percent(snapshot, w, now) {
                     Some(percent) => format!("{label} {percent}%"),
                     None => format!("{label} {NO_VALUE}"),
@@ -364,6 +370,42 @@ mod tests {
 
     fn gemini_window(id: &str, remaining: f64) -> ProviderQuotaWindow {
         grouped_window("gemini", id, remaining)
+    }
+
+    fn fable_window(id: &str, remaining: f64) -> ProviderQuotaWindow {
+        ProviderQuotaWindow { model_group_label: Some("Fable".into()), label: "주간 한도".into(), ..grouped_window("fable", id, remaining) }
+    }
+
+    #[test]
+    fn claude_per_model_limits_stay_out_of_the_segments_and_are_named_in_the_tooltip() {
+        let segments = |windows: Vec<ProviderQuotaWindow>| {
+            let model = build_model_at(&[snapshot("claude", "connected", windows)], StripTheme::Dark, 1_000).unwrap();
+            let values = model.segments.iter().filter(|s| s.label == "Claude").map(|s| s.value.clone()).collect::<Vec<_>>();
+            (values, model.tooltip)
+        };
+        let (plain, _) = segments(vec![window("rolling", 81.0), window("weekly", 74.0)]);
+        let (with_model, tooltip) = segments(vec![window("rolling", 81.0), window("weekly", 74.0), fable_window("weekly", 3.0), fable_window("rolling", 1.0)]);
+        assert_eq!(plain, ["81%", "74%"]);
+        assert_eq!(with_model, plain);
+        assert!(tooltip.contains("Fable / 주간 한도 3%"), "{tooltip}");
+
+        // A per-model window never fills a missing account-wide one, whatever the order.
+        let (weekly_missing, _) = segments(vec![fable_window("weekly", 3.0), window("rolling", 81.0)]);
+        assert_eq!(weekly_missing, ["81%", "—"]);
+
+        // Its passed reset does not turn the account-wide status into "갱신 대기".
+        let mut claude = ProviderUsageSnapshot { source: Some("claude-usage-api".into()), last_synced_at: Some(1_000),
+            ..snapshot("claude", "connected", vec![window("rolling", 81.0), fable_window("weekly", 3.0)]) };
+        claude.windows[1].resets_at = Some(900);
+        assert_eq!(claude_status(&claude, 1_000), "동기화됨");
+        claude.windows[0].resets_at = Some(900);
+        assert_eq!(claude_status(&claude, 1_000), "갱신 대기 (캐시)");
+    }
+
+    #[test]
+    fn codex_single_value_ignores_model_group_windows() {
+        let codex = snapshot("codex", "connected", vec![window("weekly", 55.0), grouped_window("some-model", "weekly", 2.0)]);
+        assert_eq!(provider_remaining(&codex, 0), Some(55));
     }
 
     #[test]

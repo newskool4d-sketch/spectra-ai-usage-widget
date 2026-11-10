@@ -48,7 +48,8 @@ pub fn min_remaining_percent(snapshots: &[ProviderUsageSnapshot], now: u64) -> O
             // A carried value whose window already reset is not shown as a percentage.
             let mut current = snapshot.windows.iter()
                 .filter(|w| !crate::provider_usage::stale_window_reset_passed(snapshot, w, now))
-                .filter(|w| snapshot.provider_id != "antigravity" || crate::antigravity::is_summary_window(w));
+                // Per-model limits (Claude's Fable allowance) never stand in for the service value.
+                .filter(|w| if snapshot.provider_id == "antigravity" { crate::antigravity::is_summary_window(w) } else { w.model_group_id.is_none() });
             let window = if snapshot.provider_id == "antigravity" {
                 current.min_by(|a, b| a.remaining_percent.total_cmp(&b.remaining_percent))
             } else {
@@ -182,6 +183,18 @@ mod tests {
         assert_eq!(min_remaining_percent(&[claude.clone()], 1_000), None);
         claude.connection_state = "connected".to_string();
         assert_eq!(min_remaining_percent(&[claude], 1_000), Some(("claude".to_string(), 9)), "fresh values stay");
+    }
+
+    #[test]
+    fn claude_per_model_limits_never_become_the_badge_value() {
+        let mut claude = snapshot("claude", "connected", vec![("rolling", 81.0), ("weekly", 74.0), ("weekly", 3.0), ("rolling", 1.0)]);
+        for window in &mut claude.windows[2..] {
+            window.model_group_id = Some("fable".to_string());
+        }
+        assert_eq!(min_remaining_percent(&[claude.clone()], 0), Some(("claude".to_string(), 81)));
+        // Only per-model windows left: the provider has no badge value rather than a Fable one.
+        claude.windows.drain(..2);
+        assert_eq!(min_remaining_percent(&[claude], 0), None);
     }
 
     fn antigravity(windows: Vec<(&str, &str, f64)>) -> ProviderUsageSnapshot {
