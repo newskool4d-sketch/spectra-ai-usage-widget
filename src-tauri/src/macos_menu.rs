@@ -32,15 +32,24 @@ fn percent(window: &ProviderQuotaWindow, now: u64) -> Option<u8> {
         .then(|| window.remaining_percent.round() as u8)
 }
 
+/// Antigravity values arrive only while its CLI runs, so they follow the strip's day-long
+/// freshness window (v0.3.2) instead of the five-minute live-lookup cadence of Codex and Claude.
 fn stale(snapshot: &ProviderUsageSnapshot, now: u64) -> bool {
+    let fresh_secs = if snapshot.provider_id == "antigravity" { crate::antigravity::FRESH_SECS } else { 300 };
     snapshot.connection_state != "connected"
         || snapshot.live_failure.is_some()
-        || !snapshot.last_synced_at.is_some_and(|captured| captured > 0 && captured <= now && now - captured < 300)
+        || !snapshot.last_synced_at.is_some_and(|captured| captured > 0 && captured <= now && now - captured < fresh_secs)
 }
 
-/// Antigravity's title follows the Gemini group alone. Other groups stay in the tooltip.
+/// Antigravity's title follows the Gemini group alone, and per-model limits of the other
+/// services (Claude's Fable allowance) never stand in for the service value: the same rule as
+/// the Windows strip and tray badge. Those groups stay in the tooltip.
 fn counts_toward_title(snapshot: &ProviderUsageSnapshot, window: &ProviderQuotaWindow) -> bool {
-    snapshot.provider_id != "antigravity" || window.model_group_id.as_deref() == Some("gemini")
+    if snapshot.provider_id == "antigravity" {
+        crate::antigravity::is_summary_window(window)
+    } else {
+        window.model_group_id.is_none()
+    }
 }
 
 pub fn build_model(snapshots: &[ProviderUsageSnapshot], now: u64) -> MenuBarModel {
@@ -150,6 +159,20 @@ mod tests {
     }
 
     #[test]
+    fn claude_per_model_limits_stay_out_of_the_title_and_are_named_in_the_tooltip() {
+        let mut claude = snapshot("claude", &[81.0, 74.0, 3.0]);
+        claude.windows[2].model_group_id = Some("fable".into());
+        claude.windows[2].model_group_label = Some("Fable".into());
+        claude.windows[2].label = "주간 한도".into();
+        let model = build_model(&[claude.clone()], 1_000);
+        assert_eq!(model.title, "CX—  CL74%  AG—");
+        assert!(model.tooltip.contains("Fable / 주간 한도: 3%"), "{}", model.tooltip);
+        // Only a per-model window left: no title value rather than the Fable one.
+        claude.windows.drain(..2);
+        assert_eq!(build_model(&[claude], 1_000).title, "CX—  CL—  AG—");
+    }
+
+    #[test]
     fn model_uses_verified_minimum_in_stable_provider_order() {
         let model = build_model(&[antigravity(&["gemini", "gemini"], &[100.0, 83.0]), snapshot("claude", &[96.0]), snapshot("codex", &[70.0, 47.0])], 1_000);
         assert_eq!(model.title, "CX47%  CL96%  AG83%");
@@ -178,6 +201,17 @@ mod tests {
         let mut claude = snapshot("claude", &[30.0]);
         claude.source = Some("unverified".into());
         assert_eq!(build_model(&[codex, claude], 1_000).title, "CX—  CL—  AG—");
+    }
+
+    #[test]
+    fn antigravity_cache_stays_current_for_a_day_like_the_strip() {
+        let fresh_secs = crate::antigravity::FRESH_SECS;
+        let mut ag = antigravity(&["gemini"], &[83.0]);
+        ag.windows[0].resets_at = None;
+        ag.last_synced_at = Some(1_000);
+        assert_eq!(build_model(&[ag.clone()], 1_000 + 300).title, "CX—  CL—  AG83%");
+        assert_eq!(build_model(&[ag.clone()], 1_000 + fresh_secs - 1).title, "CX—  CL—  AG83%");
+        assert_eq!(build_model(&[ag], 1_000 + fresh_secs).title, "CX—  CL—  AG83%·");
     }
 
     #[test]

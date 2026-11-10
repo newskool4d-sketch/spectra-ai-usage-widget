@@ -32,6 +32,13 @@ describe("Claude freshness", () => {
     assert.equal(claudeFreshness({ ...quota, source: "claude-statusline" }, captured).label, "갱신 대기 (캐시)");
   });
 
+  it("ignores a per-model window when judging the account-wide values", () => {
+    const fable = { ...quota.windows[0], id: "weekly" as const, modelGroupId: "fable", modelGroupLabel: "Fable", resetsAt: captured + 10_000 };
+    const withFable = { ...quota, windows: [...quota.windows, fable] };
+    assert.equal(claudeFreshness(withFable, captured + 30_000).label, "동기화됨");
+    assert.equal(claudeFreshness(withFable, captured + 60_000).label, "갱신 대기 (캐시)");
+  });
+
   it("does not claim freshness for missing, future or older-than-24h capture times", () => {
     const noReset = { ...quota, windows: [{ ...quota.windows[0], resetsAt: null }] };
     assert.equal(claudeFreshness(noReset, captured + 86_400_000).label, "동기화됨");

@@ -18,9 +18,9 @@ export function antigravityFreshness(quota: PlanQuota, now: number): string {
   if (quota.confidence !== "verified" || !quota.windows.length) return "CLI 첫 실행 대기";
   const captured = quota.lastSyncedAtMs;
   if (quota.connectionState !== "connected" || captured == null || !Number.isFinite(captured)
-    || captured > now || now - captured >= 300_000
+    || captured > now || now - captured >= 86_400_000
     || quota.windows.some(window => window.resetsAt != null && window.resetsAt <= now)) return "CLI 실행 후 갱신 필요";
-  return "CLI 수집값 · 최신";
+  return "CLI 수집값";
 }
 
 // Keep the labels and expiry boundary aligned with taskbar_strip::claude_status.
@@ -28,7 +28,8 @@ export function claudeFreshness(quota: PlanQuota, now: number): Readonly<{ label
   let label: string;
   const captured = quota.lastSyncedAtMs;
   const hasUsage = quota.confidence === "verified" && quota.windows.length > 0;
-  const expired = quota.windows.some(window => window.resetsAt != null && window.resetsAt <= now);
+  // 모델별 한도는 계정 전체 한도의 신선도 판정에 쓰지 않는다(taskbar_strip::claude_status와 같은 기준).
+  const expired = quota.windows.some(window => !window.modelGroupId && window.resetsAt != null && window.resetsAt <= now);
   const capturedRecently = captured != null && Number.isFinite(captured) && captured <= now && now - captured <= 86_400_000;
 
   if (quota.source === "example") label = "브라우저 데모";

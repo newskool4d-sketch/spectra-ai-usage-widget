@@ -69,6 +69,7 @@ fn window_percent(snapshot: &ProviderUsageSnapshot, window: &ProviderQuotaWindow
 
 /// Codex의 기존 단일 값은 먼저 막히는 창의 잔여율을 유지한다.
 /// Claude와 5시간 창이 있는 Codex는 build_model_at에서 5시간·주간을 각각 고정 표시한다(스펙 §3-3).
+/// AG 값은 Gemini 모델군의 창만 보고, 다른 모델군은 tooltip에만 남긴다.
 pub fn provider_remaining(snapshot: &ProviderUsageSnapshot, now: u64) -> Option<u8> {
     if !usable(snapshot) {
         return None;
@@ -76,6 +77,7 @@ pub fn provider_remaining(snapshot: &ProviderUsageSnapshot, now: u64) -> Option<
     snapshot
         .windows
         .iter()
+        .filter(|w| if snapshot.provider_id == "antigravity" { crate::antigravity::is_summary_window(w) } else { w.model_group_id.is_none() })
         .filter_map(|w| window_percent(snapshot, w, now))
         .min()
 }
@@ -125,7 +127,7 @@ pub fn compact_model(model: &StripModel) -> StripModel {
 
 fn antigravity_stale(snapshot: &ProviderUsageSnapshot, now: u64) -> bool {
     snapshot.connection_state != "connected"
-        || !snapshot.last_synced_at.is_some_and(|captured| captured > 0 && captured <= now && now - captured < 300)
+        || !snapshot.last_synced_at.is_some_and(|captured| captured > 0 && captured <= now && now - captured < crate::antigravity::FRESH_SECS)
         || snapshot.windows.iter().any(|w| w.resets_at.is_some_and(|reset| reset <= now))
 }
 
@@ -136,7 +138,7 @@ fn antigravity_status(snapshot: Option<&ProviderUsageSnapshot>, now: u64) -> &'s
     if snapshot.auth_state == "signed-out" || snapshot.connection_state == "signed-out" { return "CLI 로그인 필요"; }
     if snapshot.connection_state == "error" { return LOOKUP_DELAYED; }
     if !usable(snapshot) { return "CLI 첫 수집 대기"; }
-    if antigravity_stale(snapshot, now) { "갱신 대기 (CLI 캐시)" } else { "CLI 수집값 · 최신" }
+    if antigravity_stale(snapshot, now) { "갱신 대기 (CLI 캐시)" } else { "CLI 수집값" }
 }
 
 fn claude_status(snapshot: &ProviderUsageSnapshot, now: u64) -> &'static str {
@@ -155,7 +157,9 @@ fn claude_status(snapshot: &ProviderUsageSnapshot, now: u64) -> &'static str {
     if snapshot.windows.is_empty() {
         return "사용량 갱신 대기";
     }
-    let expired = snapshot.windows.iter().any(|window| window.resets_at.is_some_and(|reset| reset <= now));
+    // 모델별 한도는 전체 한도의 신선도 판정에 쓰지 않는다(provider_usage::claude_cache_is_stale과 같은 기준).
+    let expired = snapshot.windows.iter().filter(|window| window.model_group_id.is_none())
+        .any(|window| window.resets_at.is_some_and(|reset| reset <= now));
     let captured_recently = snapshot.last_synced_at
         .is_some_and(|captured| captured <= now && now - captured <= 24 * 60 * 60);
     if snapshot.connection_state != "connected" || expired || !captured_recently
@@ -207,12 +211,13 @@ fn build_model_at(snapshots: &[ProviderUsageSnapshot], theme: StripTheme, now: u
         // Codex는 5시간 창이 있는 요금제(Plus 등)일 때만 두 기간을 나눠 표시하고,
         // 주간 창만 있는 요금제(Pro 등)는 기존 단일 값을 유지한다.
         let codex_has_short_window = id == "codex" && snapshot.filter(|s| usable(s))
-            .is_some_and(|s| s.windows.iter().any(|window| window.id == "rolling"));
+            .is_some_and(|s| s.windows.iter().any(|window| window.id == "rolling" && window.model_group_id.is_none()));
         if id == "claude" || codex_has_short_window {
             // 데이터 순서·잔여량 크기·누락 여부에 따라 표시 기준이 바뀌지 않는다.
+            // 모델별 한도(Claude의 Fable 등)는 칸에 쓰지 않고 tooltip에만 남긴다.
             for (window_id, label) in [("rolling", "5h"), ("weekly", "7d")] {
                 let remaining = snapshot.filter(|s| usable(s)).and_then(|s| {
-                    s.windows.iter().find(|window| window.id == window_id)
+                    s.windows.iter().find(|window| window.id == window_id && window.model_group_id.is_none())
                         .and_then(|window| window_percent(s, window, now))
                 });
                 append_segment(Some(label), remaining);
@@ -223,9 +228,12 @@ fn build_model_at(snapshots: &[ProviderUsageSnapshot], theme: StripTheme, now: u
         if let Some(snapshot) = snapshot.filter(|s| usable(s)) {
             let detail = snapshot.windows.iter()
                 .map(|w| {
-                    let label = if id == "antigravity" {
-                        format!("{} / {}", w.model_group_label.as_deref().or(w.model_group_id.as_deref()).unwrap_or("모델군 확인 대기"), w.label)
-                    } else { w.label.clone() };
+                    let group = w.model_group_label.as_deref().or(w.model_group_id.as_deref());
+                    let label = match group {
+                        Some(group) => format!("{group} / {}", w.label),
+                        None if id == "antigravity" => format!("모델군 확인 대기 / {}", w.label),
+                        None => w.label.clone(),
+                    };
                     match window_percent(snapshot, w, now) {
                     Some(percent) => format!("{label} {percent}%"),
                     None => format!("{label} {NO_VALUE}"),
@@ -240,7 +248,7 @@ fn build_model_at(snapshots: &[ProviderUsageSnapshot], theme: StripTheme, now: u
             tooltip_lines.push(format!("{name}  {status}"));
         }
         if id == "antigravity" {
-            tooltip_lines.push(format!("Antigravity · 최소 잔여율 · {}", antigravity_status(snapshot, now)));
+            tooltip_lines.push(format!("Antigravity · Gemini 기준 · {}", antigravity_status(snapshot, now)));
             tooltip_lines.push(format!("마지막 CLI 수집: {}", last_sync_label(snapshot.and_then(|s| s.last_synced_at), now)));
             tooltip_lines.push("Antigravity CLI 실행 시 갱신 · 직접 Claude 구독과 별도".to_string());
         }
@@ -356,12 +364,85 @@ mod tests {
         }
     }
 
+    fn grouped_window(group: &str, id: &str, remaining: f64) -> ProviderQuotaWindow {
+        ProviderQuotaWindow { model_group_id: Some(group.into()), ..window(id, remaining) }
+    }
+
+    fn gemini_window(id: &str, remaining: f64) -> ProviderQuotaWindow {
+        grouped_window("gemini", id, remaining)
+    }
+
+    fn fable_window(id: &str, remaining: f64) -> ProviderQuotaWindow {
+        ProviderQuotaWindow { model_group_label: Some("Fable".into()), label: "주간 한도".into(), ..grouped_window("fable", id, remaining) }
+    }
+
+    #[test]
+    fn claude_per_model_limits_stay_out_of_the_segments_and_are_named_in_the_tooltip() {
+        let segments = |windows: Vec<ProviderQuotaWindow>| {
+            let model = build_model_at(&[snapshot("claude", "connected", windows)], StripTheme::Dark, 1_000).unwrap();
+            let values = model.segments.iter().filter(|s| s.label == "Claude").map(|s| s.value.clone()).collect::<Vec<_>>();
+            (values, model.tooltip)
+        };
+        let (plain, _) = segments(vec![window("rolling", 81.0), window("weekly", 74.0)]);
+        let (with_model, tooltip) = segments(vec![window("rolling", 81.0), window("weekly", 74.0), fable_window("weekly", 3.0), fable_window("rolling", 1.0)]);
+        assert_eq!(plain, ["81%", "74%"]);
+        assert_eq!(with_model, plain);
+        assert!(tooltip.contains("Fable / 주간 한도 3%"), "{tooltip}");
+
+        // A per-model window never fills a missing account-wide one, whatever the order.
+        let (weekly_missing, _) = segments(vec![fable_window("weekly", 3.0), window("rolling", 81.0)]);
+        assert_eq!(weekly_missing, ["81%", "—"]);
+
+        // Its passed reset does not turn the account-wide status into "갱신 대기".
+        let mut claude = ProviderUsageSnapshot { source: Some("claude-usage-api".into()), last_synced_at: Some(1_000),
+            ..snapshot("claude", "connected", vec![window("rolling", 81.0), fable_window("weekly", 3.0)]) };
+        claude.windows[1].resets_at = Some(900);
+        assert_eq!(claude_status(&claude, 1_000), "동기화됨");
+        claude.windows[0].resets_at = Some(900);
+        assert_eq!(claude_status(&claude, 1_000), "갱신 대기 (캐시)");
+    }
+
+    #[test]
+    fn codex_single_value_ignores_model_group_windows() {
+        let codex = snapshot("codex", "connected", vec![window("weekly", 55.0), grouped_window("some-model", "weekly", 2.0)]);
+        assert_eq!(provider_remaining(&codex, 0), Some(55));
+    }
+
+    #[test]
+    fn antigravity_value_follows_only_the_gemini_group() {
+        let others = || vec![grouped_window("claude-gpt", "rolling", 100.0), grouped_window("claude-gpt", "weekly", 52.45),
+            grouped_window("gemini-4-argon", "weekly", 76.25)];
+        for (gemini, expected) in [
+            (vec![gemini_window("rolling", 100.0), gemini_window("weekly", 99.76)], Some(100)),
+            (vec![gemini_window("rolling", 40.0), gemini_window("weekly", 90.0)], Some(40)),
+            (vec![gemini_window("rolling", 90.0), gemini_window("weekly", 40.0)], Some(40)),
+            (vec![gemini_window("weekly", 0.0)], Some(0)),
+            (vec![], None),
+        ] {
+            let ag = antigravity(others().into_iter().chain(gemini).collect());
+            assert_eq!(provider_remaining(&ag, 1_100), expected);
+            let model = build_model_at(&[ag, snapshot("codex", "connected", vec![window("weekly", 47.0)])], StripTheme::Dark, 1_100).unwrap();
+            let segment = model.segments.last().unwrap();
+            assert_eq!(segment.label, "Antigravity");
+            assert_eq!(segment.value, expected.map_or("—".to_string(), |percent| format!("{percent}%")), "no other group stands in for Gemini");
+            assert_eq!(compact_model(&model).segments.last().unwrap().value, segment.value);
+            assert!(model.tooltip.contains("Antigravity · Gemini 기준"));
+            assert!(model.tooltip.contains("claude-gpt / weekly 52%"), "other groups stay in the tooltip");
+            assert!(model.tooltip.contains("gemini-4-argon / weekly 76%"));
+        }
+    }
+
+    #[test]
+    fn antigravity_with_no_gemini_value_does_not_raise_an_empty_strip() {
+        let ag = antigravity(vec![grouped_window("claude-gpt", "weekly", 52.0)]);
+        assert!(build_model_at(&[ag], StripTheme::Dark, 1_100).is_none());
+    }
+
     #[test]
     fn antigravity_keeps_model_groups_separate_from_the_direct_claude_subscription() {
-        let mut gemini = window("weekly", 83.0);
-        gemini.model_group_id = Some("gemini".into());
+        let mut gemini = gemini_window("weekly", 83.0);
         gemini.model_group_label = Some("Gemini Models".into());
-        let mut bundled = window("weekly", 31.0);
+        let mut bundled = grouped_window("claude-gpt", "weekly", 31.0);
         bundled.model_group_label = Some("Claude and GPT models".into());
         let model = build_model_at(&[
             antigravity(vec![gemini, bundled]),
@@ -369,17 +450,18 @@ mod tests {
             snapshot("codex", "connected", vec![window("weekly", 47.0)]),
         ], StripTheme::Dark, 1_100).unwrap();
         assert_eq!(model.segments.iter().map(|s| (s.label.as_str(), s.value.as_str())).collect::<Vec<_>>(),
-            [("Codex", "47%"), ("Claude", "96%"), ("Claude", "95%"), ("Antigravity", "31%")]);
+            [("Codex", "47%"), ("Claude", "96%"), ("Claude", "95%"), ("Antigravity", "83%")]);
         assert!(model.tooltip.contains("Gemini Models / weekly 83%"));
         assert!(model.tooltip.contains("Claude and GPT models / weekly 31%"));
         assert!(model.tooltip.contains("직접 Claude 구독과 별도"));
-        assert_eq!(model.segments.last().unwrap().value_color, palette(StripTheme::Dark).mid);
+        assert_eq!(model.segments.last().unwrap().value_color, palette(StripTheme::Dark).high);
     }
 
     #[test]
-    fn antigravity_cache_turns_gray_at_five_minutes_and_stays_gray_after_retheme() {
-        let ag = antigravity(vec![window("weekly", 83.0)]);
-        for (now, stale) in [(1_299, false), (1_300, true), (1_600, true), (999, true)] {
+    fn antigravity_cache_turns_gray_after_a_day_and_stays_gray_after_retheme() {
+        let ag = antigravity(vec![gemini_window("weekly", 83.0)]);
+        let fresh_secs = crate::antigravity::FRESH_SECS;
+        for (now, stale) in [(1_300, false), (1_000 + fresh_secs - 1, false), (1_000 + fresh_secs, true), (999, true)] {
             let mut model = build_model_at(&[ag.clone()], StripTheme::Light, now).unwrap();
             for theme in [StripTheme::Light, StripTheme::Dark] {
                 retheme_model(&mut model, theme);
@@ -394,10 +476,10 @@ mod tests {
 
     #[test]
     fn antigravity_rejects_invalid_or_expired_windows_without_inventing_zero() {
-        let mut expired = window("rolling", 3.0);
+        let mut expired = gemini_window("rolling", 3.0);
         expired.resets_at = Some(1_100);
-        let ag = antigravity(vec![expired, window("weekly", 83.0), window("other", 0.0),
-            window("rolling", f64::NAN), window("weekly", -1.0), window("weekly", 101.0), window("weekly", f64::INFINITY)]);
+        let ag = antigravity(vec![expired, gemini_window("weekly", 83.0), gemini_window("other", 0.0),
+            gemini_window("rolling", f64::NAN), gemini_window("weekly", -1.0), gemini_window("weekly", 101.0), gemini_window("weekly", f64::INFINITY)]);
         assert_eq!(provider_remaining(&ag, 1_099), Some(3));
         assert_eq!(provider_remaining(&ag, 1_100), Some(83), "reset is enforced even before the next CLI cache refresh");
         let mut model = build_model_at(&[ag.clone()], StripTheme::Light, 1_100).unwrap();
@@ -405,10 +487,10 @@ mod tests {
         assert!(model.segments.last().unwrap().stale);
         let invalid = antigravity(ag.windows.into_iter().filter(|w| w.remaining_percent != 83.0).collect());
         assert!(build_model_at(&[invalid], StripTheme::Dark, 1_100).is_none());
-        let mut unsupported = antigravity(vec![window("weekly", 0.0)]);
+        let mut unsupported = antigravity(vec![gemini_window("weekly", 0.0)]);
         unsupported.source = None;
         assert_eq!(provider_remaining(&unsupported, 1_100), None);
-        model = build_model_at(&[antigravity(vec![window("weekly", 0.0)])], StripTheme::Dark, 1_100).unwrap();
+        model = build_model_at(&[antigravity(vec![gemini_window("weekly", 0.0)])], StripTheme::Dark, 1_100).unwrap();
         assert_eq!(model.segments.last().unwrap().value, "0%", "a real zero remains valid");
     }
 

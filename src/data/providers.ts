@@ -89,7 +89,8 @@ export const planQuotas: Readonly<Record<ProviderId, PlanQuota>> = Object.freeze
     statusMessage: "설치된 앱에서 Claude 한도를 확인합니다.",
     windows: Object.freeze([
       exampleWindow("rolling", 32, "3시간 42분 후"),
-      exampleWindow("weekly", 49, "4일 2시간 후")
+      exampleWindow("weekly", 49, "4일 2시간 후"),
+      exampleWindow("weekly", 77, "4일 2시간 후", "fable", "Fable")
     ] as const)
   },
   antigravity: {
@@ -100,9 +101,9 @@ export const planQuotas: Readonly<Record<ProviderId, PlanQuota>> = Object.freeze
     windows: Object.freeze([
       exampleWindow("rolling", 100, "3시간 41분 후", "gemini", "Gemini"),
       exampleWindow("weekly", 100, "5일 10시간 후", "gemini", "Gemini"),
+      exampleWindow("weekly", 83, "6일 4시간 후", "gemini-4-argon", "Gemini 4 Argon"),
       exampleWindow("rolling", 100, "초기화 시각 미제공", "claude-gpt", "Claude · GPT"),
-      exampleWindow("weekly", 100, "초기화 시각 미제공", "claude-gpt", "Claude · GPT"),
-      exampleWindow("weekly", 83, "6일 4시간 후", "gemini-4-argon", "Gemini 4 Argon")
+      exampleWindow("weekly", 100, "초기화 시각 미제공", "claude-gpt", "Claude · GPT")
     ] as const)
   }
 });

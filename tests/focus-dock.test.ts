@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { historyForWindow, historySegments, modelGroups, rangeStart, selectedModelGroup, summaryWindow, windowAvailable } from "../src/data/focus-dock.ts";
+import { ALL_MODELS_LABEL, historyForWindow, historySegments, modelGroups, rangeStart, selectedModelGroup, summaryWindow, windowAvailable } from "../src/data/focus-dock.ts";
 import { planQuotas, metricLabels } from "../src/data/providers.ts";
 import { parseBootState, providersToRefreshAfterBoot } from "../src/integrations/boot-state.ts";
 import { antigravityFreshness } from "../src/data/usage-freshness.ts";
@@ -12,10 +12,40 @@ const point = (overrides: Partial<UsageHistoryPoint> = {}): UsageHistoryPoint =>
 describe("focus dock models", () => {
   it("keeps model-group quota windows distinct and never fabricates an Argon rolling window", () => {
     const groups = modelGroups(planQuotas.antigravity);
-    assert.equal(groups.length, 3);
+    assert.deepEqual(groups.map(group => group.id), ["gemini", "gemini-4-argon", "claude-gpt"]);
+    const reversed = modelGroups({ ...planQuotas.antigravity, windows: [...planQuotas.antigravity.windows].reverse() });
+    assert.deepEqual(reversed.map(group => group.id), ["gemini", "gemini-4-argon", "claude-gpt"]);
     assert.deepEqual(groups.find(group => group.id === "gemini-4-argon")?.windows.map(window => window.id), ["weekly"]);
     assert.deepEqual(groups.find(group => group.id === "claude-gpt")?.windows.map(window => window.id), ["rolling", "weekly"]);
-    assert.equal(modelGroups(planQuotas.claude).length, 1);
+    assert.equal(modelGroups(planQuotas.codex).length, 1);
+  });
+  it("lists a per-model Claude limit as its own group after the account-wide windows", () => {
+    const groups = modelGroups(planQuotas.claude);
+    assert.deepEqual(groups.map(group => [group.id, group.label, group.windows.map(window => window.id)]),
+      [["default", ALL_MODELS_LABEL, ["rolling", "weekly"]], ["fable", "Fable", ["weekly"]]]);
+    // 수집 순서가 바뀌어도 계정 전체 한도가 먼저 온다.
+    const reversed = modelGroups({ ...planQuotas.claude, windows: [...planQuotas.claude.windows].reverse() });
+    assert.deepEqual(reversed.map(group => group.id), ["default", "fable"]);
+    // 모델군이 하나뿐이면 요금제 이름이 그대로 모델군 이름이다.
+    const accountOnly = { ...planQuotas.claude, windows: planQuotas.claude.windows.filter(window => !window.modelGroupId) };
+    assert.deepEqual(modelGroups(accountOnly).map(group => group.label), [planQuotas.claude.planName]);
+  });
+  it("puts only the windows the server sends into a Claude model group (Fable has a weekly limit only)", () => {
+    const fable = modelGroups(planQuotas.claude)[1];
+    assert.deepEqual(fable.windows.map(window => window.id), ["weekly"]);
+    // 서버가 모델별 5시간 한도를 보내면 그때만 함께 나온다.
+    const own = { ...planQuotas.claude.windows[0], modelGroupId: "fable", modelGroupLabel: "Fable", usedPercent: 60, remainingPercent: 40 };
+    const withOwn = modelGroups({ ...planQuotas.claude, windows: [...planQuotas.claude.windows, own] })[1];
+    assert.deepEqual(withOwn.windows.map(window => [window.id, window.remainingPercent]), [["weekly", 77], ["rolling", 40]]);
+  });
+  it("keeps the account-wide Claude group selected by default even when the per-model limit is lower", () => {
+    const fableLow = { ...planQuotas.claude, windows: planQuotas.claude.windows.map(window => window.modelGroupId ? { ...window, usedPercent: 99, remainingPercent: 1 } : window) };
+    assert.equal(summaryWindow(fableLow, now)?.modelGroupId, "fable");
+    assert.equal(selectedModelGroup(fableLow, undefined)?.id, "default");
+    assert.equal(selectedModelGroup(fableLow, "fable")?.id, "fable");
+    // 선택해 둔 모델별 한도가 응답에서 빠지면 계정 전체 한도로 돌아간다.
+    const withoutFable = { ...fableLow, windows: fableLow.windows.filter(window => !window.modelGroupId) };
+    assert.equal(selectedModelGroup(withoutFable, "fable")?.id, "default");
   });
   it("defaults to the constrained model group and follows an explicit selection", () => {
     assert.equal(selectedModelGroup(planQuotas.antigravity, undefined)?.id, "gemini-4-argon");
@@ -34,10 +64,11 @@ describe("focus dock models", () => {
     assert.deepEqual(Object.keys(metricLabels), ["remaining", "subscription", "requests"]);
     assert.equal(metricLabels.subscription, "구독 모델");
   });
-  it("ages Antigravity CLI data after five minutes or a reset even without a new native snapshot", () => {
+  it("ages Antigravity CLI data after a day or a reset even without a new native snapshot", () => {
     const quota = { ...planQuotas.antigravity, source: "antigravity-statusline" as const, confidence: "verified" as const, connectionState: "connected" as const, bridgeInstalled: true, lastSyncedAtMs: now };
-    assert.equal(antigravityFreshness(quota, now + 299_999), "CLI 수집값 · 최신");
-    assert.equal(antigravityFreshness(quota, now + 300_000), "CLI 실행 후 갱신 필요");
+    assert.equal(antigravityFreshness(quota, now + 300_000), "CLI 수집값");
+    assert.equal(antigravityFreshness(quota, now + 86_399_999), "CLI 수집값");
+    assert.equal(antigravityFreshness(quota, now + 86_400_000), "CLI 실행 후 갱신 필요");
     assert.equal(antigravityFreshness({ ...quota, windows: [{ ...quota.windows[0], resetsAt: now }] }, now), "CLI 실행 후 갱신 필요");
     assert.equal(antigravityFreshness({ ...quota, lastSyncedAtMs: now + 1 }, now), "CLI 실행 후 갱신 필요");
     assert.equal(antigravityFreshness({ ...quota, windows: [], confidence: "unavailable" }, now), "CLI 첫 실행 대기");

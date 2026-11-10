@@ -4,7 +4,7 @@ SPECTRA는 트레이에 오래 머무는 앱이므로 사용량 연결 뒤에도
 
 - 뷰포트에 맞는 데스크톱 A 또는 모바일 C 화면 하나만 React 트리에 마운트합니다.
 - 목록·라벨·브라우저 데모 데이터는 모듈 스코프 불변 객체로 두고 작은 컴포넌트는 `memo`로 재렌더링을 줄입니다.
-- 차트 라이브러리, `requestAnimationFrame`, `localStorage`, `sessionStorage`, 상시 `setInterval`을 사용하지 않습니다.
+- 차트 라이브러리, `requestAnimationFrame`, `localStorage`, `sessionStorage`, 상시 `setInterval`을 사용하지 않습니다. 경과 시간 라벨 갱신은 `App.tsx`의 단일 재귀 `setTimeout`(30초) 하나만 사용합니다(v0.3.0, 2026-11-02).
 - 네이티브 앱은 과거 사용량 시계열을 저장하지 않고 현재 한도 스냅샷만 보관합니다.
 - Codex App Server는 새로고침 요청 때만 실행하며 응답 또는 12초 제한 뒤 자식 프로세스를 종료합니다.
 - Claude 조회는 자격 증명에 구독 로그인이 있으면 10초 제한의 공식 사용량 endpoint 요청과 작은 정제 JSON 캐시만 사용하고, 로그인 정보를 읽지 못했거나 저장된 토큰이 만료됐거나 조회가 401·403으로 거부될 때만 `claude auth status` 프로세스를 15초 제한으로 실행합니다(v0.2.8, 만료 토큰 갱신은 2026-10-29 추가).
@@ -211,9 +211,18 @@ Task 5의 셸 이벤트·WinEvent·자동숨김·F11·Explorer 재시작 검증�
 
 ## 2026-09-18 스트립 주기 갱신 (A안)
 
-변경: 작업표시줄 표시가 켜진 동안 네이티브 루프(`spectra-usage-refresh`, 15초 tick)가 Claude → Codex를 120초마다 순차 재조회한다. `.credentials.json`이 다시 쓰이면 다음 tick에 Claude를 즉시 재조회하고, 실패는 120·240·480·960·1800초로 백오프하며, 토큰 만료(`claude-oauth-token-expired`)는 자격 증명 변경 또는 30분까지 조회를 보류한다. 갱신된 스냅샷은 `provider-usage-updated` 이벤트로 WebView에도 전달된다. 규칙과 근거는 [`docs/superpowers/specs/2026-09-18-strip-periodic-refresh.md`](../superpowers/specs/2026-09-18-strip-periodic-refresh.md)에 있다.
+변경: 작업표시줄 표시가 켜진 동안 네이티브 루프(`spectra-usage-refresh`, 15초 tick)가 Claude → Codex를 120초마다 순차 재조회한다. `.credentials.json`이 다시 쓰이면 다음 tick에 Claude를 즉시 재조회하고, 실패는 120·240·480·960·1800초로 백오프하며, 토큰 만료(`claude-oauth-token-expired`)도 v0.3.2부터 같은 백오프로 재시도하고 자격 증명이 바뀌면 즉시 재조회한다. 갱신된 스냅샷은 `provider-usage-updated` 이벤트로 WebView에도 전달된다. 규칙과 근거는 [`docs/superpowers/specs/2026-09-18-strip-periodic-refresh.md`](../superpowers/specs/2026-09-18-strip-periodic-refresh.md)에 있다.
 
 비용(2026-09-18 실측, 설치본 0.2.3): Claude 조회 1.1초(`claude auth status` + HTTPS 1회), Codex 조회 1.3초(`codex app-server` + RPC 2회). 두 프로세스 모두 조회 직후 종료되므로 상주 메모리 증가는 없고, 2분당 약 2.4초의 단기 실행이 더해진다. 위 2026-09-12 standby-strip 30분 실측(평균 33.6 MB)은 주기 갱신 이전 값이며, 같은 시나리오 재측정은 후속 항목이다.
 
 주의(2026-09-18 확인): `npm run verify:memory`는 이 변경 이전인 `a87d1a5`에서 이미 FAIL이었다 — JS 번들 244,894 B(예산 240,000 B 초과)와 `dd94c17`(0.2.2 업데이터·Claude 신선도 라벨)이 추가한 `QuotaBoard`의 15초 `setInterval` 패턴 때문이다. 이번 변경은 +650 B(245,544 B)로 판정을 바꾸지 않는다. 예산 재설정 또는 타이머 교체는 별도 결정 사항이다.
 
+## 2026-11-07 JS 번들 예산 재설정 (240,000 → 250,000 B)
+
+변경: `scripts/verify-memory-budget.mjs`의 `maxJsBytes`를 240,000 B(`9600394`, 2026-09-10)에서 250,000 B로 올렸다. 다른 임계값(CSS 34,000 B · 글꼴 820,000 B/3개 · JS 자산 3개)과 금지 패턴 검사는 그대로다.
+
+사유: 2026-09-14 `dd94c17`(v0.2.2 업데이터·Claude 신선도 라벨) 이후 JS 번들이 244,894 B → 247,203 B(2026-10-29 정기 점검)로 예산을 3% 초과한 상태가 이어졌다. v0.3.0(`a984f92`, 2026-11-02) Focus Dock 재구성으로 239,992 B까지 내려와 v0.3.4 빌드는 다시 통과하지만 여유가 8 B에 그쳐, 문구 수정만으로도 판정이 뒤집힌다. 업데이터·freshness UI·Antigravity 할당량 표시는 유지할 기능이므로 React 유지 전제의 구조적 예산을 250,000 B로 재설정한다.
+
+타이머: 2026-09-18 주의 항목이 지목한 `QuotaBoard`의 15초 `setInterval` 2개는 v0.3.0 Focus Dock 전환에서 제거됐고, 현재 `src/App.tsx`는 경과 시간 라벨용 재귀 `setTimeout`(30초, cleanup에서 `clearTimeout`) 1개와 provider 폴링용 재귀 `setTimeout`(30초, `document.visibilityState === "visible"`일 때만 조회) 1개만 둔다. 소스·번들 양쪽의 `setInterval` 금지 검사는 유지한다.
+
+판정(2026-11-07, v0.3.4 `6868c7b` 기준 `npm run build`): JS 239,992 B · CSS 23,636 B · 글꼴 806,632 B/3개 · JS 자산 1개 → `npm run verify:memory` PASS(여유 10,008 B).

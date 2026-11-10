@@ -17,7 +17,9 @@ use serde_json::{json, Value};
 use crate::provider_usage::{self, ProviderActionResult, ProviderQuotaWindow, ProviderUsageSnapshot};
 
 pub const BRIDGE_FLAG: &str = "--antigravity-statusline-bridge";
-const FRESH_SECS: u64 = 300;
+/// 값은 CLI가 실행될 때만 들어온다. 짧게 잡으면 CLI를 쓰지 않는 동안 항상 갱신 필요로 보이므로
+/// 초기화 시각이 지나거나 Claude와 같은 하루가 지날 때만 오래된 값으로 본다.
+pub(crate) const FRESH_SECS: u64 = 24 * 60 * 60;
 #[cfg(windows)]
 const WINDOWS_COMMAND_PREFIX: &str = "powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand ";
 #[cfg(windows)]
@@ -170,6 +172,11 @@ fn expand_command_home(command: &str, home: &str) -> Option<String> {
     let executable = format!("'{}'", expanded.replace('\'', "'\"'\"'"));
     let tail = prefix + end + usize::from(quote.is_some());
     Some(format!("{executable}{}", &command[tail..]))
+}
+
+/// 작업표시줄·트레이의 AG 요약 값은 Gemini 모델군만 본다. 다른 모델군은 상세 표시에만 남긴다.
+pub(crate) fn is_summary_window(window: &ProviderQuotaWindow) -> bool {
+    window.model_group_id.as_deref() == Some("gemini")
 }
 
 fn group_label(group: &str) -> Option<&'static str> {
@@ -445,6 +452,15 @@ mod tests {
         assert_eq!(snapshot_at(Some(cache.clone()), true, true, 900).connection_state, "waiting-for-usage");
         assert!(snapshot_at(Some(cache), true, false, 1100).windows.is_empty());
         assert_eq!(snapshot_at(None, false, false, 1000).connection_state, "not-installed");
+    }
+
+    #[test]
+    fn cached_values_stay_current_for_a_day_until_a_reset_passes() {
+        let mut cache = extract_cache(&payload(), 1000).unwrap();
+        cache.quotas.iter_mut().for_each(|quota| quota.resets_at = None);
+        assert_eq!(snapshot_at(Some(cache.clone()), true, true, 1000 + 300).connection_state, "connected");
+        assert_eq!(snapshot_at(Some(cache.clone()), true, true, 1000 + FRESH_SECS).connection_state, "connected");
+        assert_eq!(snapshot_at(Some(cache), true, true, 1000 + FRESH_SECS + 1).connection_state, "stale");
     }
 
     #[test]

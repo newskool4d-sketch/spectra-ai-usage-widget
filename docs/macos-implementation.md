@@ -2,6 +2,8 @@
 
 기준: v0.3.1 (`2588389`), 2026-11-03. Mac 시험판 소스: `803ba25a70ff0cae0f422d69b4de01e9331000de`. 상태: 양쪽 아키텍처의 설치 패키지 생성·검증 완료, 실기기 GUI 미검증.
 
+2026-11-07 v0.3.4 병합: 아래 [v0.3.4 갱신](#v034-갱신) 절 참조. v0.3.1 시험판의 검증 기록과 해시는 그대로 두고 v0.3.4 결과를 구분해 적는다.
+
 ## 범위와 완료 기준
 
 - 기존 Focus Dock 대시보드와 미니창, 다크·라이트 테마 및 저장 설정을 공통 코드로 유지한다.
@@ -44,3 +46,32 @@
 - 실제 Mac 로그인 계정으로 공급자 연결·메뉴 막대 표시·클릭·창 위치·다크/라이트 설정 유지 확인.
 - Apple Developer ID 서명·공증, Mac 자동 업데이트 피드. 현재 ad-hoc 서명 시험판이며 Windows 정식 릴리즈는 변경하지 않았다.
 - 실제 Mac 대화형 검증을 CI의 컴파일·단위 테스트·CLI 실행 성공으로 대체하지 않는다. 종합 상태는 시험판 구현 및 패키지 검증 완료 / GUI 검증 PARTIAL이다.
+
+## v0.3.4 갱신
+
+기준: Windows 공개 v0.3.4(`6868c7b`, `origin/main`)를 Mac 구현 브랜치 `codex/macos-focus-dock`(`2551511`, v0.3.1 기준)에 병합. 작업 호스트는 Windows이며 Mac 빌드·실행은 CI와 사용자의 Mac에서 확인한다.
+
+병합으로 Mac 구현에 들어온 v0.3.2~v0.3.4 변경:
+
+- 작업표시줄·트레이 배지의 AG 값 Gemini 모델군 기준(`antigravity::is_summary_window`), Antigravity 캐시 신선도 하루(`antigravity::FRESH_SECS`), Claude 토큰 만료 재시도 백오프.
+- 대시보드 Antigravity 모델군 순서 Gemini → Gemini 4 Argon → Claude · GPT 고정.
+- 작업표시줄 유지 모듈 지원 버전 0.3.2·0.3.3·0.3.4 추가.
+
+병합 시 조정한 것:
+
+- `desktop_shell.rs`: 갱신 루프 주석(main)과 `cfg(any(windows, macos))`(Mac) 양쪽을 모두 반영한 충돌 1건 해소.
+- `macos_menu.rs`: 메뉴 막대 AG 제목이 자체 `gemini` 비교 대신 Windows와 같은 `is_summary_window`를 쓰고, Antigravity의 "이전 수집값" 표시(`·`)가 5분이 아니라 Windows 작업표시줄과 같은 `FRESH_SECS`(하루)를 따르도록 변경. Codex·Claude의 5분 기준은 유지. 테스트 1건 추가.
+- `App.tsx`: Mac·브라우저의 업데이트 비지원 분기를 하나로 합쳐 JS 번들을 240,000바이트 상한 아래로 유지(병합 직후 240,060바이트 FAIL → 239,994바이트 PASS). 동작은 같다.
+
+Windows 호스트 검증(2026-11-07):
+
+| 항목 | 결과 |
+|---|---|
+| `npm test` | 92/92 통과 |
+| `tsc --noEmit` + `vite build` | 통과, JS 239,994 / CSS 23,636바이트 |
+| `npm run verify:release` | PASS v0.3.4(package·lock·tauri.conf·Cargo·Cargo.lock 일치, 릴리스 노트 존재) |
+| `npm run verify:baseline` / `verify:tokens` / `verify:memory` | PASS |
+| `cargo test --lib --locked -- --test-threads=1` (Windows) | 142 통과 / 0 실패 / 9 미실행(Windows GDI 통합 테스트), 병합 직후와 `macos_menu.rs` 조정 후 각 1회. `macos_menu` 테스트 9건 포함 |
+
+Mac CI(`Build SPECTRA for macOS`)·v0.3.4 DMG 해시·실기기 GUI 확인: 이 커밋이 push된 뒤 실행 결과를 여기에 적는다. 실행 전에는 미검증이다.
+

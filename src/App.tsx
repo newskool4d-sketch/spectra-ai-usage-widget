@@ -87,6 +87,10 @@ function planName(providerId: ProviderId, planType: string | null) {
   return providerId === "codex" ? `ChatGPT ${title} · Codex` : `Claude ${title}`;
 }
 
+// 실제 값이 오기 전 자리표시. 계정에 없을 수 있는 모델군(예시의 Fable·Antigravity 모델군)은 만들지 않는다.
+const pendingWindows = (fallback: PlanQuota): QuotaWindow[] => fallback.windows.filter(window => !window.modelGroupId)
+  .map(window => ({ ...window, usedPercent: 0, remainingPercent: 0, resetLabel: "연결 후 표시", kindLabel: "실제 데이터 대기" }));
+
 function quotaFromSnapshot(snapshot: NativeProviderUsageSnapshot, fallback: PlanQuota): PlanQuota {
   const connectionState: PlanQuota["connectionState"] = snapshot.connectionState === "not-installed"
     ? "not_installed"
@@ -109,7 +113,7 @@ function quotaFromSnapshot(snapshot: NativeProviderUsageSnapshot, fallback: Plan
         resetsAt: window.resetsAt ? window.resetsAt * 1000 : null,
         windowDurationMins: window.windowDurationMins
       }))
-    : fallback.providerId === "antigravity" ? [] : fallback.windows.map(window => ({ ...window, usedPercent: 0, remainingPercent: 0, resetLabel: "연결 후 표시", kindLabel: "실제 데이터 대기" }));
+    : pendingWindows(fallback);
   return {
     ...fallback,
     planName: planName(snapshot.providerId, snapshot.planType),
@@ -138,13 +142,7 @@ function nativePendingQuota(fallback: PlanQuota): PlanQuota {
     lastSyncedAtMs: null,
     bridgeInstalled: false,
     statusMessage: "연결 상태를 확인하고 있습니다.",
-    windows: fallback.providerId === "antigravity" ? [] : fallback.windows.map(window => ({
-      ...window,
-      usedPercent: 0,
-      remainingPercent: 0,
-      resetLabel: "연결 후 표시",
-      kindLabel: "실제 데이터 대기"
-    }))
+    windows: pendingWindows(fallback)
   };
 }
 
@@ -477,9 +475,8 @@ export function App() {
   const [oauthOpen, setOauthOpen] = useState(false);
   const [actionFeedback, setActionFeedback] = useState<ProviderActionFeedback | null>(null);
   const [loginPollingProviderId, setLoginPollingProviderId] = useState<ProviderId | null>(null);
-  const [updateState, setUpdateState] = useState<UpdateState>(platform === "macos"
-    ? { phase: "unsupported", version: null, message: macUpdateMessage }
-    : { phase: "idle", version: null, message: "업데이트 확인 전" });
+  const isMac = platform === "macos";
+  const [updateState, setUpdateState] = useState<UpdateState>({ phase: isMac ? "unsupported" : "idle", version: null, message: isMac ? macUpdateMessage : "업데이트 확인 전" });
   const [updateNoticeVisible, setUpdateNoticeVisible] = useState(false);
   const pendingUpdate = useRef<AvailableAppUpdate | null>(null);
   const updateOperationInFlight = useRef(false);
@@ -606,13 +603,10 @@ export function App() {
 
   const checkForUpdates = useCallback(async () => {
     if (updateOperationInFlight.current) return;
-    if (platform === "macos") {
-      setUpdateState({ phase: "unsupported", version: null, message: macUpdateMessage });
-      setUpdateNoticeVisible(false);
-      return;
-    }
-    if (!isTauriRuntime()) {
-      setUpdateState({ phase: "unsupported", version: null, message: "설치된 앱에서만 업데이트를 확인할 수 있습니다." });
+    // Mac preview packages have no signed updater feed; the browser has no updater at all.
+    const unsupported = isMac ? macUpdateMessage : isTauriRuntime() ? null : "설치된 앱에서만 업데이트를 확인할 수 있습니다.";
+    if (unsupported) {
+      setUpdateState({ phase: "unsupported", version: null, message: unsupported });
       setUpdateNoticeVisible(false);
       return;
     }
@@ -636,7 +630,7 @@ export function App() {
     } finally {
       updateOperationInFlight.current = false;
     }
-  }, [platform]);
+  }, [isMac]);
 
   const installUpdate = useCallback(async () => {
     if (updateOperationInFlight.current) return;
