@@ -95,7 +95,7 @@ npm run verify:tokens
 
 Codex는 로그아웃 상태에서 `codex login`을 시작하고, 로그인 뒤 `codex app-server --stdio`의 `account/read`와 `account/rateLimits/read`를 호출합니다. App Server는 요청 때만 실행하며 응답 또는 제한 시간 뒤 종료합니다. API key 로그인은 ChatGPT 개인 요금제 한도로 취급하지 않습니다.
 
-Claude는 Claude Code 자격 증명에 구독 로그인이 있으면 `claude auth status`를 실행하지 않고 공식 OAuth 사용량 endpoint에서 5시간·7일 한도를 바로 조회합니다. 같은 응답의 `limits`에 모델별 한도(예: `Fable` 주간 한도)가 있으면 별도 모델군으로 함께 읽어 미니창의 모델군 선택 상자와 대시보드에 표시하고, 작업표시줄·트레이 값은 계정 전체 한도만 씁니다. `claude auth status`는 로그인 정보를 읽지 못했거나 저장된 토큰이 만료됐거나 조회가 401·403으로 거부될 때만 15초 제한으로 실행하며, 만료된 토큰은 이 호출로 갱신한 뒤 같은 회차에 다시 조회합니다. 사용자가 `사용량 브리지 설치`를 선택하면 공식 status line 입력의 5시간·7일 `rate_limits` 필드만 정제해 저장합니다. 첫 Claude 응답 전에는 `첫 사용량 대기`로 표시될 수 있으며, 브리지 제거 시 기존 상태선 설정을 복원합니다.
+Claude는 Claude Code 자격 증명(Windows는 `~/.claude/.credentials.json`, macOS는 로그인 키체인의 `Claude Code-credentials` 항목)에 구독 로그인이 있으면 `claude auth status`를 실행하지 않고 공식 OAuth 사용량 endpoint에서 5시간·7일 한도를 바로 조회합니다. 같은 응답의 `limits`에 모델별 한도(예: `Fable` 주간 한도)가 있으면 별도 모델군으로 함께 읽어 미니창의 모델군 선택 상자와 대시보드에 표시하고, 작업표시줄·트레이 값은 계정 전체 한도만 씁니다. `claude auth status`는 로그인 정보를 읽지 못했거나 저장된 토큰이 만료됐거나 조회가 401·403으로 거부될 때만 15초 제한으로 실행하며, 만료된 토큰은 이 호출로 갱신한 뒤 같은 회차에 다시 조회합니다. 사용자가 `사용량 브리지 설치`를 선택하면 공식 status line 입력의 5시간·7일 `rate_limits` 필드만 정제해 저장합니다. 첫 Claude 응답 전에는 `첫 사용량 대기`로 표시될 수 있으며, 브리지 제거 시 기존 상태선 설정을 복원합니다.
 
 공급자별 공식 인터페이스와 호환성 범위는 [`docs/integrations/provider-capability-matrix.md`](./docs/integrations/provider-capability-matrix.md), 데이터·자격 증명 경계는 [`docs/integrations/native-oauth.md`](./docs/integrations/native-oauth.md)에 기록합니다. 현재 활성 흐름은 별도 client ID나 SPECTRA 소유 token vault를 요구하지 않습니다. 공식 CLI가 자격 증명을 계속 관리합니다.
 

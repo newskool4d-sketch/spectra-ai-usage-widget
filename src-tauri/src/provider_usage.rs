@@ -655,10 +655,19 @@ fn claude_bridge_config_path() -> Option<PathBuf> {
 // The statusline bridge only receives data while a terminal Claude Code
 // session is rendering its status line. To let the refresh button fetch the
 // current windows on demand, we read the OAuth access token Claude Code keeps
-// in its own credentials file and query Anthropic's usage endpoint. The token
-// is read per request and never persisted or logged by SPECTRA.
+// (its credentials file, or on macOS its login Keychain item) and query
+// Anthropic's usage endpoint. The token is read per request and never persisted
+// or logged by SPECTRA.
 
 const CLAUDE_CREDENTIALS_ENV: &str = "SPECTRA_CLAUDE_CREDENTIALS";
+/// Generic-password service under which Claude Code keeps its macOS login (account: the
+/// macOS user name). Claude Code writes it with `/usr/bin/security`, whose access list
+/// therefore already trusts that tool: reading through it raises no Keychain prompt and
+/// widens no access (checked on macOS 27.2, 2026-11-13).
+#[cfg(target_os = "macos")]
+const CLAUDE_KEYCHAIN_SERVICE: &str = "Claude Code-credentials";
+#[cfg(target_os = "macos")]
+const CLAUDE_KEYCHAIN_TIMEOUT: Duration = Duration::from_secs(5);
 const CLAUDE_USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 const CLAUDE_USAGE_TIMEOUT: Duration = Duration::from_secs(10);
 /// Live lookup failure code for an expired Claude Code access token. The scheduler retries on
@@ -715,7 +724,66 @@ struct ClaudeOAuth {
 /// missing (API key or signed out) or the file was caught mid-rewrite. The caller then asks
 /// the CLI instead of concluding signed-out.
 fn read_claude_oauth_at(path: &Path, now_ms: u64) -> Result<ClaudeOAuth, String> {
-    let value = read_json(path)?;
+    parse_claude_oauth(&read_json(path)?, now_ms)
+}
+
+/// Reads the Claude Code login: on macOS from the Keychain first, elsewhere (or when
+/// `SPECTRA_CLAUDE_CREDENTIALS` points at a file) from the credentials file.
+fn read_claude_login(now_ms: u64) -> Result<ClaudeOAuth, String> {
+    let from_file = || {
+        claude_credentials_path()
+            .ok_or_else(|| "claude-credentials-path-unavailable".to_string())
+            .and_then(|path| read_claude_oauth_at(&path, now_ms))
+    };
+    if cfg!(target_os = "macos") && env::var_os(CLAUDE_CREDENTIALS_ENV).is_none() {
+        return choose_macos_claude_login(read_claude_oauth_keychain(now_ms), from_file);
+    }
+    from_file()
+}
+
+/// Current Claude Code keeps the macOS login in the Keychain; a `~/.claude/.credentials.json`
+/// there is usually a leftover from an older version that nothing refreshes any more. Prefer
+/// the Keychain, and accept the file only while its token is still valid, so an expired
+/// leftover can neither freeze the values nor hide the status line fallback.
+fn choose_macos_claude_login(
+    keychain: Result<ClaudeOAuth, String>,
+    file: impl FnOnce() -> Result<ClaudeOAuth, String>,
+) -> Result<ClaudeOAuth, String> {
+    match keychain {
+        Ok(login) => Ok(login),
+        Err(reason) => match file() {
+            Ok(login) if login.token.is_ok() => Ok(login),
+            _ => Err(reason),
+        },
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn read_claude_oauth_keychain(now_ms: u64) -> Result<ClaudeOAuth, String> {
+    let account = env::var("USER")
+        .ok()
+        .filter(|user| !user.trim().is_empty())
+        .ok_or_else(|| "claude-keychain-missing".to_string())?;
+    let mut command = Command::new("/usr/bin/security");
+    command
+        .args(["find-generic-password", "-s", CLAUDE_KEYCHAIN_SERVICE, "-a", account.as_str(), "-w"])
+        .stdin(Stdio::null());
+    // The secret only passes through this buffer; it is never written or logged.
+    let output = output_with_timeout(&mut command, CLAUDE_KEYCHAIN_TIMEOUT, MAX_JSON_FILE_BYTES)
+        .map_err(|_| "claude-keychain-unavailable".to_string())?;
+    if !output.status.success() {
+        return Err("claude-keychain-missing".to_string());
+    }
+    let value: Value = serde_json::from_slice(&output.stdout).map_err(|_| "json-invalid".to_string())?;
+    parse_claude_oauth(&value, now_ms)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn read_claude_oauth_keychain(_now_ms: u64) -> Result<ClaudeOAuth, String> {
+    Err("claude-keychain-missing".to_string())
+}
+
+fn parse_claude_oauth(value: &Value, now_ms: u64) -> Result<ClaudeOAuth, String> {
     let oauth = value
         .get("claudeAiOauth")
         .ok_or_else(|| "claude-oauth-token-missing".to_string())?;
@@ -1223,11 +1291,10 @@ fn claude_snapshot() -> ProviderUsageSnapshot {
     // is written to the same cache the statusline bridge uses, so both paths
     // stay consistent; on failure we fall back to whatever the bridge last
     // recorded and surface the reason.
-    let login = claude_credentials_path()
-        .ok_or_else(|| "claude-credentials-path-unavailable".to_string())
-        .and_then(|path| read_claude_oauth_at(&path, unix_now_millis()));
-    // Claude Code normally keeps macOS credentials in Keychain. Do not copy or read
-    // those secrets: verify login through the CLI and consume its official status line.
+    let login = read_claude_login(unix_now_millis());
+    // On macOS the login comes from Claude Code's Keychain item, read per request and never
+    // copied. Only the live lookup sees per-model limits (Fable); the status line carries the
+    // account-wide windows alone. Without a readable login the status line stays primary.
     let bridge_is_primary = cfg!(target_os = "macos") && login.is_err();
     let (auth_method, plan_type, live_result) = match login {
         // The credentials file already says signed in through Claude.ai and names the plan,
@@ -1243,9 +1310,7 @@ fn claude_snapshot() -> ProviderUsageSnapshot {
                 match probe_claude_auth(&spec) {
                     Ok(None) => return claude_signed_out_snapshot(bridge_installed),
                     Ok(Some(_)) => {
-                        if let Some(refreshed) =
-                            claude_credentials_path().and_then(|path| read_claude_oauth_at(&path, unix_now_millis()).ok())
-                        {
+                        if let Ok(refreshed) = read_claude_login(unix_now_millis()) {
                             oauth = refreshed;
                         }
                     }
@@ -2146,6 +2211,48 @@ mod tests {
         assert_eq!(read_claude_oauth_at(&path, now_ms).unwrap_err(), "json-invalid", "a file caught mid-rewrite");
         assert_eq!(read_claude_oauth_at(&root.join("nope.json"), now_ms).unwrap_err(), "json-read-failed");
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn macos_keychain_login_has_the_credentials_file_shape() {
+        // Field names observed in the Keychain item on 2026-11-13 (values are fakes).
+        let now_ms: u64 = 1_787_483_484_000;
+        let item = json!({
+            "claudeAiOauth": {
+                "accessToken": "sk-ant-test", "refreshToken": "sk-ant-refresh", "expiresAt": now_ms + 600_000,
+                "refreshTokenExpiresAt": now_ms + 9_000_000, "scopes": ["user:inference"],
+                "subscriptionType": "max", "subscriptionTypeSource": "server", "rateLimitTier": "default"
+            },
+            "mcpOAuth": {}
+        });
+        assert_eq!(parse_claude_oauth(&item, now_ms).unwrap(),
+            ClaudeOAuth { token: Ok("sk-ant-test".into()), subscription_type: Some("max".into()) });
+    }
+
+    #[test]
+    fn macos_login_prefers_the_keychain_over_a_leftover_credentials_file() {
+        let login = |token: Result<&str, &str>| ClaudeOAuth {
+            token: token.map(str::to_string).map_err(str::to_string),
+            subscription_type: Some("max".into()),
+        };
+        let unused = || -> Result<ClaudeOAuth, String> { panic!("the file must not be read") };
+
+        // A Keychain login wins, even one whose token expired (the CLI probe renews it).
+        assert_eq!(choose_macos_claude_login(Ok(login(Ok("keychain"))), unused).unwrap(), login(Ok("keychain")));
+        assert_eq!(choose_macos_claude_login(Ok(login(Err(CLAUDE_TOKEN_EXPIRED))), unused).unwrap(),
+            login(Err(CLAUDE_TOKEN_EXPIRED)));
+
+        // Without a Keychain login, a file with a valid token still works.
+        assert_eq!(choose_macos_claude_login(Err("claude-keychain-missing".into()), || Ok(login(Ok("file")))).unwrap(),
+            login(Ok("file")));
+
+        // An expired leftover file or no file keeps the Keychain reason, so the status line stays primary.
+        assert_eq!(
+            choose_macos_claude_login(Err("claude-keychain-missing".into()), || Ok(login(Err(CLAUDE_TOKEN_EXPIRED)))).unwrap_err(),
+            "claude-keychain-missing");
+        assert_eq!(
+            choose_macos_claude_login(Err("claude-keychain-unavailable".into()), || Err("json-read-failed".into())).unwrap_err(),
+            "claude-keychain-unavailable");
     }
 
     #[test]

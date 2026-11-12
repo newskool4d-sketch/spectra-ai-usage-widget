@@ -36,6 +36,14 @@ SPECTRA는 Codex의 `email`, access token, refresh token, 계정 ID를 직렬화
 5. 기존 상태선 명령이 있으면 같은 stdin을 넘기고 기존 출력을 그대로 사용합니다.
 6. 제거 시 기존 `statusLine` 객체를 복원합니다.
 
+### 직접 조회용 로그인 정보 (2026-11-13 추가)
+
+- 새로고침 때마다 Claude Code가 보관한 OAuth 액세스 토큰을 읽어 공식 OAuth 사용량 endpoint를 조회합니다. 토큰은 메모리에서만 쓰고 저장·로그·화면 전달을 하지 않습니다.
+- Windows: `~/.claude/.credentials.json`의 `claudeAiOauth`를 읽습니다.
+- macOS: 현재 Claude Code는 로그인 정보를 로그인 키체인의 일반 암호 항목(`Claude Code-credentials`, 계정 = macOS 사용자 이름)에 둡니다. SPECTRA는 `/usr/bin/security find-generic-password -w`로 이 항목을 읽습니다. Claude Code가 같은 도구로 항목을 쓰므로 항목의 접근 목록이 이미 이 도구를 신뢰하며, 키체인 확인 창이 뜨지 않고 접근 범위도 넓히지 않습니다(macOS 27.2 실측).
+- macOS에 남은 `~/.claude/.credentials.json`은 예전 버전의 잔여 파일일 수 있습니다. 키체인을 먼저 읽고, 키체인을 읽지 못할 때만 토큰이 유효한 파일을 사용합니다. 둘 다 없으면 종전처럼 상태선 브리지가 기본 경로입니다.
+- 모델별 한도(예: `Fable` 주간 한도)는 직접 조회 응답의 `limits[]`에만 있습니다. 공식 status line 입력에는 `five_hour`·`seven_day`·`spend_limit`만 있어, 상태선 브리지만으로는 모델별 한도를 표시할 수 없습니다.
+
 Claude 상태선 입력에는 작업 경로와 세션 정보도 포함될 수 있지만, SPECTRA 캐시에는 한도 사용률·초기화 epoch·캡처 시각만 남습니다. 브리지는 첫 Claude 응답 이후 값을 받으며, 24시간이 지났거나 초기화 시각을 넘긴 캐시는 `stale`로 표시합니다.
 
 ## 기존 OAuth callback·OS vault 코드
