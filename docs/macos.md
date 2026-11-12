@@ -4,6 +4,8 @@ Windows 포커스 도크·대시보드와 같은 React 화면을 사용하며 �
 
 2026-11-07 갱신: Windows 공개 v0.3.4까지의 변경(작업표시줄·트레이·메뉴 막대의 AG 값 Gemini 기준, Antigravity 캐시 하루 유지, 대시보드 모델군 순서 고정)을 Mac 구현에 병합해 버전을 v0.3.4로 맞췄습니다. 이 커밋의 Mac CI 실행 결과와 설치파일 해시는 [검증 기록](./macos-implementation.md)에 기록합니다. 실행 전까지는 v0.3.4 Mac 패키지가 없습니다.
 
+2026-11-13 수정: Mac에서도 Claude 로그인 정보를 로그인 키체인(`Claude Code-credentials`)에서 읽어 공식 OAuth 사용량 endpoint를 직접 조회합니다. 이전에는 Mac에서 상태선 브리지만 사용해 `Fable` 같은 모델별 한도가 표시되지 않았고, 예전 버전이 남긴 만료된 `~/.claude/.credentials.json`이 있으면 Claude 값이 갱신되지 않았습니다. 상세 경계는 [자격 증명 경계](./integrations/native-oauth.md)를 참고합니다.
+
 2026-11-03 시험판(`803ba25`, v0.3.1): [Mac 빌드 실행](https://github.com/newskool4d-sketch/spectra-ai-usage-widget/actions/runs/41531866262)에서 Apple Silicon·Intel의 앱/DMG 생성 및 패키지 검사가 통과했습니다. 각 설치파일과 해시는 [검증 기록](./macos-implementation.md)에 있습니다. 실제 Mac 화면·계정 연결 검증과 Apple 공증은 아직 완료하지 않았습니다.
 
 ## 빌드 대상과 현재 검증 범위

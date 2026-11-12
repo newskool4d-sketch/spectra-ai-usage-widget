@@ -7,7 +7,7 @@ SPECTRA 0.2의 활성 공급자는 **OpenAI Codex**와 **Claude** 두 가지입�
 | 공급자 | 계정 연결 | 개인 요금제 잔여량 | SPECTRA 구현 |
 | --- | --- | --- | --- |
 | Codex | `codex login`의 ChatGPT 브라우저 로그인. 토큰 저장·갱신은 Codex가 관리 | App Server `account/rateLimits/read`의 `usedPercent`, `windowDurationMins`, `resetsAt` | 로컬 stdio App Server를 요청 때만 실행하고 응답 후 즉시 종료 |
-| Claude | `claude auth login`의 Claude.ai 로그인. 토큰은 Claude Code가 관리 | ① 새로고침 시 Claude Code가 보관한 OAuth 액세스 토큰으로 `api.anthropic.com/api/oauth/usage`의 `five_hour`·`seven_day`(`utilization`, `resets_at`)와 `limits[]`의 모델별 한도(`scope.model.display_name`, `group`이 `session`·`weekly`인 항목. 2026-11-10 실측: `Fable` 주간) 직접 조회 ② 실패 시 공식 status line 입력의 `rate_limits.five_hour`·`seven_day` 캐시로 폴백 | 토큰은 요청 시 `~/.claude/.credentials.json`에서 읽기만 하고 저장·로그하지 않음. 상태선 브리지는 사용자가 동의하면 설치하며 두 경로가 같은 로컬 캐시를 공유 |
+| Claude | `claude auth login`의 Claude.ai 로그인. 토큰은 Claude Code가 관리 | ① 새로고침 시 Claude Code가 보관한 OAuth 액세스 토큰으로 `api.anthropic.com/api/oauth/usage`의 `five_hour`·`seven_day`(`utilization`, `resets_at`)와 `limits[]`의 모델별 한도(`scope.model.display_name`, `group`이 `session`·`weekly`인 항목. 2026-11-10 실측: `Fable` 주간) 직접 조회 ② 실패 시 공식 status line 입력의 `rate_limits.five_hour`·`seven_day` 캐시로 폴백 | 토큰은 요청 시 `~/.claude/.credentials.json`(macOS는 로그인 키체인의 `Claude Code-credentials` 항목을 `/usr/bin/security`로 조회)에서 읽기만 하고 저장·로그하지 않음. 상태선 브리지는 사용자가 동의하면 설치하며 두 경로가 같은 로컬 캐시를 공유 |
 
 ## 구현 경계
 
