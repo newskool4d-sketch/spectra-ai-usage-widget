@@ -3,7 +3,7 @@
 use std::cell::{Cell, RefCell};
 use std::sync::{Arc, Mutex};
 
-use windows_sys::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows_sys::Win32::Foundation::{GetLastError, SetLastError, COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{
     CreateCompatibleDC, CreateDIBSection, CreateFontIndirectW, DeleteDC, DeleteObject, DrawTextW,
     GdiFlush, GetDC, GetMonitorInfoW, MonitorFromWindow, ReleaseDC, SelectObject, SetBkMode, SetTextColor,
@@ -35,6 +35,8 @@ use crate::taskbar_strip::{compact_model, palette, place_strip, retheme_model, R
 const CLASS_NAME: &str = "SpectraTaskbarStrip";
 const WM_STRIP_REDRAW: u32 = WM_APP + 1;
 const WM_STRIP_SHELL_CHANGED: u32 = WM_APP + 2;
+const SHELL_RECOVERY_TIMER: usize = 1;
+const SHELL_RECOVERY_INTERVAL_MS: u32 = 1_000;
 const STRIP_FONT_WEIGHT: i32 = 600;
 const STRIP_FONT_SCALE_PERCENT: i64 = 110;
 // SDK TTTOOLINFOW_V2_SIZE: all fields we use, accepted with or without a v6 manifest.
@@ -44,6 +46,42 @@ const TOOL_INFO_SIZE: u32 = (std::mem::offset_of!(TTTOOLINFOW, lParam) + std::me
 thread_local! {
     static SHELL_TARGET: Cell<HWND> = const { Cell::new(std::ptr::null_mut()) };
     static SHELL_PENDING: Cell<bool> = const { Cell::new(false) };
+    static TASKBAR_WINDOW: Cell<HWND> = const { Cell::new(std::ptr::null_mut()) };
+}
+
+fn is_primary_taskbar(hwnd: HWND) -> bool {
+    if hwnd.is_null() || unsafe { IsWindow(hwnd) } == 0 { return false; }
+    let mut class = [0u16; 32];
+    let length = unsafe { GetClassNameW(hwnd, class.as_mut_ptr(), class.len() as i32) };
+    let expected = wide("Shell_TrayWnd");
+    length > 0 && class[..length as usize] == expected[..expected.len() - 1]
+}
+
+fn taskbar_from_cache(cache: &Cell<HWND>, lookup: impl FnOnce() -> HWND) -> HWND {
+    let cached = cache.get();
+    // A shell band transition can temporarily exclude a live taskbar from lookup.
+    // Validate the handle and class instead of treating that lookup gap as destruction.
+    if is_primary_taskbar(cached) { return cached; }
+    let found = lookup();
+    let current = if is_primary_taskbar(found) { found } else { std::ptr::null_mut() };
+    cache.set(current);
+    current
+}
+
+fn current_taskbar() -> HWND {
+    let found = TASKBAR_WINDOW.with(|cache| taskbar_from_cache(cache, || unsafe {
+        FindWindowW(wide("Shell_TrayWnd").as_ptr(), std::ptr::null())
+    }));
+    if !found.is_null() { return found; }
+    let target = SHELL_TARGET.with(Cell::get);
+    let state = unsafe { (GetWindowLongPtrW(target, GWLP_USERDATA) as *const StripState).as_ref() };
+    if state.is_some_and(|state| state.follow_taskbar_owner) {
+        // This owner was verified when we attached it. A transient shell lookup
+        // failure does not revoke that relationship; Windows clears it on destruction.
+        let owner = unsafe { GetWindow(target, GW_OWNER) };
+        if !owner.is_null() { return owner; }
+    }
+    std::ptr::null_mut()
 }
 
 fn request_shell_redraw() {
@@ -58,7 +96,7 @@ fn request_shell_redraw() {
 
 fn is_taskbar_geometry_window(hwnd: HWND) -> bool {
     // Explorer 재시작 뒤에도 현재 셸 HWND를 확인한다. 다른 앱의 위치 이벤트는 무시한다.
-    let taskbar = unsafe { FindWindowW(wide("Shell_TrayWnd").as_ptr(), std::ptr::null()) };
+    let taskbar = current_taskbar();
     if taskbar.is_null() || hwnd.is_null() { return false; }
     hwnd == taskbar || hwnd == unsafe {
         FindWindowExW(taskbar, std::ptr::null_mut(), wide("TrayNotifyWnd").as_ptr(), std::ptr::null())
@@ -88,6 +126,11 @@ fn register_win_event(event: u32) -> Result<HWINEVENTHOOK, String> {
     if hook.is_null() { Err(win32_error("SetWinEventHook")) } else { Ok(hook) }
 }
 
+fn register_recovery_timer(hwnd: HWND) -> Result<usize, String> {
+    let timer = unsafe { SetTimer(hwnd, SHELL_RECOVERY_TIMER, SHELL_RECOVERY_INTERVAL_MS, None) };
+    if timer == 0 { Err(win32_error("SetTimer shell recovery")) } else { Ok(timer) }
+}
+
 fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(std::iter::once(0)).collect()
 }
@@ -115,7 +158,7 @@ pub fn current_theme() -> StripTheme {
 
 /// 작업표시줄 사각형과 붙은 모서리, 대상 모니터의 DPI.
 fn taskbar_rect() -> Option<(StripRect, TaskbarEdge, u32)> {
-    let taskbar = unsafe { FindWindowW(wide("Shell_TrayWnd").as_ptr(), std::ptr::null()) };
+    let taskbar = current_taskbar();
     let dpi = unsafe { GetDpiForWindow(taskbar) };
     if dpi == 0 { return None; }
     let mut data: APPBARDATA = unsafe { std::mem::zeroed() };
@@ -135,7 +178,7 @@ fn taskbar_rect() -> Option<(StripRect, TaskbarEdge, u32)> {
 
 /// 알림 영역(트레이~시계)의 왼쪽 가장자리. 실측상 Windows 11 26200에서도 존재한다.
 fn tray_left() -> Option<i32> {
-    let tray = unsafe { FindWindowW(wide("Shell_TrayWnd").as_ptr(), std::ptr::null()) };
+    let tray = current_taskbar();
     if tray.is_null() {
         return None;
     }
@@ -255,6 +298,9 @@ struct StripState {
     font_dpi: Cell<u32>,
     taskbar_created: u32,
     hooks: [HWINEVENTHOOK; 2],
+    recovery_timer: usize,
+    follow_taskbar_owner: bool,
+    shell_recovery_pending: Cell<bool>,
     tooltip: RefCell<Option<StripTooltip>>,
 }
 
@@ -262,7 +308,9 @@ impl StripState {
     fn new(model: Arc<Mutex<Option<StripModel>>>, on_click: Box<dyn Fn() + Send + 'static>) -> Self {
         Self {
             model, on_click, font: Cell::new(std::ptr::null_mut()), font_dpi: Cell::new(0),
-            taskbar_created: 0, hooks: [std::ptr::null_mut(); 2], tooltip: RefCell::new(None),
+            taskbar_created: 0, hooks: [std::ptr::null_mut(); 2], recovery_timer: 0,
+            follow_taskbar_owner: false, shell_recovery_pending: Cell::new(false),
+            tooltip: RefCell::new(None),
         }
     }
 
@@ -352,7 +400,10 @@ pub fn spawn(model: StripModel, on_click: Box<dyn Fn() + Send + 'static>) -> Res
     std::thread::Builder::new()
         .name("spectra-taskbar-strip".to_string())
         .spawn(move || {
-            let hwnd = match create_window(StripState::new(thread_model, on_click)) {
+            let mut state = StripState::new(thread_model, on_click);
+            // Production follows Explorer. Disposable test windows remain independent.
+            state.follow_taskbar_owner = true;
+            let hwnd = match create_window(state) {
                 Ok(hwnd) => hwnd,
                 Err(error) => {
                     let _ = tx.send(Err(error));
@@ -387,7 +438,15 @@ fn create_window(state: StripState) -> Result<HWND, String> {
 
 fn create_window_with_hooks(
     state: StripState,
+    register: impl FnMut(u32) -> Result<HWINEVENTHOOK, String>,
+) -> Result<HWND, String> {
+    create_window_with_resources(state, register, register_recovery_timer)
+}
+
+fn create_window_with_resources(
+    state: StripState,
     mut register: impl FnMut(u32) -> Result<HWINEVENTHOOK, String>,
+    register_timer: impl FnOnce(HWND) -> Result<usize, String>,
 ) -> Result<HWND, String> {
     if !SHELL_TARGET.with(Cell::get).is_null() {
         return Err("a strip window already owns this thread".into());
@@ -446,6 +505,8 @@ fn create_window_with_hooks(
         }
         let tooltip = StripTooltip::new(hwnd)?;
         unsafe { (*boxed).tooltip.replace(Some(tooltip)); }
+        let timer = register_timer(hwnd)?;
+        unsafe { (*boxed).recovery_timer = timer; }
         Ok(())
     })();
     if let Err(error) = initialized {
@@ -477,6 +538,35 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
             }
             0
         }
+        WM_TIMER if wparam == SHELL_RECOVERY_TIMER => {
+            // Quick Settings may reorder the taskbar without a foreground/location event.
+            // Stable/hidden strips do no rendering; a covered strip rechecks normal hide policy.
+            let taskbar = current_taskbar();
+            let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const StripState;
+            if let Some(state) = ptr.as_ref().filter(|state| state.follow_taskbar_owner) {
+                match sync_taskbar_owner(hwnd, state, taskbar) {
+                    Ok(TaskbarOwnerSync::Missing) => return 0,
+                    Ok(TaskbarOwnerSync::Changed) => {
+                        if let Err(error) = redraw(hwnd) {
+                            eprintln!("spectra: strip owner recovery failed: {error}");
+                        }
+                        return 0;
+                    }
+                    Ok(TaskbarOwnerSync::Unchanged) => {}
+                    Err(error) => {
+                        eprintln!("spectra: strip owner sync failed: {error}");
+                        return 0;
+                    }
+                }
+            }
+            if let Some(insert_after) = taskbar_recovery_anchor(hwnd, taskbar) {
+                if let Err(error) = redraw_with_order(hwnd, insert_after) {
+                    // Keep the existing surface visible so a transient reorder failure retries.
+                    eprintln!("spectra: strip shell recovery failed: {error}");
+                }
+            }
+            0
+        }
         WM_LBUTTONUP => {
             let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const StripState;
             if let Some(state) = ptr.as_ref() {
@@ -502,6 +592,10 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
             }
             let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut StripState;
             if !ptr.is_null() {
+                if (*ptr).recovery_timer != 0 {
+                    KillTimer(hwnd, (*ptr).recovery_timer);
+                    (*ptr).recovery_timer = 0;
+                }
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
                 drop(Box::from_raw(ptr));
             }
@@ -512,7 +606,8 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
             let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const StripState;
             if let Some(state) = ptr.as_ref() {
                 if state.taskbar_created != 0 && msg == state.taskbar_created {
-                    request_shell_redraw(); // Explorer HWND/위치를 캐시하지 않고 다시 찾는다.
+                    TASKBAR_WINDOW.with(|cache| cache.set(std::ptr::null_mut()));
+                    request_shell_redraw(); // 새 Explorer HWND/위치를 다시 찾는다.
                     return 0;
                 }
             }
@@ -849,7 +944,7 @@ fn rect_covers_monitor(window: RECT, monitor: RECT) -> bool {
 fn foreground_covers_taskbar_monitor(strip: HWND) -> bool {
     unsafe {
         let foreground = GetForegroundWindow();
-        let taskbar = FindWindowW(wide("Shell_TrayWnd").as_ptr(), std::ptr::null());
+        let taskbar = current_taskbar();
         if foreground.is_null() || taskbar.is_null() || foreground == strip || foreground == taskbar
             || foreground == GetDesktopWindow() || foreground == GetShellWindow()
             || IsWindowVisible(foreground) == 0 || IsIconic(foreground) != 0 {
@@ -899,29 +994,138 @@ fn hide_strip(hwnd: HWND) {
     unsafe { ShowWindow(hwnd, SW_HIDE) };
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum TaskbarOwnerSync { Unchanged, Changed, Missing }
+
+fn set_window_owner(hwnd: HWND, owner: HWND) -> Result<(), String> {
+    // An unowned popup legitimately returns zero on success; clear/check last error.
+    unsafe { SetLastError(0) };
+    let previous = unsafe { SetWindowLongPtrW(hwnd, GWLP_HWNDPARENT, owner as isize) };
+    let error = unsafe { GetLastError() };
+    if previous == 0 && error != 0 {
+        return Err(format!("SetWindowLongPtrW taskbar owner failed: {}", std::io::Error::from_raw_os_error(error as i32)));
+    }
+    Ok(())
+}
+
+fn sync_taskbar_owner(hwnd: HWND, state: &StripState, taskbar: HWND) -> Result<TaskbarOwnerSync, String> {
+    sync_taskbar_owner_with(hwnd, state, taskbar, set_window_owner)
+}
+
+fn sync_taskbar_owner_with(
+    hwnd: HWND, state: &StripState, taskbar: HWND,
+    assign: impl FnOnce(HWND, HWND) -> Result<(), String>,
+) -> Result<TaskbarOwnerSync, String> {
+    let owner = unsafe { GetWindow(hwnd, GW_OWNER) };
+    let taskbar = if (taskbar.is_null() || unsafe { IsWindow(taskbar) } == 0)
+        && is_primary_taskbar(owner) { owner } else { taskbar };
+    if taskbar.is_null() || unsafe { IsWindow(taskbar) } == 0 {
+        if !owner.is_null() {
+            return Ok(if state.shell_recovery_pending.get() {
+                TaskbarOwnerSync::Changed
+            } else { TaskbarOwnerSync::Unchanged });
+        }
+        state.shell_recovery_pending.set(true);
+        hide_strip(hwnd);
+        return Ok(TaskbarOwnerSync::Missing);
+    }
+    if owner != taskbar {
+        state.shell_recovery_pending.set(true);
+        assign(hwnd, taskbar)?;
+        // Windows can acknowledge this call without retaining a cross-band owner.
+        // Keep the HWND/timer alive and retry instead of treating that as a binding.
+        if unsafe { GetWindow(hwnd, GW_OWNER) } != taskbar {
+            hide_strip(hwnd);
+            return Ok(TaskbarOwnerSync::Missing);
+        }
+    }
+    // Explorer's cross-thread owner destruction disowns this popup, leaving its timer alive.
+    // Rebind even if the replacement taskbar appeared between ticks without a missing interval.
+    // Keep retrying until geometry is available and redraw has made a visibility decision.
+    Ok(if state.shell_recovery_pending.get() { TaskbarOwnerSync::Changed } else { TaskbarOwnerSync::Unchanged })
+}
+
+/// Return a position immediately above the covering taskbar, preserving any menus above it.
+/// EnumWindows avoids manually following a changing HWND linked list.
+fn taskbar_recovery_anchor(strip: HWND, taskbar: HWND) -> Option<HWND> {
+    unsafe {
+        if strip.is_null() || taskbar.is_null() || strip == taskbar
+            || IsWindowVisible(strip) == 0 || IsWindowVisible(taskbar) == 0 {
+            return None;
+        }
+        let mut strip_rect: RECT = std::mem::zeroed();
+        let mut taskbar_rect: RECT = std::mem::zeroed();
+        if GetWindowRect(strip, &mut strip_rect) == 0 || GetWindowRect(taskbar, &mut taskbar_rect) == 0
+            || strip_rect.left >= taskbar_rect.right || taskbar_rect.left >= strip_rect.right
+            || strip_rect.top >= taskbar_rect.bottom || taskbar_rect.top >= strip_rect.bottom {
+            return None;
+        }
+        struct OrderProbe { strip: HWND, taskbar: HWND, previous: HWND, anchor: Option<HWND> }
+        unsafe extern "system" fn visit(hwnd: HWND, parameter: LPARAM) -> i32 {
+            let probe = &mut *(parameter as *mut OrderProbe);
+            if hwnd == probe.strip { return 0; } // Already above the taskbar.
+            if hwnd == probe.taskbar {
+                probe.anchor = Some(if probe.previous.is_null() { HWND_TOPMOST } else { probe.previous });
+                return 0;
+            }
+            probe.previous = hwnd;
+            1
+        }
+        let mut probe = OrderProbe { strip, taskbar, previous: std::ptr::null_mut(), anchor: None };
+        EnumWindows(Some(visit), &mut probe as *mut _ as LPARAM);
+        probe.anchor
+    }
+}
+
 fn redraw(hwnd: HWND) -> Result<(), String> {
+    redraw_with_order(hwnd, HWND_TOPMOST)
+}
+
+fn redraw_with_order(hwnd: HWND, insert_after: HWND) -> Result<(), String> {
     let state = unsafe { (GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const StripState).as_ref() };
     let Some(state) = state else { return Ok(()) };
+    if state.follow_taskbar_owner {
+        let taskbar = current_taskbar();
+        if sync_taskbar_owner(hwnd, state, taskbar)? == TaskbarOwnerSync::Missing { return Ok(()); }
+    }
     let model = state.model.lock().ok().and_then(|slot| slot.clone());
     state.sync_tooltip(model.as_ref().map(|model| model.tooltip.as_str()).unwrap_or_default());
     let Some(mut model) = model else {
+        state.shell_recovery_pending.set(false);
         hide_strip(hwnd);
         return Ok(());
     };
-    let (Some((taskbar, edge, dpi)), Some(tray)) = (taskbar_rect(), tray_left()) else {
-        hide_strip(hwnd);
-        return Ok(());
-    };
-    // 지원하지 않는 세로 작업표시줄에서는 렌더링 자체를 건너뛴다.
-    if matches!(edge, TaskbarEdge::Left | TaskbarEdge::Right) || should_hide(hwnd) {
+    if should_hide(hwnd) {
+        state.shell_recovery_pending.set(false);
         hide_strip(hwnd);
         return Ok(());
     }
-    render_at_geometry(hwnd, state, &mut model, taskbar, edge, tray, dpi)
+    let (Some((taskbar, edge, dpi)), Some(tray)) = (taskbar_rect(), tray_left()) else {
+        if state.follow_taskbar_owner { state.shell_recovery_pending.set(true); }
+        if !state.follow_taskbar_owner || unsafe { GetWindow(hwnd, GW_OWNER) }.is_null() {
+            hide_strip(hwnd);
+        }
+        return Ok(());
+    };
+    // 지원하지 않는 세로 작업표시줄에서는 렌더링 자체를 건너뛴다.
+    if matches!(edge, TaskbarEdge::Left | TaskbarEdge::Right) {
+        state.shell_recovery_pending.set(false);
+        hide_strip(hwnd);
+        return Ok(());
+    }
+    render_at_geometry_with_order(hwnd, state, &mut model, taskbar, edge, tray, dpi, insert_after)
 }
 
+#[cfg(test)]
 fn render_at_geometry(
     hwnd: HWND, state: &StripState, model: &mut StripModel, taskbar: StripRect, edge: TaskbarEdge, tray: i32, dpi: u32,
+) -> Result<(), String> {
+    render_at_geometry_with_order(hwnd, state, model, taskbar, edge, tray, dpi, HWND_TOPMOST)
+}
+
+fn render_at_geometry_with_order(
+    hwnd: HWND, state: &StripState, model: &mut StripModel, taskbar: StripRect, edge: TaskbarEdge,
+    tray: i32, dpi: u32, insert_after: HWND,
 ) -> Result<(), String> {
     // 이동 전 스트립 HWND는 이전 모니터의 DPI를 유지할 수 있다.
     // 작업표시줄의 DPI를 사용해야 공간 부족으로 숨긴 뒤에도 새 모니터에서 복원된다.
@@ -938,6 +1142,7 @@ fn render_at_geometry(
     }
     let (width, height) = (rendered.layout.width, rendered.layout.height);
     let Some((x, y)) = place_strip(taskbar, edge, tray, (width, height)) else {
+        state.shell_recovery_pending.set(false);
         hide_strip(hwnd);
         return Ok(());
     };
@@ -951,10 +1156,17 @@ fn render_at_geometry(
         if UpdateLayeredWindow(hwnd, surface.screen, &mut position, &mut size, surface.dc, &mut source, 0 as COLORREF, &blend, ULW_ALPHA) == 0 {
             return Err(win32_error("UpdateLayeredWindow"));
         }
-        if SetWindowPos(hwnd, HWND_TOPMOST, x, y, width, height, SWP_NOACTIVATE | SWP_SHOWWINDOW) == 0 {
+        let mut flags = SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_SHOWWINDOW;
+        // Owned strips follow Explorer's band/order. An explicit TOPMOST reorder
+        // must not split that group when Quick Settings changes the shell band.
+        if state.follow_taskbar_owner || !GetWindow(hwnd, GW_OWNER).is_null() {
+            flags |= SWP_NOZORDER;
+        }
+        if SetWindowPos(hwnd, insert_after, x, y, width, height, flags) == 0 {
             return Err(win32_error("SetWindowPos"));
         }
     }
+    state.shell_recovery_pending.set(false);
     state.enable_tooltip(true);
     Ok(())
 }
@@ -1086,8 +1298,10 @@ mod tests {
                 let hwnd = create_window(StripState::new(Arc::new(Mutex::new(None)), Box::new(|| {}))).unwrap();
                 let state = &*(GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const StripState);
                 let hooks = state.hooks;
+                let timer = state.recovery_timer;
                 let tooltip = state.tooltip.borrow().as_ref().unwrap().hwnd;
                 assert!(hooks.iter().all(|hook| !hook.is_null()));
+                assert_eq!(timer, SHELL_RECOVERY_TIMER);
                 assert_eq!(SHELL_TARGET.with(Cell::get), hwnd);
                 assert!(state.taskbar_created >= 0xc000);
                 request_shell_redraw();
@@ -1095,6 +1309,7 @@ mod tests {
                 assert_ne!(DestroyWindow(hwnd), 0);
                 assert_eq!(IsWindow(hwnd), 0);
                 assert_eq!(IsWindow(tooltip), 0, "owned tooltip must be released in cycle {cycle}");
+                assert_eq!(KillTimer(hwnd, timer), 0, "timer must already be released in cycle {cycle}");
                 assert!(SHELL_TARGET.with(Cell::get).is_null());
                 assert!(!SHELL_PENDING.with(Cell::get));
                 for hook in hooks {
@@ -1134,6 +1349,324 @@ mod tests {
             let hwnd = create_window(StripState::new(Arc::new(Mutex::new(None)), Box::new(|| {}))).unwrap();
             assert_ne!(DestroyWindow(hwnd), 0, "retry succeeds after failed setup");
             eprintln!("first/second hook failure injection: HWND and hooks released; real registration retry succeeded");
+        }).join().unwrap();
+    }
+
+    #[test]
+    #[ignore = "requires a Windows desktop; run with --ignored --test-threads=1"]
+    fn live_taskbar_survives_lookup_gaps_without_hiding_or_detaching_strip() {
+        std::thread::spawn(|| unsafe {
+            let taskbar = FindWindowW(wide("Shell_TrayWnd").as_ptr(), std::ptr::null());
+            assert!(is_primary_taskbar(taskbar));
+            let foreground = GetForegroundWindow();
+            let cache = Cell::new(taskbar);
+            assert_eq!(taskbar_from_cache(&cache, || {
+                panic!("a validated live shell must not depend on lookup during a band transition")
+            }), taskbar);
+
+            let other = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+                wide("STATIC").as_ptr(), std::ptr::null(), WS_POPUP,
+                0, 0, 1, 1, std::ptr::null_mut(), std::ptr::null_mut(),
+                GetModuleHandleW(std::ptr::null()), std::ptr::null());
+            assert!(!other.is_null());
+            assert!(!is_primary_taskbar(other), "reject a live handle with the wrong class");
+            cache.set(other);
+            assert_eq!(taskbar_from_cache(&cache, || taskbar), taskbar);
+            assert_ne!(DestroyWindow(other), 0);
+            cache.set(other);
+            assert!(taskbar_from_cache(&cache, std::ptr::null_mut).is_null(),
+                "a destroyed cached shell and missing replacement must remain unavailable");
+            assert_eq!(taskbar_from_cache(&cache, || taskbar), taskbar);
+
+            let strip = create_window(StripState::new(Arc::new(Mutex::new(None)), Box::new(|| {}))).unwrap();
+            let state = &*(GetWindowLongPtrW(strip, GWLP_USERDATA) as *const StripState);
+            assert_eq!(sync_taskbar_owner(strip, state, taskbar).unwrap(), TaskbarOwnerSync::Changed);
+            state.shell_recovery_pending.set(false);
+            assert_ne!(SetWindowPos(strip, HWND_TOPMOST, 0, 0, 0, 0,
+                SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW), 0);
+            assert_ne!(IsWindowVisible(strip), 0);
+            assert_eq!(sync_taskbar_owner(strip, state, std::ptr::null_mut()).unwrap(), TaskbarOwnerSync::Unchanged);
+            assert_eq!(GetWindow(strip, GW_OWNER), taskbar, "a lookup gap must not detach a live shell owner");
+            assert_ne!(IsWindowVisible(strip), 0, "a lookup gap must not hide the surface");
+            assert_eq!(GetForegroundWindow(), foreground);
+            assert_ne!(DestroyWindow(strip), 0);
+            discard_quit_message();
+        }).join().unwrap();
+    }
+
+    #[test]
+    #[ignore = "requires a Windows desktop; run with --ignored --test-threads=1"]
+    fn cross_thread_owner_destruction_disowns_strip_without_ending_its_lifetime() {
+        std::thread::spawn(|| unsafe {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let owner_thread = std::thread::spawn(move || {
+                let owner = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+                    wide("STATIC").as_ptr(), std::ptr::null(), WS_POPUP,
+                    0, 0, 1, 1, std::ptr::null_mut(), std::ptr::null_mut(),
+                    GetModuleHandleW(std::ptr::null()), std::ptr::null());
+                assert!(!owner.is_null());
+                tx.send(owner as isize).unwrap();
+                let mut message: MSG = std::mem::zeroed();
+                while GetMessageW(&mut message, std::ptr::null_mut(), 0, 0) > 0 {
+                    DispatchMessageW(&message);
+                    if IsWindow(owner) == 0 { break; }
+                }
+                assert_eq!(IsWindow(owner), 0);
+            });
+            let owner = rx.recv().unwrap() as HWND;
+            let strip = create_window(StripState::new(Arc::new(Mutex::new(None)), Box::new(|| {}))).unwrap();
+            set_window_owner(strip, owner).unwrap();
+            assert_eq!(GetWindow(strip, GW_OWNER), owner);
+            assert_ne!(PostMessageW(owner, WM_CLOSE, 0, 0), 0);
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while !owner_thread.is_finished() {
+                let mut message: MSG = std::mem::zeroed();
+                while PeekMessageW(&mut message, std::ptr::null_mut(), 0, 0, PM_REMOVE) != 0 {
+                    DispatchMessageW(&message);
+                }
+                assert!(std::time::Instant::now() < deadline, "owner shutdown must not block");
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            owner_thread.join().unwrap();
+            assert_ne!(IsWindow(strip), 0, "an owner on another thread must not destroy the strip");
+            assert!(GetWindow(strip, GW_OWNER).is_null(), "the surviving popup must be disowned");
+            let state = &*(GetWindowLongPtrW(strip, GWLP_USERDATA) as *const StripState);
+            assert_eq!(state.recovery_timer, SHELL_RECOVERY_TIMER);
+            assert_eq!(SHELL_TARGET.with(Cell::get), strip);
+            let replacement = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+                wide("STATIC").as_ptr(), std::ptr::null(), WS_POPUP,
+                0, 0, 1, 1, std::ptr::null_mut(), std::ptr::null_mut(),
+                GetModuleHandleW(std::ptr::null()), std::ptr::null());
+            assert!(!replacement.is_null());
+            assert_eq!(sync_taskbar_owner(strip, state, replacement).unwrap(), TaskbarOwnerSync::Changed);
+            assert_eq!(GetWindow(strip, GW_OWNER), replacement, "bind a replacement without needing a missing tick");
+            assert_ne!(DestroyWindow(strip), 0);
+            assert_ne!(DestroyWindow(replacement), 0);
+            discard_quit_message();
+            eprintln!("cross-thread owner destroyed: strip survived, owner cleared, timer and hook target retained");
+        }).join().unwrap();
+    }
+
+    #[test]
+    #[ignore = "requires a Windows desktop; run with --ignored --test-threads=1"]
+    fn taskbar_owner_sync_recovers_shell_replacement_without_reordering_or_activating_owner() {
+        std::thread::spawn(|| unsafe {
+            struct Windows(Vec<HWND>);
+            impl Drop for Windows {
+                fn drop(&mut self) {
+                    for hwnd in self.0.iter().rev() { unsafe { if IsWindow(*hwnd) != 0 { DestroyWindow(*hwnd); } } }
+                }
+            }
+            let foreground = GetForegroundWindow();
+            let mut windows = Windows(Vec::new());
+            let geometry = StripRect { left: 20, top: 20, right: 800, bottom: 80 };
+            for _ in 0..2 {
+                let hwnd = CreateWindowExW(
+                    WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TOPMOST | WS_EX_LAYERED,
+                    wide("STATIC").as_ptr(), std::ptr::null(), WS_POPUP,
+                    20, 20, 780, 60, std::ptr::null_mut(), std::ptr::null_mut(),
+                    GetModuleHandleW(std::ptr::null()), std::ptr::null(),
+                );
+                assert!(!hwnd.is_null());
+                windows.0.push(hwnd);
+                assert_ne!(SetLayeredWindowAttributes(hwnd, 0, 1, LWA_ALPHA), 0);
+                assert_ne!(SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                    SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW), 0);
+            }
+            let (owner, replacement) = (windows.0[0], windows.0[1]);
+            let mut model = StripModel {
+                segments: vec![StripSegment { label: "Codex".into(), window_label: Some("5h"),
+                    value: "42%".into(), value_color: [0; 3], stale: false }],
+                tooltip: "owner binding regression".into(),
+            };
+            let strip = create_window(StripState::new(Arc::new(Mutex::new(Some(model.clone()))), Box::new(|| {}))).unwrap();
+            windows.0.push(strip);
+            let state = &*(GetWindowLongPtrW(strip, GWLP_USERDATA) as *const StripState);
+            assert!(!state.follow_taskbar_owner, "synthetic HWNDs must never bind the real taskbar");
+            assert!(GetWindow(strip, GW_OWNER).is_null());
+            assert!(set_window_owner(std::ptr::null_mut(), owner).is_err(), "check native owner assignment failures");
+            assert_ne!(SetWindowPos(strip, HWND_TOPMOST, 0, 0, 0, 0,
+                SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW), 0);
+            assert_eq!(sync_taskbar_owner_with(strip, state, owner, |_, _| Ok(())).unwrap(),
+                TaskbarOwnerSync::Missing, "API success without an actual owner must stay pending");
+            assert!(state.shell_recovery_pending.get());
+            assert_eq!(IsWindowVisible(strip), 0);
+            assert!(GetWindow(strip, GW_OWNER).is_null());
+            assert_eq!(sync_taskbar_owner(strip, state, owner).unwrap(), TaskbarOwnerSync::Changed);
+            assert_eq!(GetWindow(strip, GW_OWNER), owner);
+            assert_eq!(sync_taskbar_owner(strip, state, owner).unwrap(), TaskbarOwnerSync::Changed,
+                "keep retrying until geometry/rendering becomes available");
+            assert_ne!(SetWindowPos(replacement, HWND_TOPMOST, 0, 0, 0, 0,
+                SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE), 0);
+            assert!(taskbar_recovery_anchor(owner, replacement).is_some());
+            render_at_geometry(strip, state, &mut model, geometry, TaskbarEdge::Top, geometry.right, 96).unwrap();
+            assert!(taskbar_recovery_anchor(owner, replacement).is_some(), "render must not raise its shell owner");
+            assert_eq!(sync_taskbar_owner(strip, state, owner).unwrap(), TaskbarOwnerSync::Unchanged);
+            assert_eq!(GetForegroundWindow(), foreground);
+            assert_ne!(IsWindowVisible(strip), 0);
+
+            assert_eq!(sync_taskbar_owner(strip, state, std::ptr::null_mut()).unwrap(), TaskbarOwnerSync::Unchanged);
+            assert_eq!(GetWindow(strip, GW_OWNER), owner, "missing lookup must not revoke an existing binding");
+            assert_ne!(IsWindowVisible(strip), 0, "missing lookup must not hide an owned surface");
+            set_window_owner(strip, std::ptr::null_mut()).unwrap(); // Simulate the shell's destruction/disowning.
+            assert_eq!(sync_taskbar_owner(strip, state, std::ptr::null_mut()).unwrap(), TaskbarOwnerSync::Missing);
+            assert_eq!(IsWindowVisible(strip), 0);
+            assert!(GetWindow(strip, GW_OWNER).is_null());
+            assert!(state.shell_recovery_pending.get());
+            assert_eq!(sync_taskbar_owner(strip, state, replacement).unwrap(), TaskbarOwnerSync::Changed);
+            assert_eq!(GetWindow(strip, GW_OWNER), replacement);
+            render_at_geometry(strip, state, &mut model, geometry, TaskbarEdge::Top, geometry.right, 96).unwrap();
+            assert_ne!(IsWindowVisible(strip), 0, "same HWND recovers after a shell outage");
+            assert!(!state.shell_recovery_pending.get());
+            hide_strip(strip);
+            assert_eq!(sync_taskbar_owner(strip, state, replacement).unwrap(), TaskbarOwnerSync::Unchanged);
+            assert_eq!(IsWindowVisible(strip), 0, "a stable owner must not undo intentional hiding");
+            assert_eq!(GetForegroundWindow(), foreground);
+            drop(windows);
+            discard_quit_message();
+            eprintln!("checked owner assignment, missing/replaced shell, redraw retry, owner Z order and focus: PASS");
+        }).join().unwrap();
+    }
+
+    #[test]
+    #[ignore = "requires a Windows desktop; run with --ignored --test-threads=1"]
+    fn recovery_timer_registration_failure_releases_window_hooks_and_tooltip() {
+        std::thread::spawn(|| unsafe {
+            let mut attempted = std::ptr::null_mut();
+            let mut tooltip = std::ptr::null_mut();
+            let mut hooks = Vec::new();
+            let result = create_window_with_resources(
+                StripState::new(Arc::new(Mutex::new(None)), Box::new(|| {})),
+                |event| {
+                    let hook = register_win_event(event)?;
+                    hooks.push(hook);
+                    Ok(hook)
+                },
+                |hwnd| {
+                    attempted = hwnd;
+                    let state = &*(GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const StripState);
+                    tooltip = state.tooltip.borrow().as_ref().unwrap().hwnd;
+                    Err("injected recovery timer registration failure".into())
+                },
+            );
+            assert_eq!(result.unwrap_err(), "injected recovery timer registration failure");
+            assert!(!attempted.is_null() && !tooltip.is_null());
+            assert_eq!(IsWindow(attempted), 0);
+            assert_eq!(IsWindow(tooltip), 0);
+            assert!(SHELL_TARGET.with(Cell::get).is_null());
+            for hook in hooks { assert_eq!(UnhookWinEvent(hook), 0); }
+            discard_quit_message();
+            let hwnd = create_window(StripState::new(Arc::new(Mutex::new(None)), Box::new(|| {}))).unwrap();
+            assert_ne!(DestroyWindow(hwnd), 0, "timer registration can retry after failed setup");
+            discard_quit_message();
+        }).join().unwrap();
+    }
+
+    #[test]
+    #[ignore = "requires a Windows desktop; run with --ignored --test-threads=1"]
+    fn recovery_order_preserves_popups_and_skips_hidden_uncovered_windows() {
+        std::thread::spawn(|| unsafe {
+            struct Windows(Vec<HWND>);
+            impl Drop for Windows {
+                fn drop(&mut self) { for hwnd in &self.0 { unsafe { DestroyWindow(*hwnd); } } }
+            }
+            let mut windows = Windows(Vec::new());
+            let foreground = GetForegroundWindow();
+            for _ in 0..3 {
+                let hwnd = CreateWindowExW(
+                    WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TOPMOST | WS_EX_LAYERED,
+                    wide("STATIC").as_ptr(), std::ptr::null(), WS_POPUP,
+                    20, 20, 80, 30, std::ptr::null_mut(), std::ptr::null_mut(),
+                    GetModuleHandleW(std::ptr::null()), std::ptr::null(),
+                );
+                assert!(!hwnd.is_null());
+                windows.0.push(hwnd);
+                assert_ne!(SetLayeredWindowAttributes(hwnd, 0, 1, LWA_ALPHA), 0);
+                assert_ne!(SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                    SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW), 0);
+            }
+            let (strip, taskbar, popup) = (windows.0[0], windows.0[1], windows.0[2]);
+            let anchor = taskbar_recovery_anchor(strip, taskbar).expect("cover reproduces missing strip");
+            assert_eq!(anchor, popup, "place after the menu, immediately before the taskbar");
+            assert_ne!(SetWindowPos(strip, anchor, 0, 0, 0, 0,
+                SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE), 0);
+            assert!(taskbar_recovery_anchor(strip, taskbar).is_none(), "strip now precedes cover");
+            assert!(taskbar_recovery_anchor(popup, strip).is_none(), "popup stays ahead of strip");
+            assert_eq!(GetForegroundWindow(), foreground, "recovery must never activate a window");
+
+            // An unrelated window above the strip must not trigger recovery.
+            assert!(taskbar_recovery_anchor(strip, std::ptr::null_mut()).is_none());
+            ShowWindow(strip, SW_HIDE);
+            assert!(taskbar_recovery_anchor(strip, taskbar).is_none());
+            assert_ne!(SetWindowPos(strip, taskbar, 200, 200, 0, 0,
+                SWP_NOACTIVATE | SWP_NOSIZE | SWP_SHOWWINDOW), 0);
+            assert!(taskbar_recovery_anchor(strip, taskbar).is_none(), "nonoverlapping window is harmless");
+            assert_ne!(SetWindowPos(strip, taskbar, 20, 20, 0, 0,
+                SWP_NOACTIVATE | SWP_NOSIZE), 0);
+            ShowWindow(taskbar, SW_HIDE);
+            assert!(taskbar_recovery_anchor(strip, taskbar).is_none());
+        }).join().unwrap();
+    }
+
+    #[test]
+    #[ignore = "requires a visible Windows taskbar; run with --ignored --test-threads=1"]
+    fn recovery_timer_repairs_repeated_occlusion_without_shell_events_or_model_updates() {
+        std::thread::spawn(|| unsafe {
+            struct WindowGuard(HWND);
+            impl Drop for WindowGuard {
+                fn drop(&mut self) { unsafe { if IsWindow(self.0) != 0 { DestroyWindow(self.0); } } }
+            }
+            let model = Arc::new(Mutex::new(Some(StripModel {
+                segments: vec![StripSegment { label: "Codex".into(), window_label: Some("5h"),
+                    value: "42%".into(), value_color: [0; 3], stale: false }],
+                tooltip: "SPECTRA recovery regression".into(),
+            })));
+            let hwnd = create_window(StripState::new(Arc::clone(&model), Box::new(|| {}))).unwrap();
+            let _guard = WindowGuard(hwnd);
+            assert!(!should_hide(hwnd), "run with auto-hide/fullscreen disabled");
+            redraw(hwnd).unwrap();
+            assert_ne!(IsWindowVisible(hwnd), 0);
+            let taskbar = FindWindowW(wide("Shell_TrayWnd").as_ptr(), std::ptr::null());
+            assert!(!taskbar.is_null());
+            let foreground = GetForegroundWindow();
+            for _ in 0..3 {
+                // Move only our disposable HWND. The actual taskbar and installed app are untouched.
+                assert_ne!(SetWindowPos(hwnd, taskbar, 0, 0, 0, 0,
+                    SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE), 0);
+                assert!(taskbar_recovery_anchor(hwnd, taskbar).is_some(), "old behavior remains covered");
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+                loop {
+                    // Intentionally dispatch no foreground/location/model messages: only real WM_TIMER.
+                    let mut message: MSG = std::mem::zeroed();
+                    if PeekMessageW(&mut message, hwnd, WM_TIMER, WM_TIMER, PM_REMOVE) != 0 {
+                        assert_eq!(message.wParam, SHELL_RECOVERY_TIMER);
+                        DispatchMessageW(&message);
+                        break;
+                    }
+                    assert!(std::time::Instant::now() < deadline, "recovery timer must tick");
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                assert!(taskbar_recovery_anchor(hwnd, taskbar).is_none(), "timer must restore Z order");
+                assert_ne!(IsWindowVisible(hwnd), 0);
+                assert_eq!(GetForegroundWindow(), foreground);
+            }
+            let state = &*(GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const StripState);
+            state.font_dpi.set(0);
+            for _ in 0..3 { SendMessageW(hwnd, WM_TIMER, SHELL_RECOVERY_TIMER, 0); }
+            assert_eq!(state.font_dpi.get(), 0, "stable timer ticks do not rerender or allocate fonts");
+            hide_strip(hwnd);
+            SendMessageW(hwnd, WM_TIMER, SHELL_RECOVERY_TIMER, 0);
+            assert_eq!(IsWindowVisible(hwnd), 0, "intentional hiding must survive the timer");
+            assert_eq!(state.font_dpi.get(), 0);
+            redraw(hwnd).unwrap();
+            *model.lock().unwrap() = None;
+            assert_ne!(SetWindowPos(hwnd, taskbar, 0, 0, 0, 0,
+                SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE), 0);
+            SendMessageW(hwnd, WM_TIMER, SHELL_RECOVERY_TIMER, 0);
+            assert_eq!(IsWindowVisible(hwnd), 0, "recovery must recheck the current model");
+            assert_ne!(DestroyWindow(hwnd), 0);
+            discard_quit_message();
+            eprintln!("three native timer-only recoveries, no stable redraw, hidden/model policy and focus preservation: PASS");
         }).join().unwrap();
     }
 
