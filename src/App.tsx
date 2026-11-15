@@ -7,7 +7,7 @@ import { LOOKUP_DELAYED, autoRefreshLabel, claudeFreshness, antigravityFreshness
 import { metricLabels, planQuotas, providers, rangeLabels, type AuthMethod, type Metric, type PlanQuota, type Provider, type ProviderId, type QuotaWindow, type QuotaWindowId, type UsageRange } from "./data/providers";
 import { checkForAppUpdate, macUpdateMessage, type AvailableAppUpdate } from "./integrations/app-updater";
 import { providersToRefreshAfterBoot, type NativePlatform } from "./integrations/boot-state";
-import { nextConnectionAction } from "./integrations/provider-connect";
+import { nextConnectionAction, type ConnectionAction } from "./integrations/provider-connect";
 import { getNativeUsageHistory, setNativeWindowMode, setNativeWindowPinned, type UsageHistoryPoint, getNativeProviderUsage, installNativeProviderBridge, isTauriRuntime, listenNativeProviderUsage, readBootState, removeNativeProviderBridge, setNativeStandby, setNativeStrip, setNativeUiPrefs, startNativeProviderLogin, type NativeProviderActionResult, type NativeProviderUsageSnapshot, type TauriUnlisten } from "./integrations/tauri-native-bridge";
 
 type WindowMode = "mini" | "dashboard" | "browser";
@@ -346,7 +346,7 @@ const OAuthDialog = memo(function OAuthDialog({ open, provider, quota, startResu
   quota: PlanQuota;
   startResult: ProviderActionFeedback | null;
   onClose: () => void;
-  onConnect: (id: ProviderId) => void;
+  onConnect: (id: ProviderId, action: ConnectionAction) => void;
   onDisconnect: (id: ProviderId) => void;
 }>) {
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -398,16 +398,17 @@ const OAuthDialog = memo(function OAuthDialog({ open, provider, quota, startResu
   const runtimeMissing = quota.connectionState === "not_installed";
   const needsLogin = quota.connectionState === "signed_out";
   const needsBridge = !quota.bridgeInstalled && (provider.id === "antigravity" || (provider.id === "claude" && quota.connectionState === "waiting"));
+  const action: ConnectionAction = needsBridge ? "install-bridge" : needsLogin ? "login" : "refresh";
   const primaryLabel = runtimeMissing
     ? `${provider.name} CLI 설치 필요`
-    : needsBridge ? "사용량 브리지 설치" : needsLogin ? `${provider.name} 계정 로그인` : "사용량 새로고침";
+    : action === "install-bridge" ? "사용량 브리지 설치" : action === "login" ? `${provider.name} 계정 로그인` : "사용량 새로고침";
   return <div className="oauth-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}><div ref={dialogRef} className="oauth-dialog" role="dialog" aria-modal="true" aria-labelledby="oauth-dialog-title" aria-describedby="oauth-dialog-description" tabIndex={-1}>
     <div className="oauth-dialog-header"><div><span className="eyebrow">공식 계정 연결</span><h2 id="oauth-dialog-title">{provider.name} 계정 및 사용량</h2></div><button ref={closeButtonRef} type="button" className="icon-button oauth-close" onClick={onClose} aria-label="연결 창 닫기"><Icon name="x" size={17} /></button></div>
     <div className="oauth-provider"><ProviderLogo provider={provider} size="lg" /><div><strong>{quota.planName}</strong><span>공급자 공식 로그인</span></div></div>
     <div className="oauth-capability-note"><span>조회 출처</span><strong>{sourceLabel(quota)}</strong><span>연결 상태</span><strong>{connectionLabel(quota)}</strong></div>
     <p className="view-description">공급자가 로그인을 관리하며 SPECTRA는 한도만 읽습니다.{provider.id === "antigravity" ? " 브리지 설치 후 Antigravity CLI를 실행하면 갱신됩니다." : ""}</p>
     <div id="oauth-dialog-description" className="oauth-demo-note"><Icon name="shield" size={14} /><span>{startResult?.message ?? quota.statusMessage}</span></div>
-    <div className="oauth-dialog-actions"><button type="button" className="secondary-action" onClick={onClose}>닫기</button>{(provider.id === "claude" || provider.id === "antigravity") && quota.bridgeInstalled ? <button type="button" className="danger-action" onClick={() => onDisconnect(provider.id)}>브리지 제거</button> : null}<button type="button" className="primary-action" disabled={unsupported || runtimeMissing || loginPending} onClick={() => onConnect(provider.id)}>{loginPending ? "브라우저 로그인 진행 중" : primaryLabel}</button></div>
+    <div className="oauth-dialog-actions"><button type="button" className="secondary-action" onClick={onClose}>닫기</button>{(provider.id === "claude" || provider.id === "antigravity") && quota.bridgeInstalled ? <button type="button" className="danger-action" onClick={() => onDisconnect(provider.id)}>브리지 제거</button> : null}<button type="button" className="primary-action" disabled={unsupported || runtimeMissing || loginPending} onClick={() => onConnect(provider.id, action)}>{loginPending ? "브라우저 로그인 진행 중" : primaryLabel}</button></div>
   </div></div>;
 });
 
@@ -734,7 +735,7 @@ export function App() {
     setActionFeedback(null);
     setLoginPollingProviderId(null);
   }, []);
-  const connectOAuth = useCallback(async (id: ProviderId) => {
+  const connectOAuth = useCallback(async (id: ProviderId, requested: ConnectionAction) => {
     if (!isTauriRuntime()) {
       setActionFeedback({ status: "demo-only", message: "예시 화면입니다. 설치된 앱에서 연결해 주세요." });
       return;
@@ -744,7 +745,7 @@ export function App() {
       setActionFeedback({ status: "not-available", message: "계정 상태 확인 실패. 다시 시도해 주세요." });
       return;
     }
-    const action = nextConnectionAction(id, snapshot);
+    const action = nextConnectionAction(id, snapshot, requested);
     if (action === "install-cli") {
       setActionFeedback({ status: "not-installed", message: snapshot.message });
       return;
