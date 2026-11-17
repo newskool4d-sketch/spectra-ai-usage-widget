@@ -300,6 +300,8 @@ struct StripState {
     hooks: [HWINEVENTHOOK; 2],
     recovery_timer: usize,
     follow_taskbar_owner: bool,
+    /// The taskbar this strip was last seen owned by. See `sync_taskbar_owner_with`.
+    attached_taskbar: Cell<HWND>,
     shell_recovery_pending: Cell<bool>,
     tooltip: RefCell<Option<StripTooltip>>,
 }
@@ -309,7 +311,8 @@ impl StripState {
         Self {
             model, on_click, font: Cell::new(std::ptr::null_mut()), font_dpi: Cell::new(0),
             taskbar_created: 0, hooks: [std::ptr::null_mut(); 2], recovery_timer: 0,
-            follow_taskbar_owner: false, shell_recovery_pending: Cell::new(false),
+            follow_taskbar_owner: false, attached_taskbar: Cell::new(std::ptr::null_mut()),
+            shell_recovery_pending: Cell::new(false),
             tooltip: RefCell::new(None),
         }
     }
@@ -1029,7 +1032,13 @@ fn sync_taskbar_owner_with(
         hide_strip(hwnd);
         return Ok(TaskbarOwnerSync::Missing);
     }
-    if owner != taskbar {
+    // While Start or search is open, Explorer raises the taskbar into a shell band. The owned
+    // strip rides along and GetWindow reports no owner until both return. Assigning the owner
+    // in that state detaches the strip and strands it in the shell band, where it can never be
+    // owned again (measured 2026-11-17, Windows 11 26300). Only the owner's destruction removes
+    // the link, so a live taskbar that was attached before still owns this strip.
+    let riding_shell_band = owner.is_null() && state.attached_taskbar.get() == taskbar;
+    if owner != taskbar && !riding_shell_band {
         state.shell_recovery_pending.set(true);
         assign(hwnd, taskbar)?;
         // Windows can acknowledge this call without retaining a cross-band owner.
@@ -1039,6 +1048,7 @@ fn sync_taskbar_owner_with(
             return Ok(TaskbarOwnerSync::Missing);
         }
     }
+    state.attached_taskbar.set(taskbar);
     // Explorer's cross-thread owner destruction disowns this popup, leaving its timer alive.
     // Rebind even if the replacement taskbar appeared between ticks without a missing interval.
     // Keep retrying until geometry is available and redraw has made a visibility decision.
@@ -1444,6 +1454,43 @@ mod tests {
             assert_ne!(DestroyWindow(replacement), 0);
             discard_quit_message();
             eprintln!("cross-thread owner destroyed: strip survived, owner cleared, timer and hook target retained");
+        }).join().unwrap();
+    }
+
+    #[test]
+    #[ignore = "requires a Windows desktop; run with --ignored --test-threads=1"]
+    fn attached_live_owner_is_not_reassigned_while_a_shell_band_hides_it() {
+        std::thread::spawn(|| unsafe {
+            let popup = || CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+                wide("STATIC").as_ptr(), std::ptr::null(), WS_POPUP,
+                0, 0, 1, 1, std::ptr::null_mut(), std::ptr::null_mut(),
+                GetModuleHandleW(std::ptr::null()), std::ptr::null());
+            let owner = popup();
+            assert!(!owner.is_null());
+            let strip = create_window(StripState::new(Arc::new(Mutex::new(None)), Box::new(|| {}))).unwrap();
+            let state = &*(GetWindowLongPtrW(strip, GWLP_USERDATA) as *const StripState);
+            assert_eq!(sync_taskbar_owner(strip, state, owner).unwrap(), TaskbarOwnerSync::Changed);
+            state.shell_recovery_pending.set(false);
+            assert_ne!(SetWindowPos(strip, HWND_TOPMOST, 0, 0, 0, 0,
+                SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW), 0);
+            // Start raises the taskbar and its owned strip into a shell band, where GW_OWNER reads
+            // null although the link is intact. Clearing the owner gives a synthetic window that reading.
+            set_window_owner(strip, std::ptr::null_mut()).unwrap();
+            assert_eq!(sync_taskbar_owner_with(strip, state, owner, |_, _| {
+                panic!("reassigning a live attached owner strands the strip in the shell band")
+            }).unwrap(), TaskbarOwnerSync::Unchanged);
+            assert_ne!(IsWindowVisible(strip), 0, "an unreadable owner must not hide the strip");
+            assert!(!state.shell_recovery_pending.get());
+
+            // A destroyed taskbar is the one real way to lose the owner; its replacement binds.
+            assert_ne!(DestroyWindow(owner), 0);
+            let replacement = popup();
+            assert!(!replacement.is_null());
+            assert_eq!(sync_taskbar_owner(strip, state, replacement).unwrap(), TaskbarOwnerSync::Changed);
+            assert_eq!(GetWindow(strip, GW_OWNER), replacement);
+            assert_ne!(DestroyWindow(strip), 0);
+            assert_ne!(DestroyWindow(replacement), 0);
+            discard_quit_message();
         }).join().unwrap();
     }
 
